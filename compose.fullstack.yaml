@@ -1,0 +1,101 @@
+services:
+  migrate:
+    build:
+      context: ../Voxhold-backend
+      args:
+        GO_VERSION: ${GO_VERSION:-1.26.5}
+    environment:
+      DATABASE_PATH: /app/data/voxhold.db
+      MIGRATIONS_PATH: /app/migrations
+      RESET_DATABASE: "false"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        set -eu;
+        mkdir -p "$$(dirname "$$DATABASE_PATH")";
+        exec migrate -path "$$MIGRATIONS_PATH" -database "sqlite://$$DATABASE_PATH" up
+    volumes:
+      - voxhold_data:/app/data
+    restart: "no"
+
+  backend:
+    build:
+      context: ../Voxhold-backend
+      args:
+        GO_VERSION: ${GO_VERSION:-1.26.5}
+    environment:
+      DATABASE_PATH: /app/data/voxhold.db
+      MIGRATIONS_PATH: /app/migrations
+      HTTP_PORT: 8080
+      WEBRTC_PUBLIC_IP: ${WEBRTC_PUBLIC_IP:-127.0.0.1}
+      WEBRTC_UDP_PORT: ${WEBRTC_UDP_PORT:-50000}
+      WEBRTC_MAX_PARTICIPANTS: ${WEBRTC_MAX_PARTICIPANTS:-32}
+      WEBRTC_MAX_AUDIO_BITRATE_KBPS: ${WEBRTC_MAX_AUDIO_BITRATE_KBPS:-128}
+      WEBRTC_STREAM_UDP_PORT: ${WEBRTC_STREAM_UDP_PORT:-50001}
+      WEBRTC_STREAM_MAX_VIEWERS: ${WEBRTC_STREAM_MAX_VIEWERS:-32}
+      WEBRTC_STREAM_MAX_P2P_VIEWERS: ${WEBRTC_STREAM_MAX_P2P_VIEWERS:-8}
+      WEBRTC_STREAM_MAX_VIDEO_BITRATE_KBPS: ${WEBRTC_STREAM_MAX_VIDEO_BITRATE_KBPS:-16000}
+      WEBRTC_STREAM_MAX_AUDIO_BITRATE_KBPS: ${WEBRTC_STREAM_MAX_AUDIO_BITRATE_KBPS:-320}
+      WEBRTC_ICE_SERVERS: ${WEBRTC_ICE_SERVERS:-}
+      WEBRTC_ICE_USERNAME: ${WEBRTC_ICE_USERNAME:-}
+      WEBRTC_ICE_CREDENTIAL: ${WEBRTC_ICE_CREDENTIAL:-}
+    expose:
+      - "8080"
+    ports:
+      - "${WEBRTC_UDP_PORT:-50000}:${WEBRTC_UDP_PORT:-50000}/udp"
+      - "${WEBRTC_STREAM_UDP_PORT:-50001}:${WEBRTC_STREAM_UDP_PORT:-50001}/udp"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - voxhold_data:/app/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    build:
+      context: .
+      args:
+        VITE_API_BASE_URL: ""
+        VITE_WEBRTC_ICE_SERVERS: ${WEBRTC_ICE_SERVERS:-}
+        VITE_WEBRTC_ICE_USERNAME: ${WEBRTC_ICE_USERNAME:-}
+        VITE_WEBRTC_ICE_CREDENTIAL: ${WEBRTC_ICE_CREDENTIAL:-}
+    environment:
+      BACKEND_UPSTREAM: backend:8080
+    ports:
+      - "${FRONTEND_PORT:-3000}:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:uid=101,gid=101
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/run:uid=101,gid=101
+      - /tmp:uid=101,gid=101
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  bootstrap:
+    build:
+      context: ../Voxhold-backend
+      args:
+        GO_VERSION: ${GO_VERSION:-1.26.5}
+    environment:
+      DATABASE_PATH: /app/data/voxhold.db
+      INSTANCE_NAME: ${INSTANCE_NAME:-Voxhold}
+      BOOTSTRAP_USERNAME: ${BOOTSTRAP_USERNAME:-owner}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-}
+    entrypoint: ["voxhold-bootstrap"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - voxhold_data:/app/data
+    restart: "no"
+
+volumes:
+  voxhold_data:

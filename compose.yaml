@@ -1,0 +1,26 @@
+services:
+  frontend:
+    build:
+      context: .
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_WEBRTC_ICE_SERVERS: ${VITE_WEBRTC_ICE_SERVERS:-}
+        VITE_WEBRTC_ICE_USERNAME: ${VITE_WEBRTC_ICE_USERNAME:-}
+        VITE_WEBRTC_ICE_CREDENTIAL: ${VITE_WEBRTC_ICE_CREDENTIAL:-}
+    environment:
+      BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-host.docker.internal:8080}
+    ports:
+      - "${FRONTEND_PORT:-3000}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:uid=101,gid=101
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/run:uid=101,gid=101
+      - /tmp:uid=101,gid=101
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
