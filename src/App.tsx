@@ -11,8 +11,10 @@ import { ThemeProvider } from './theme/ThemeContext'
 import type { InviteLinkPreview } from './domain/types'
 import { humanError } from './lib/format'
 import { createNativeInviteURL } from './lib/inviteLinks'
+import { clientDiagnostics } from './platform/clientDiagnostics'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+clientDiagnostics.configure(API_BASE_URL)
 
 function inviteTokenFromLocation() {
   const prefix = '#/invite/'
@@ -80,6 +82,10 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
   static getDerivedStateFromError() { return { failed: true } }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    clientDiagnostics.record('client', 'render_error', 'error', {
+      error_name: error.name,
+      component_stack_present: !!info.componentStack,
+    })
     console.error('Voxhold render error', error, info)
   }
 

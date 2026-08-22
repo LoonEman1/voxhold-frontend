@@ -20,6 +20,7 @@ import type {
   ServerMember,
   ServerRole,
   Session,
+  ClientDiagnosticsPayload,
 } from '../domain/types'
 import type { Transport, TransportRequest } from '../platform/transport'
 
@@ -222,6 +223,13 @@ export function createApi(transport: Transport) {
           method: 'POST',
           body: { token: inviteToken },
         }) as Promise<InviteLinkAcceptance>,
+    },
+    diagnostics: {
+      list: (token: string, limit = 5_000, signal?: AbortSignal) =>
+        authorized(token, {
+          path: `/api/v1/diagnostics/client-events?limit=${url(limit)}`,
+          signal,
+        }) as Promise<ClientDiagnosticsPayload>,
     },
   }
 }

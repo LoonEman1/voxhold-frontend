@@ -2,6 +2,7 @@ import type { VoiceICECandidate } from '../domain/types'
 import { normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
 import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
@@ -27,6 +28,50 @@ interface VoiceRemoteOutput {
   stream: MediaStream
   track: MediaStreamTrack
   audio: HTMLAudioElement
+}
+
+interface AudioRTPDiagnosticStats extends RTCStats {
+  kind?: string
+  mediaType?: string
+  isRemote?: boolean
+  bytesReceived?: number
+  bytesSent?: number
+  packetsReceived?: number
+  packetsSent?: number
+  packetsLost?: number
+  jitter?: number
+  audioLevel?: number
+  concealedSamples?: number
+  totalSamplesReceived?: number
+  jitterBufferDelay?: number
+  jitterBufferEmittedCount?: number
+  trackIdentifier?: string
+}
+
+function audioRTPDiagnostics(report: RTCStatsReport) {
+  const values: Array<Record<string, unknown>> = []
+  report.forEach((raw) => {
+    const stats = raw as AudioRTPDiagnosticStats
+    if (
+      stats.isRemote
+      || (stats.type !== 'inbound-rtp' && stats.type !== 'outbound-rtp')
+      || (stats.kind !== 'audio' && stats.mediaType !== 'audio')
+    ) return
+    values.push({
+      direction: stats.type === 'inbound-rtp' ? 'inbound' : 'outbound',
+      track_id: stats.trackIdentifier ?? '',
+      bytes: stats.type === 'inbound-rtp' ? stats.bytesReceived ?? 0 : stats.bytesSent ?? 0,
+      packets: stats.type === 'inbound-rtp' ? stats.packetsReceived ?? 0 : stats.packetsSent ?? 0,
+      packets_lost: stats.packetsLost ?? 0,
+      jitter: stats.jitter ?? 0,
+      audio_level: stats.audioLevel ?? null,
+      concealed_samples: stats.concealedSamples ?? null,
+      total_samples_received: stats.totalSamplesReceived ?? null,
+      jitter_buffer_delay: stats.jitterBufferDelay ?? null,
+      jitter_buffer_emitted_count: stats.jitterBufferEmittedCount ?? null,
+    })
+  })
+  return values
 }
 
 function browserICEConfiguration(): RTCConfiguration {
@@ -82,6 +127,8 @@ export class BrowserVoiceSession {
   private pendingRemoteCandidates: VoiceICECandidate[] = []
   private offerQueue: Promise<void> = Promise.resolve()
   private inputQueue: Promise<void> = Promise.resolve()
+  private statsTimer: number | null = null
+  private statsSampling = false
   private closed = false
   private selfMute = false
   private selfDeaf = false
@@ -105,6 +152,13 @@ export class BrowserVoiceSession {
     this.selfMute = selfMute
     this.selfDeaf = selfDeaf
     this.preferences = normalizeVoicePreferences(preferences)
+    clientDiagnostics.record('webrtc', 'voice_starting', 'info', {
+      self_mute: selfMute,
+      self_deaf: selfDeaf,
+      bitrate_kbps: this.preferences.bitrateKbps,
+      selected_input: !!this.preferences.inputDeviceId,
+      selected_output: !!this.preferences.outputDeviceId,
+    })
     const input = await this.createInput(this.preferences)
 
     if (this.closed) {
@@ -115,6 +169,14 @@ export class BrowserVoiceSession {
     const peer = new RTCPeerConnection(browserICEConfiguration())
     this.input = input
     this.peer = peer
+    const inputSettings = input.track.getSettings?.() ?? {}
+    clientDiagnostics.record('media', 'voice_input_ready', 'info', {
+      sample_rate: inputSettings.sampleRate ?? null,
+      channel_count: inputSettings.channelCount ?? null,
+      echo_cancellation: inputSettings.echoCancellation ?? null,
+      noise_suppression: inputSettings.noiseSuppression ?? null,
+      auto_gain_control: inputSettings.autoGainControl ?? null,
+    })
     input.track.enabled = !selfMute
     this.inputSender = peer.addTrack(input.track, input.stream)
     await this.applySenderBitrate(this.preferences.bitrateKbps).catch(() => {
@@ -122,6 +184,10 @@ export class BrowserVoiceSession {
     })
     peer.onicecandidate = ({ candidate }) => {
       if (!candidate || this.closed) return
+      clientDiagnostics.record('webrtc', 'voice_local_ice', 'debug', {
+        type: candidate.type ?? null,
+        protocol: candidate.protocol ?? null,
+      })
       const wireCandidate = wireICECandidate(candidate)
       if (wireCandidate) this.options.onICECandidate(wireCandidate)
     }
@@ -141,17 +207,95 @@ export class BrowserVoiceSession {
       const output = { stream, track, audio }
       this.remoteOutputs.set(track.id, output)
       document.body.append(audio)
-      track.addEventListener('ended', () => this.removeRemoteOutput(track.id, output), { once: true })
+      clientDiagnostics.record('media', 'voice_remote_track_added', 'info', {
+        track_id: track.id,
+        muted: track.muted,
+        ready_state: track.readyState,
+        remote_track_count: this.remoteOutputs.size,
+      })
+      track.addEventListener('mute', () => {
+        clientDiagnostics.record('media', 'voice_remote_track_muted', 'warn', { track_id: track.id })
+      })
+      track.addEventListener('unmute', () => {
+        clientDiagnostics.record('media', 'voice_remote_track_unmuted', 'info', { track_id: track.id })
+      })
+      track.addEventListener('ended', () => {
+        clientDiagnostics.record('media', 'voice_remote_track_ended', 'warn', { track_id: track.id })
+        this.removeRemoteOutput(track.id, output)
+      }, { once: true })
       void this.applyOutputDevice(this.preferences?.outputDeviceId ?? '', audio).catch(() => {
         // Keep the default output when the selected device disappeared.
       })
-      void audio.play().catch(() => {
-        // Browsers may delay autoplay until the next explicit user interaction.
-      })
+      this.playRemoteAudio(output, 'track_added')
     }
 
     peer.onconnectionstatechange = () => {
+      clientDiagnostics.record('webrtc', 'voice_connection_state', peer.connectionState === 'failed' ? 'error' : 'info', {
+        connection_state: peer.connectionState,
+        ice_connection_state: peer.iceConnectionState,
+        ice_gathering_state: peer.iceGatheringState,
+        signaling_state: peer.signalingState,
+      })
+      if (peer.connectionState === 'connected') void this.sampleStats()
       if (!this.closed) this.options.onConnectionStateChange(peer.connectionState)
+    }
+    peer.oniceconnectionstatechange = () => {
+      clientDiagnostics.record('webrtc', 'voice_ice_state', peer.iceConnectionState === 'failed' ? 'error' : 'debug', {
+        ice_connection_state: peer.iceConnectionState,
+      })
+    }
+    peer.onicegatheringstatechange = () => {
+      clientDiagnostics.record('webrtc', 'voice_ice_gathering_state', 'debug', {
+        ice_gathering_state: peer.iceGatheringState,
+      })
+    }
+    this.statsTimer = window.setInterval(() => { void this.sampleStats() }, 15_000)
+  }
+
+  private playRemoteAudio(output: VoiceRemoteOutput, reason: string) {
+    void output.audio.play().then(() => {
+      clientDiagnostics.record('media', 'voice_playback_started', 'info', {
+        track_id: output.track.id,
+        reason,
+        muted: output.audio.muted,
+        volume: output.audio.volume,
+      })
+    }).catch((error: unknown) => {
+      clientDiagnostics.record('media', 'voice_playback_blocked', 'warn', {
+        track_id: output.track.id,
+        reason,
+        error_name: error instanceof Error ? error.name : typeof error,
+      })
+    })
+  }
+
+  private async sampleStats() {
+    const peer = this.peer
+    if (!peer || this.closed || this.statsSampling || typeof peer.getStats !== 'function') return
+    this.statsSampling = true
+    try {
+      const report = await peer.getStats()
+      clientDiagnostics.record('media', 'voice_rtp_stats', 'info', {
+        connection_state: peer.connectionState,
+        remote_track_count: this.remoteOutputs.size,
+        reports: audioRTPDiagnostics(report),
+        outputs: Array.from(this.remoteOutputs.values(), ({ track, audio }) => ({
+          track_id: track.id,
+          track_muted: track.muted,
+          track_ready_state: track.readyState,
+          playback_paused: audio.paused,
+          playback_muted: audio.muted,
+          playback_ready_state: audio.readyState,
+          playback_time: Math.round(audio.currentTime * 10) / 10,
+          volume: audio.volume,
+        })),
+      })
+    } catch (error) {
+      clientDiagnostics.record('media', 'voice_stats_failed', 'debug', {
+        error_name: error instanceof Error ? error.name : typeof error,
+      })
+    } finally {
+      this.statsSampling = false
     }
   }
 
@@ -286,6 +430,10 @@ export class BrowserVoiceSession {
       const peer = this.peer
       if (!peer || this.closed) return
 
+      clientDiagnostics.record('webrtc', 'voice_offer_received', 'debug', {
+        sdp_bytes: sdp.length,
+        pending_ice_count: this.pendingRemoteCandidates.length,
+      })
       await peer.setRemoteDescription({ type: 'offer', sdp })
       const candidates = this.pendingRemoteCandidates.splice(0)
       for (const candidate of candidates) {
@@ -296,7 +444,12 @@ export class BrowserVoiceSession {
 
       const answer = await peer.createAnswer()
       await peer.setLocalDescription(answer)
-      if (peer.localDescription?.sdp) this.options.onAnswer(peer.localDescription.sdp)
+      if (peer.localDescription?.sdp) {
+        clientDiagnostics.record('webrtc', 'voice_answer_created', 'debug', {
+          sdp_bytes: peer.localDescription.sdp.length,
+        })
+        this.options.onAnswer(peer.localDescription.sdp)
+      }
     })
 
     this.offerQueue = operation.catch((error: unknown) => {
@@ -310,6 +463,9 @@ export class BrowserVoiceSession {
     if (!peer || this.closed) return
     if (!remoteDescriptionAcceptsCandidate(peer, candidate)) {
       if (this.pendingRemoteCandidates.length < 64) this.pendingRemoteCandidates.push(candidate)
+      clientDiagnostics.record('webrtc', 'voice_remote_ice_buffered', 'debug', {
+        pending_ice_count: this.pendingRemoteCandidates.length,
+      })
       return
     }
 
@@ -325,15 +481,15 @@ export class BrowserVoiceSession {
     this.selfDeaf = selfDeaf
     if (this.input) this.input.track.enabled = !selfMute
     if (selfMute) this.options.onInputLevel?.(0)
-    this.remoteOutputs.forEach(({ audio }) => {
-      audio.muted = selfDeaf
-      if (!selfDeaf) void audio.play().catch(() => {})
+    this.remoteOutputs.forEach((output) => {
+      output.audio.muted = selfDeaf
+      if (!selfDeaf) this.playRemoteAudio(output, 'undeaf')
     })
   }
 
   resumeAudio() {
     if (!this.selfDeaf) {
-      this.remoteOutputs.forEach(({ audio }) => { void audio.play().catch(() => {}) })
+      this.remoteOutputs.forEach((output) => this.playRemoteAudio(output, 'user_interaction'))
     }
     if (this.input?.context?.state === 'suspended') void this.input.context.resume().catch(() => undefined)
   }
@@ -341,6 +497,11 @@ export class BrowserVoiceSession {
   close() {
     if (this.closed) return
     this.closed = true
+    clientDiagnostics.record('webrtc', 'voice_closed', 'info', {
+      remote_track_count: this.remoteOutputs.size,
+    })
+    if (this.statsTimer !== null) window.clearInterval(this.statsTimer)
+    this.statsTimer = null
     this.pendingRemoteCandidates = []
     this.disposeInput(this.input)
     this.remoteOutputs.forEach((output, trackId) => {

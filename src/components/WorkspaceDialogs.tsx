@@ -244,10 +244,11 @@ export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemo
   )
 }
 
-export function ServerSettingsDialog({ open, onClose, server, onRename, onDeleteAccount }: AsyncDialogProps & { server: Server | null; onRename(name: string): Promise<void>; onDeleteAccount(): Promise<void> }) {
+export function ServerSettingsDialog({ open, onClose, server, onRename, onDeleteAccount, onDownloadDiagnostics }: AsyncDialogProps & { server: Server | null; onRename(name: string): Promise<void>; onDeleteAccount(): Promise<void>; onDownloadDiagnostics(): Promise<void> }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [diagnosticsPending, setDiagnosticsPending] = useState(false)
   const [confirming, setConfirming] = useState(false)
   useEffect(() => { if (open) { setName(server?.name ?? ''); setError(''); setConfirming(false) } }, [open, server])
   const rename = async (event: FormEvent) => {
@@ -259,9 +260,15 @@ export function ServerSettingsDialog({ open, onClose, server, onRename, onDelete
     try { await onDeleteAccount(); onClose() } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
   }
   const owner = server?.role === 'owner'
+  const downloadDiagnostics = async () => {
+    if (diagnosticsPending) return
+    setDiagnosticsPending(true); setError('')
+    try { await onDownloadDiagnostics() } catch (caught) { setError(humanError(caught)) } finally { setDiagnosticsPending(false) }
+  }
   return (
     <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
       {owner && <form className="dialog-form settings-section" onSubmit={rename}><div><h3>Название</h3><p>Его увидят все участники пространства.</p></div><label><span>Название сервера</span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required /></label><button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button></form>}
+      {owner && <div className="dialog-form settings-section"><div><h3>Диагностика клиентов</h3><p>HTTP, WebSocket и WebRTC-метрики автоматически хранятся на сервере 24 часа. Секреты, сообщения, SDP и ICE-адреса удаляются.</p></div><button className="button button--secondary align-self-end" type="button" disabled={diagnosticsPending} onClick={() => void downloadDiagnostics()}>{diagnosticsPending ? <span className="spinner"/> : 'Скачать JSON'}</button></div>}
       {!owner && <div className="danger-zone"><div><h3>Удалить аккаунт</h3><p>Профиль, настройки и доступ к этому инстансу будут удалены. Старые сообщения останутся обезличенными.</p></div>{confirming ? <div className="danger-confirm"><span>Удалить аккаунт без возможности восстановления?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить аккаунт'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить аккаунт</button>}</div>}
       {owner && <div className="instance-notice"><Icon name="lock"/><div><b>Владелец инстанса</b><p>Владелец не может удалить пространство или свой аккаунт из приложения.</p></div></div>}
       {error && <div className="form-error" role="alert">{error}</div>}
