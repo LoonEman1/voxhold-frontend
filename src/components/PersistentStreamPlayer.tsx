@@ -31,6 +31,7 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     const video = videoRef.current
     if (!video) return
     video.srcObject = media
+    void video.play().catch(() => undefined)
     return () => {
       if (video.srcObject === media) video.srcObject = null
     }
@@ -41,6 +42,7 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     if (!video) return
     video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
     video.muted = muted
+    if (!muted && video.srcObject) void video.play().catch(() => undefined)
   }, [isPublisher, muted, preferences.playbackVolume, media, mode])
 
   useEffect(() => {

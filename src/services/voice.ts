@@ -23,6 +23,12 @@ interface VoiceInputChain {
   meterTimer: number | null
 }
 
+interface VoiceRemoteOutput {
+  stream: MediaStream
+  track: MediaStreamTrack
+  audio: HTMLAudioElement
+}
+
 function browserICEConfiguration(): RTCConfiguration {
   const urls = (import.meta.env.VITE_WEBRTC_ICE_SERVERS as string | undefined)
     ?.split(',')
@@ -71,8 +77,7 @@ export class BrowserVoiceSession {
   private peer: RTCPeerConnection | null = null
   private input: VoiceInputChain | null = null
   private inputSender: RTCRtpSender | null = null
-  private output: MediaStream | null = null
-  private audio: HTMLAudioElement | null = null
+  private readonly remoteOutputs = new Map<string, VoiceRemoteOutput>()
   private preferences: VoicePreferences | null = null
   private pendingRemoteCandidates: VoiceICECandidate[] = []
   private offerQueue: Promise<void> = Promise.resolve()
@@ -108,27 +113,13 @@ export class BrowserVoiceSession {
     }
 
     const peer = new RTCPeerConnection(browserICEConfiguration())
-    const output = new MediaStream()
-    const audio = document.createElement('audio')
-    audio.autoplay = true
-    audio.muted = selfDeaf
-    audio.volume = this.preferences.outputVolume / 100
-    audio.setAttribute('aria-hidden', 'true')
-    audio.className = 'voice-audio-output'
-    audio.srcObject = output
-    document.body.append(audio)
-
     this.input = input
-    this.output = output
-    this.audio = audio
     this.peer = peer
     input.track.enabled = !selfMute
     this.inputSender = peer.addTrack(input.track, input.stream)
     await this.applySenderBitrate(this.preferences.bitrateKbps).catch(() => {
       // Keep voice available in WebViews that do not expose encoding controls.
     })
-    await this.applyOutputDevice(this.preferences.outputDeviceId)
-
     peer.onicecandidate = ({ candidate }) => {
       if (!candidate || this.closed) return
       const wireCandidate = wireICECandidate(candidate)
@@ -136,9 +127,24 @@ export class BrowserVoiceSession {
     }
 
     peer.ontrack = ({ track }) => {
-      if (this.closed || output.getTracks().some((item) => item.id === track.id)) return
-      output.addTrack(track)
-      track.addEventListener('ended', () => output.removeTrack(track), { once: true })
+      if (this.closed || track.kind !== 'audio' || this.remoteOutputs.has(track.id)) return
+      const stream = new MediaStream([track])
+      const audio = document.createElement('audio')
+      audio.autoplay = true
+      audio.muted = this.selfDeaf
+      audio.volume = this.preferences?.outputVolume !== undefined
+        ? this.preferences.outputVolume / 100
+        : 1
+      audio.setAttribute('aria-hidden', 'true')
+      audio.className = 'voice-audio-output'
+      audio.srcObject = stream
+      const output = { stream, track, audio }
+      this.remoteOutputs.set(track.id, output)
+      document.body.append(audio)
+      track.addEventListener('ended', () => this.removeRemoteOutput(track.id, output), { once: true })
+      void this.applyOutputDevice(this.preferences?.outputDeviceId ?? '', audio).catch(() => {
+        // Keep the default output when the selected device disappeared.
+      })
       void audio.play().catch(() => {
         // Browsers may delay autoplay until the next explicit user interaction.
       })
@@ -215,10 +221,21 @@ export class BrowserVoiceSession {
     void input.context?.close().catch(() => undefined)
   }
 
-  private async applyOutputDevice(deviceId: string) {
-    const audio = this.audio
-    if (!audio || !BrowserVoiceSession.outputSelectionSupported() || !deviceId) return
-    await audio.setSinkId(deviceId)
+  private removeRemoteOutput(trackId: string, output: VoiceRemoteOutput) {
+    if (this.remoteOutputs.get(trackId) !== output) return
+    this.remoteOutputs.delete(trackId)
+    output.audio.pause()
+    output.audio.srcObject = null
+    output.audio.remove()
+    output.stream.removeTrack(output.track)
+  }
+
+  private async applyOutputDevice(deviceId: string, target?: HTMLAudioElement) {
+    if (!BrowserVoiceSession.outputSelectionSupported() || !deviceId) return
+    const outputs = target
+      ? [target]
+      : Array.from(this.remoteOutputs.values(), ({ audio }) => audio)
+    await Promise.all(outputs.map((audio) => audio.setSinkId(deviceId)))
   }
 
   private async applySenderBitrate(bitrateKbps: number) {
@@ -235,7 +252,7 @@ export class BrowserVoiceSession {
     const next = normalizeVoicePreferences(value)
     const previous = this.preferences ?? next
     this.preferences = next
-    if (this.audio) this.audio.volume = next.outputVolume / 100
+    this.remoteOutputs.forEach(({ audio }) => { audio.volume = next.outputVolume / 100 })
     if (this.input?.gain) this.input.gain.gain.value = next.inputVolume / 100
 
     const operation = this.inputQueue.then(async () => {
@@ -308,14 +325,16 @@ export class BrowserVoiceSession {
     this.selfDeaf = selfDeaf
     if (this.input) this.input.track.enabled = !selfMute
     if (selfMute) this.options.onInputLevel?.(0)
-    if (this.audio) {
-      this.audio.muted = selfDeaf
-      if (!selfDeaf) void this.audio.play().catch(() => {})
-    }
+    this.remoteOutputs.forEach(({ audio }) => {
+      audio.muted = selfDeaf
+      if (!selfDeaf) void audio.play().catch(() => {})
+    })
   }
 
   resumeAudio() {
-    if (!this.selfDeaf) void this.audio?.play().catch(() => {})
+    if (!this.selfDeaf) {
+      this.remoteOutputs.forEach(({ audio }) => { void audio.play().catch(() => {}) })
+    }
     if (this.input?.context?.state === 'suspended') void this.input.context.resume().catch(() => undefined)
   }
 
@@ -324,18 +343,15 @@ export class BrowserVoiceSession {
     this.closed = true
     this.pendingRemoteCandidates = []
     this.disposeInput(this.input)
-    this.output?.getTracks().forEach((track) => track.stop())
+    this.remoteOutputs.forEach((output, trackId) => {
+      output.track.stop()
+      this.removeRemoteOutput(trackId, output)
+    })
+    this.remoteOutputs.clear()
     this.peer?.close()
-    if (this.audio) {
-      this.audio.pause()
-      this.audio.srcObject = null
-      this.audio.remove()
-    }
     this.input = null
     this.inputSender = null
-    this.output = null
     this.peer = null
-    this.audio = null
     this.options.onInputLevel?.(0)
     this.options.onConnectionStateChange('closed')
   }

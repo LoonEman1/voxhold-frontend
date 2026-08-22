@@ -5,6 +5,7 @@ import { DEFAULT_VOICE_PREFERENCES } from './voiceSettings'
 
 class FakeTrack extends EventTarget {
   readonly id = crypto.randomUUID()
+  readonly kind = 'audio'
   enabled = true
   stop = vi.fn()
 }
@@ -84,7 +85,7 @@ describe('BrowserVoiceSession', () => {
     const peer = FakePeerConnection.latest
     expect(peer?.addTrack).toHaveBeenCalledWith(inputTrack, expect.any(FakeMediaStream))
     expect(peer?.sender.setParameters).toHaveBeenCalledWith({ encodings: [{ maxBitrate: 64_000 }] })
-    expect(document.querySelector('.voice-audio-output')).not.toBeNull()
+    expect(document.querySelector('.voice-audio-output')).toBeNull()
 
     await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, bitrateKbps: 128 })
     expect(peer?.sender.setParameters).toHaveBeenLastCalledWith({ encodings: [{ maxBitrate: 128_000 }] })
@@ -97,13 +98,28 @@ describe('BrowserVoiceSession', () => {
     expect(peer?.addIceCandidate).toHaveBeenCalledWith(expect.objectContaining({ candidate: 'remote-candidate', sdpMid: '0' }))
     expect(onAnswer).toHaveBeenCalledWith('answer-sdp')
 
+    const firstRemoteTrack = new FakeTrack()
+    const secondRemoteTrack = new FakeTrack()
+    peer?.ontrack?.({ track: firstRemoteTrack } as unknown as RTCTrackEvent)
+    peer?.ontrack?.({ track: secondRemoteTrack } as unknown as RTCTrackEvent)
+    const outputs = Array.from(document.querySelectorAll<HTMLAudioElement>('.voice-audio-output'))
+    expect(outputs).toHaveLength(2)
+    expect((outputs.at(0)!.srcObject as unknown as FakeMediaStream).getTracks()).toEqual([firstRemoteTrack])
+    expect((outputs.at(1)!.srcObject as unknown as FakeMediaStream).getTracks()).toEqual([secondRemoteTrack])
+
+    await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, outputVolume: 35 })
+    expect(outputs.every((audio) => audio.volume === 0.35)).toBe(true)
+
     peer?.onicecandidate?.({ candidate: { toJSON: () => ({ candidate: 'local-candidate', sdpMid: '0', sdpMLineIndex: 0 }) } } as RTCPeerConnectionIceEvent)
     expect(onICECandidate).toHaveBeenCalledWith(expect.objectContaining({ candidate: 'local-candidate', sdp_mid: '0' }))
 
     session.setState(true, true)
     expect(inputTrack.enabled).toBe(false)
+    expect(outputs.every((audio) => audio.muted)).toBe(true)
     session.close()
     expect(inputTrack.stop).toHaveBeenCalledOnce()
+    expect(firstRemoteTrack.stop).toHaveBeenCalledOnce()
+    expect(secondRemoteTrack.stop).toHaveBeenCalledOnce()
     expect(peer?.close).toHaveBeenCalledOnce()
     expect(document.querySelector('.voice-audio-output')).toBeNull()
   })
