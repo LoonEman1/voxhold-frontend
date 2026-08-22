@@ -1,6 +1,7 @@
 import type { VoiceICECandidate } from '../domain/types'
 import { normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
 import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
+import { wireICECandidate } from './webrtcCandidate'
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
@@ -130,13 +131,8 @@ export class BrowserVoiceSession {
 
     peer.onicecandidate = ({ candidate }) => {
       if (!candidate || this.closed) return
-      const value = candidate.toJSON()
-      this.options.onICECandidate({
-        candidate: value.candidate ?? '',
-        sdp_mid: value.sdpMid,
-        sdp_mline_index: value.sdpMLineIndex,
-        username_fragment: value.usernameFragment,
-      })
+      const wireCandidate = wireICECandidate(candidate)
+      if (wireCandidate) this.options.onICECandidate(wireCandidate)
     }
 
     peer.ontrack = ({ track }) => {

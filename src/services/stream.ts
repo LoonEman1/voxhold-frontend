@@ -1,6 +1,7 @@
 import type { StreamCodec, StreamICECandidate } from '../domain/types'
 import { normalizeStreamPreferences, selectedStreamResolution, type StreamPreferences } from './streamSettings'
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
+import { wireICECandidate } from './webrtcCandidate'
 
 export type StreamConnectionState = RTCPeerConnectionState
 
@@ -38,16 +39,6 @@ function browserCandidate(candidate: StreamICECandidate): RTCIceCandidateInit {
     sdpMid: candidate.sdp_mid ?? null,
     sdpMLineIndex: candidate.sdp_mline_index ?? null,
     usernameFragment: candidate.username_fragment ?? null,
-  }
-}
-
-function wireCandidate(candidate: RTCIceCandidate): StreamICECandidate {
-  const value = candidate.toJSON()
-  return {
-    candidate: value.candidate ?? '',
-    sdp_mid: value.sdpMid,
-    sdp_mline_index: value.sdpMLineIndex,
-    username_fragment: value.usernameFragment,
   }
 }
 
@@ -287,7 +278,9 @@ export class BrowserServerStreamSession {
       options.onQualityStats,
     )
     this.peer.onicecandidate = (event) => {
-      if (event.candidate) options.onICECandidate(wireCandidate(event.candidate))
+      if (!event.candidate) return
+      const candidate = wireICECandidate(event.candidate)
+      if (candidate) options.onICECandidate(candidate)
     }
   }
 
@@ -395,7 +388,9 @@ export class BrowserP2PStreamPublisher {
       this.handlePeerConnectionState(connectionId, state, connectionState)
     })
     peer.onicecandidate = (event) => {
-      if (event.candidate) this.options.onICECandidate(connectionId, wireCandidate(event.candidate))
+      if (!event.candidate) return
+      const candidate = wireICECandidate(event.candidate)
+      if (candidate) this.options.onICECandidate(connectionId, candidate)
     }
     for (const track of this.options.localStream.getTracks()) {
       const transceiver = peer.addTransceiver(track, { direction: 'sendonly', streams: [this.options.localStream] })
@@ -551,7 +546,9 @@ export class BrowserP2PStreamViewer {
         this.handleConnectionState(state, connectionState)
       })
       peer.onicecandidate = (event) => {
-        if (event.candidate) this.options.onICECandidate(connectionId, wireCandidate(event.candidate))
+        if (!event.candidate) return
+        const candidate = wireICECandidate(event.candidate)
+        if (candidate) this.options.onICECandidate(connectionId, candidate)
       }
     }
     if (connectionId !== this.publisherConnectionId) return
