@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ActiveStream } from '../domain/types'
 import { DEFAULT_STREAM_PREFERENCES } from '../services/streamSettings'
 import { PersistentStreamPlayer } from './PersistentStreamPlayer'
@@ -16,7 +16,14 @@ const stream: ActiveStream = {
   viewer_count: 4,
 }
 
-afterEach(cleanup)
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+})
+
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 function renderPlayer(mode: 'mini' | 'expanded') {
   const handlers = {

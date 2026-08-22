@@ -220,12 +220,14 @@ function wirePeer(
 ) {
   const remote = new MediaStream()
   peer.ontrack = (event) => {
-    const stream = event.streams[0]
-    if (stream) callbacks.onRemoteStream?.(stream)
-    else {
+    if (!remote.getTracks().some((track) => track.id === event.track.id)) {
       remote.addTrack(event.track)
-      callbacks.onRemoteStream?.(remote)
+      event.track.addEventListener('ended', () => remote.removeTrack(event.track), { once: true })
     }
+    // Always expose one stable aggregate. Browsers may return a different
+    // event.streams[0] object for a track added during renegotiation; forwarding
+    // only the newest object can drop audio or video that was attached earlier.
+    callbacks.onRemoteStream?.(remote)
   }
   peer.onconnectionstatechange = () => {
     callbacks.onConnectionStateChange(peer.connectionState)

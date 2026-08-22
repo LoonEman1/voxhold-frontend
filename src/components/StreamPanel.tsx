@@ -27,7 +27,13 @@ export function StreamPanel({ stream, currentUserId, voiceActive, status, error,
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
 
   useEffect(() => {
-    if (videoRef.current) videoRef.current.srcObject = media
+    const video = videoRef.current
+    if (!video) return
+    video.srcObject = media
+    if (media) void video.play().catch(() => undefined)
+    return () => {
+      if (video.srcObject === media) video.srcObject = null
+    }
   }, [media])
 
   useEffect(() => {
@@ -35,6 +41,7 @@ export function StreamPanel({ stream, currentUserId, voiceActive, status, error,
     if (!video) return
     video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
     video.muted = !!isPublisher || preferences.playbackVolume === 0
+    if (!video.muted && video.srcObject) void video.play().catch(() => undefined)
   }, [isPublisher, preferences.playbackVolume, media])
 
   if (!stream && !pendingPublisher) {
