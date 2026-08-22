@@ -46,6 +46,7 @@ export interface Channel {
   position: number
   created_by: EntityId
   created_at: number
+  last_message_id?: EntityId
 }
 
 export interface MessageAuthor {

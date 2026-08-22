@@ -22,6 +22,7 @@ import {
 } from '../components/WorkspaceDialogs'
 import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
+import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import type { VoxholdApi } from '../services/api'
@@ -185,6 +186,20 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       if (existing && existing.last_read_message_id >= read.last_read_message_id) return current
       const next = { ...current, [read.channel_id]: { ...channelState, [read.user_id]: read } }
       channelReadsRef.current = next
+      return next
+    })
+  }, [])
+
+  const recordLastMessage = useCallback((channelId: number, messageId: number) => {
+    setChannels((current) => {
+      let changed = false
+      const next = current.map((channel) => {
+        if (channel.id !== channelId || (channel.last_message_id ?? 0) >= messageId) return channel
+        changed = true
+        return { ...channel, last_message_id: messageId }
+      })
+      if (!changed) return current
+      channelsRef.current = next
       return next
     })
   }, [])
@@ -472,10 +487,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onUnauthorized: expire,
       onReady: () => { syncLatestRef.current(); syncPinsRef.current() },
       onSubscribed: () => { syncLatestRef.current(); syncPinsRef.current() },
-      onMessage: (message) => setMessages((current) => {
-        if (message.channel_id !== activeChannelRef.current || hasNewerRef.current || current.some((item) => item.id === message.id)) return current
-        return [...current, message]
-      }),
+      onMessage: (message) => {
+        recordLastMessage(message.channel_id, message.id)
+        setMessages((current) => {
+          if (message.channel_id !== activeChannelRef.current || hasNewerRef.current || current.some((item) => item.id === message.id)) return current
+          return [...current, message]
+        })
+      },
       onMessageUpdated: (message) => {
         if (message.channel_id !== activeChannelRef.current) return
         setMessages((current) => current.map((item) => item.id === message.id ? message : item))
@@ -566,7 +584,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onChannelCreated: (channel) => {
         if (channel.server_id !== activeServerRef.current) return
         setChannels((current) => {
-          const next = [...current.filter((item) => item.id !== channel.id), channel].sort((left, right) => left.position - right.position || left.id - right.id)
+          const existing = current.find((item) => item.id === channel.id)
+          const nextChannel = {
+            ...channel,
+            last_message_id: channel.last_message_id ?? existing?.last_message_id ?? 0,
+          }
+          const next = [...current.filter((item) => item.id !== channel.id), nextChannel].sort((left, right) => left.position - right.position || left.id - right.id)
           channelsRef.current = next
           return next
         })
@@ -574,11 +597,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onChannelUpdated: (channel) => {
         if (channel.server_id !== activeServerRef.current) return
         setChannels((current) => {
-          const next = current.map((item) => item.id === channel.id ? channel : item).sort((left, right) => left.position - right.position || left.id - right.id)
+          const next = current.map((item) => item.id === channel.id ? {
+            ...item,
+            ...channel,
+            last_message_id: channel.last_message_id ?? item.last_message_id,
+          } : item).sort((left, right) => left.position - right.position || left.id - right.id)
           channelsRef.current = next
           return next
         })
-        setEditingChannel((current) => current?.id === channel.id ? channel : current)
+        setEditingChannel((current) => current?.id === channel.id ? { ...current, ...channel } : current)
       },
       onChannelDeleted: (event) => {
         if (voiceSessionRef.current?.channelId === event.channel_id) closeVoiceLocally()
@@ -709,7 +736,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     realtimeRef.current = client
     client.connect()
     return () => { client.close(); realtimeRef.current = null }
-  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant])
+  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant])
 
   useEffect(() => {
     if (selectedServerId && selectedChannelId && selectedChannel?.kind === 'text') realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
@@ -1098,7 +1125,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const createChannel = async (name: string, kind: ChannelKind) => {
     if (!token || !selectedServerId) return
     const created = await api.channels.create(token, selectedServerId, name, kind)
-    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(kind === 'text'); setChannels((current) => [...current, created]); setSelectedChannelId(created.id)
+    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(kind === 'text'); setChannels((current) => [...current, { ...created, last_message_id: created.last_message_id ?? 0 }]); setSelectedChannelId(created.id)
     notify('Канал создан', 'success')
   }
 
@@ -1110,8 +1137,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const renameChannel = async (name: string) => {
     if (!token || !selectedServerId || !editingChannel) return
     const updated = await api.channels.update(token, selectedServerId, editingChannel.id, name)
-    setChannels((current) => current.map((channel) => channel.id === updated.id ? updated : channel))
-    setEditingChannel(updated)
+    setChannels((current) => current.map((channel) => channel.id === updated.id ? { ...channel, ...updated, last_message_id: updated.last_message_id ?? channel.last_message_id } : channel))
+    setEditingChannel((current) => current ? { ...current, ...updated } : updated)
     notify('Канал переименован', 'success')
   }
 
@@ -1189,6 +1216,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!token || !selectedServerId || !selectedChannelId) return
     try {
       const created = await api.messages.create(token, selectedServerId, selectedChannelId, content)
+      recordLastMessage(created.channel_id, created.id)
       if (hasNewerRef.current) await returnToLatest()
       else setMessages((current) => current.some((item) => item.id === created.id) ? current : [...current, created])
     } catch (error) {
@@ -1309,7 +1337,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={() => setDialog('settings')} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
           <div className="channel-scroll">
             <ChannelGroup title="Текстовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
-              {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)}/>) }
+              {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)}/>) }
             </ChannelGroup>
             <ChannelGroup title="Голосовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
               {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)}/>) }
@@ -1384,8 +1412,8 @@ function ChannelGroup({ title, canAdd, onAdd, children }: { title: string; canAd
   return <section className="channel-group"><header><span>{title}</span>{canAdd && <button onClick={onAdd} aria-label={`Добавить: ${title}`}><Icon name="add" size={15}/></button>}</header>{children}</section>
 }
 
-function ChannelButton({ channel, active, canManage, canShare = false, participants = [], members = [], currentVoiceConnectionId = null, onSelect, onEdit, onShare, onOpenProfile }: { channel: Channel; active: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; members?: ServerMember[]; currentVoiceConnectionId?: string | null; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void }) {
-  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''}`}><button className="channel-row__main" onClick={onSelect}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
+function ChannelButton({ channel, active, unread = false, canManage, canShare = false, participants = [], members = [], currentVoiceConnectionId = null, onSelect, onEdit, onShare, onOpenProfile }: { channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; members?: ServerMember[]; currentVoiceConnectionId?: string | null; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void }) {
+  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
     const member = members.find((item) => item.user_id === participant.user_id)
     const username = member?.username ?? `Пользователь #${participant.user_id}`
     return <button key={participant.connection_id} className={participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} onClick={() => onOpenProfile?.(participant.user_id, member?.role ?? 'member')}><Avatar name={username} size="small"/><span>{username}</span>{participant.self_deaf ? <Icon name="headphones" size={12}/> : participant.self_mute ? <Icon name="mic" size={12}/> : <i/>}</button>
