@@ -32,6 +32,7 @@ import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamS
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { isEditableKeyboardTarget, loadVoicePreferences, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { useTheme } from '../theme/ThemeContext'
 
 type Dialog = 'server' | 'channel' | 'channelSettings' | 'invite' | 'invites' | 'profile' | 'userProfile' | 'settings' | 'voiceSettings' | 'streamSettings' | 'logout' | null
@@ -1134,6 +1135,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setDialog('channelSettings')
   }
 
+  const downloadClientDiagnostics = async () => {
+    if (!token) return
+    await clientDiagnostics.flush()
+    const payload = await api.diagnostics.list(token)
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const href = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = href
+    anchor.download = `voxhold-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    document.body.append(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(href)
+    notify(`Диагностика выгружена: ${payload.events.length} событий`, 'success')
+  }
+
   const renameChannel = async (name: string) => {
     if (!token || !selectedServerId || !editingChannel) return
     const updated = await api.channels.update(token, selectedServerId, editingChannel.id, name)
@@ -1403,7 +1420,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} inputLevel={voiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>
       <StreamSettingsDialog open={dialog === 'streamSettings'} busy={streamStatus !== 'idle'} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/>
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
-      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }}/>
+      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics}/>
     </main>
   )
 }

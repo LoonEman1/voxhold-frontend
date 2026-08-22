@@ -33,6 +33,7 @@ import type {
   VoiceWebRTCClosed,
   VoiceWebRTCOffer,
 } from '../domain/types'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 type ConnectionState = 'connecting' | 'online' | 'offline'
 
@@ -219,6 +220,9 @@ export class RealtimeClient {
   }
 
   close() {
+    clientDiagnostics.record('websocket', 'client_close', 'info', {
+      ready_state: this.socket?.readyState ?? null,
+    })
     this.intentionallyClosed = true
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
     this.socket?.close(1000, 'client closed')
@@ -231,6 +235,9 @@ export class RealtimeClient {
 
   private open() {
     if (this.socket && this.socket.readyState < WebSocket.CLOSING) return
+    clientDiagnostics.record('websocket', 'connecting', 'info', {
+      attempt: this.attempts + 1,
+    })
     this.options.onStateChange('connecting')
     const socket = new WebSocket(websocketUrl(this.options.baseUrl ?? ''))
     this.socket = socket
@@ -239,12 +246,18 @@ export class RealtimeClient {
     this.pendingSubscription = null
 
     socket.addEventListener('open', () => {
+      clientDiagnostics.record('websocket', 'opened', 'info')
       this.send('auth', { token: this.options.token })
     })
 
     socket.addEventListener('message', (event) => {
       try {
         const payload = JSON.parse(String(event.data)) as RealtimeEvent
+        clientDiagnostics.record('websocket', 'event_received', 'debug', {
+          event_type: payload.type,
+          request_id: payload.request_id ?? null,
+          payload_bytes: typeof event.data === 'string' ? event.data.length : null,
+        })
         if (payload.type === 'ready') {
           this.attempts = 0
           this.authenticated = true
@@ -355,12 +368,21 @@ export class RealtimeClient {
             message: data?.message ?? 'Realtime server error',
           })
         }
-      } catch {
+      } catch (error) {
+        clientDiagnostics.record('websocket', 'invalid_event', 'error', {
+          error_name: error instanceof Error ? error.name : typeof error,
+          payload_bytes: typeof event.data === 'string' ? event.data.length : null,
+        })
         // A malformed server event is ignored; the connection remains usable.
       }
     })
 
     socket.addEventListener('close', (event) => {
+      clientDiagnostics.record('websocket', 'closed', event.wasClean ? 'info' : 'warn', {
+        code: event.code,
+        was_clean: event.wasClean,
+        intentionally_closed: this.intentionallyClosed,
+      })
       this.socket = null
       this.authenticated = false
       this.activeSubscription = null
@@ -371,14 +393,29 @@ export class RealtimeClient {
       if (!this.intentionallyClosed && event.code !== 1008) this.scheduleReconnect()
     })
 
-    socket.addEventListener('error', () => socket.close())
+    socket.addEventListener('error', () => {
+      clientDiagnostics.record('websocket', 'socket_error', 'error', {
+        ready_state: socket.readyState,
+      })
+      socket.close()
+    })
   }
 
   private send(type: string, data: unknown): string | null {
-    if (this.socket?.readyState !== WebSocket.OPEN) return null
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      clientDiagnostics.record('websocket', 'event_not_sent', 'warn', {
+        event_type: type,
+        ready_state: this.socket?.readyState ?? null,
+      })
+      return null
+    }
     this.requestSequence += 1
     const requestId = String(this.requestSequence)
     this.socket.send(JSON.stringify({ request_id: requestId, type, data }))
+    clientDiagnostics.record('websocket', 'event_sent', 'debug', {
+      event_type: type,
+      request_id: requestId,
+    })
     return requestId
   }
 
@@ -404,6 +441,10 @@ export class RealtimeClient {
   private scheduleReconnect() {
     const delay = Math.min(1_000 * 2 ** this.attempts, 30_000) + Math.random() * 500
     this.attempts += 1
+    clientDiagnostics.record('websocket', 'reconnect_scheduled', 'warn', {
+      attempt: this.attempts,
+      delay_ms: Math.round(delay),
+    })
     this.reconnectTimer = window.setTimeout(() => this.open(), delay)
   }
 }

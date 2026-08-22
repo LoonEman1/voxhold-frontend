@@ -11,6 +11,7 @@ import {
 import type { AuthPayload, User } from '../domain/types'
 import type { SessionStorageAdapter } from '../platform/transport'
 import type { VoxholdApi } from '../services/api'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 const STORAGE_KEY = 'voxhold.session.v1'
 const REFRESH_MARGIN_SECONDS = 5 * 60
@@ -42,6 +43,10 @@ export function AuthProvider({
   const [ready, setReady] = useState(false)
   const authRef = useRef(auth)
   authRef.current = auth
+
+  useEffect(() => {
+    clientDiagnostics.setToken(auth?.session.token ?? null)
+  }, [auth?.session.token])
 
   const persist = useCallback(
     (next: PersistedAuth | null) => {

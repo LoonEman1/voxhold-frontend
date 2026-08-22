@@ -318,3 +318,23 @@ export interface InviteLinkAcceptance {
 export interface ApiErrorPayload {
   error?: string
 }
+
+export interface StoredClientDiagnosticEvent {
+  id: number
+  created_at: number
+  client_timestamp_ms: number
+  user_id: number
+  username: string
+  session_id: string
+  client_version: string
+  platform: string
+  category: string
+  name: string
+  level: 'debug' | 'info' | 'warn' | 'error'
+  details: Record<string, unknown>
+}
+
+export interface ClientDiagnosticsPayload {
+  retention_seconds: number
+  events: StoredClientDiagnosticEvent[]
+}

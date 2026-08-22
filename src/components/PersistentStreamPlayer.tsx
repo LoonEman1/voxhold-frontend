@@ -4,6 +4,7 @@ import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 interface PersistentStreamPlayerProps {
   mode: 'mini' | 'expanded'
@@ -31,18 +32,38 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     const video = videoRef.current
     if (!video) return
     video.srcObject = media
-    void video.play().catch(() => undefined)
+    void video.play().then(() => {
+      clientDiagnostics.record('media', 'stream_playback_started', 'info', {
+        player: mode,
+        role,
+        audio_track_count: media.getAudioTracks?.().length ?? 0,
+        video_track_count: media.getVideoTracks?.().length ?? 0,
+      })
+    }).catch((error: unknown) => {
+      clientDiagnostics.record('media', 'stream_playback_blocked', 'warn', {
+        player: mode,
+        role,
+        error_name: error instanceof Error ? error.name : typeof error,
+      })
+    })
     return () => {
       if (video.srcObject === media) video.srcObject = null
     }
-  }, [media, mode])
+  }, [media, mode, role])
 
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
     video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
     video.muted = muted
-    if (!muted && video.srcObject) void video.play().catch(() => undefined)
+    if (!muted && video.srcObject) {
+      void video.play().catch((error: unknown) => {
+        clientDiagnostics.record('media', 'stream_unmute_blocked', 'warn', {
+          player: mode,
+          error_name: error instanceof Error ? error.name : typeof error,
+        })
+      })
+    }
   }, [isPublisher, muted, preferences.playbackVolume, media, mode])
 
   useEffect(() => {

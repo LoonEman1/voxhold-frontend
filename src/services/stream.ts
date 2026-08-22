@@ -2,6 +2,7 @@ import type { StreamCodec, StreamICECandidate } from '../domain/types'
 import { normalizeStreamPreferences, selectedStreamResolution, type StreamPreferences } from './streamSettings'
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 export type StreamConnectionState = RTCPeerConnectionState
 
@@ -133,6 +134,81 @@ interface CodecStats extends RTCStats {
   mimeType?: string
 }
 
+interface MediaRTPDiagnosticStats extends RTCStats {
+  kind?: string
+  mediaType?: string
+  isRemote?: boolean
+  bytesSent?: number
+  bytesReceived?: number
+  packetsSent?: number
+  packetsReceived?: number
+  packetsLost?: number
+  jitter?: number
+  framesPerSecond?: number
+  frameWidth?: number
+  frameHeight?: number
+  audioLevel?: number
+  concealedSamples?: number
+  totalSamplesReceived?: number
+  qualityLimitationReason?: string
+  trackIdentifier?: string
+}
+
+function monitorPeerDiagnostics(
+  peer: RTCPeerConnection,
+  context: Record<string, unknown>,
+) {
+  let sampling = false
+  const sample = async () => {
+    if (sampling || peer.connectionState === 'closed' || typeof peer.getStats !== 'function') return
+    sampling = true
+    try {
+      const report = await peer.getStats()
+      const reports: Array<Record<string, unknown>> = []
+      report.forEach((raw) => {
+        const stats = raw as MediaRTPDiagnosticStats
+        if (
+          stats.isRemote
+          || (stats.type !== 'inbound-rtp' && stats.type !== 'outbound-rtp')
+          || (stats.kind !== 'audio' && stats.kind !== 'video'
+            && stats.mediaType !== 'audio' && stats.mediaType !== 'video')
+        ) return
+        const inbound = stats.type === 'inbound-rtp'
+        reports.push({
+          direction: inbound ? 'inbound' : 'outbound',
+          kind: stats.kind ?? stats.mediaType ?? '',
+          track_id: stats.trackIdentifier ?? '',
+          bytes: inbound ? stats.bytesReceived ?? 0 : stats.bytesSent ?? 0,
+          packets: inbound ? stats.packetsReceived ?? 0 : stats.packetsSent ?? 0,
+          packets_lost: stats.packetsLost ?? 0,
+          jitter: stats.jitter ?? 0,
+          audio_level: stats.audioLevel ?? null,
+          concealed_samples: stats.concealedSamples ?? null,
+          total_samples_received: stats.totalSamplesReceived ?? null,
+          frames_per_second: stats.framesPerSecond ?? null,
+          width: stats.frameWidth ?? null,
+          height: stats.frameHeight ?? null,
+          quality_limitation_reason: stats.qualityLimitationReason ?? '',
+        })
+      })
+      clientDiagnostics.record('media', 'stream_rtp_stats', 'info', {
+        ...context,
+        connection_state: peer.connectionState,
+        reports,
+      })
+    } catch (error) {
+      clientDiagnostics.record('media', 'stream_stats_failed', 'debug', {
+        ...context,
+        error_name: error instanceof Error ? error.name : typeof error,
+      })
+    } finally {
+      sampling = false
+    }
+  }
+  const timer = window.setInterval(() => { void sample() }, 15_000)
+  return () => window.clearInterval(timer)
+}
+
 function monitorVideoQuality(
   peer: RTCPeerConnection,
   direction: 'outbound-rtp' | 'inbound-rtp',
@@ -217,12 +293,42 @@ function wirePeer(
   peer: RTCPeerConnection,
   callbacks: MediaCallbacks,
   onConnectionState?: (state: StreamConnectionState) => void,
+  diagnosticContext: Record<string, unknown> = {},
 ) {
   const remote = new MediaStream()
   peer.ontrack = (event) => {
     if (!remote.getTracks().some((track) => track.id === event.track.id)) {
       remote.addTrack(event.track)
-      event.track.addEventListener('ended', () => remote.removeTrack(event.track), { once: true })
+      clientDiagnostics.record('media', 'stream_remote_track_added', 'info', {
+        ...diagnosticContext,
+        track_id: event.track.id,
+        kind: event.track.kind,
+        muted: event.track.muted,
+        ready_state: event.track.readyState,
+        remote_track_count: remote.getTracks().length,
+      })
+      event.track.addEventListener('mute', () => {
+        clientDiagnostics.record('media', 'stream_remote_track_muted', 'warn', {
+          ...diagnosticContext,
+          track_id: event.track.id,
+          kind: event.track.kind,
+        })
+      })
+      event.track.addEventListener('unmute', () => {
+        clientDiagnostics.record('media', 'stream_remote_track_unmuted', 'info', {
+          ...diagnosticContext,
+          track_id: event.track.id,
+          kind: event.track.kind,
+        })
+      })
+      event.track.addEventListener('ended', () => {
+        clientDiagnostics.record('media', 'stream_remote_track_ended', 'warn', {
+          ...diagnosticContext,
+          track_id: event.track.id,
+          kind: event.track.kind,
+        })
+        remote.removeTrack(event.track)
+      }, { once: true })
     }
     // Always expose one stable aggregate. Browsers may return a different
     // event.streams[0] object for a track added during renegotiation; forwarding
@@ -230,8 +336,20 @@ function wirePeer(
     callbacks.onRemoteStream?.(remote)
   }
   peer.onconnectionstatechange = () => {
+    clientDiagnostics.record('webrtc', 'stream_connection_state', peer.connectionState === 'failed' ? 'error' : 'info', {
+      ...diagnosticContext,
+      connection_state: peer.connectionState,
+      ice_connection_state: peer.iceConnectionState,
+      signaling_state: peer.signalingState,
+    })
     callbacks.onConnectionStateChange(peer.connectionState)
     onConnectionState?.(peer.connectionState)
+  }
+  peer.oniceconnectionstatechange = () => {
+    clientDiagnostics.record('webrtc', 'stream_ice_state', peer.iceConnectionState === 'failed' ? 'error' : 'debug', {
+      ...diagnosticContext,
+      ice_connection_state: peer.iceConnectionState,
+    })
   }
 }
 
@@ -253,6 +371,13 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
     throw new Error('Источник экрана не предоставил видеодорожку')
   }
   video.contentHint = 'detail'
+  const settings = video.getSettings()
+  clientDiagnostics.record('media', 'stream_capture_ready', 'info', {
+    has_audio: media.getAudioTracks().length > 0,
+    width: settings.width ?? null,
+    height: settings.height ?? null,
+    frame_rate: settings.frameRate ?? null,
+  })
   return media
 }
 
@@ -271,16 +396,27 @@ export class BrowserServerStreamSession {
   private tracksAdded = false
   private closed = false
   private readonly stopQualityMonitor: () => void
+  private readonly stopDiagnosticMonitor: () => void
 
   constructor(private readonly options: ServerSessionOptions) {
-    wirePeer(this.peer, options)
+    const context = {
+      transport: 'server',
+      role: options.localStream ? 'publisher' : 'viewer',
+    }
+    wirePeer(this.peer, options, undefined, context)
     this.stopQualityMonitor = monitorVideoQuality(
       this.peer,
       options.localStream ? 'outbound-rtp' : 'inbound-rtp',
       options.onQualityStats,
     )
+    this.stopDiagnosticMonitor = monitorPeerDiagnostics(this.peer, context)
     this.peer.onicecandidate = (event) => {
       if (!event.candidate) return
+      clientDiagnostics.record('webrtc', 'stream_local_ice', 'debug', {
+        ...context,
+        type: event.candidate.type ?? null,
+        protocol: event.candidate.protocol ?? null,
+      })
       const candidate = wireICECandidate(event.candidate)
       if (candidate) options.onICECandidate(candidate)
     }
@@ -289,6 +425,12 @@ export class BrowserServerStreamSession {
   acceptOffer(sdp: string) {
     const operation = this.offerQueue.then(async () => {
       if (this.closed) return
+      clientDiagnostics.record('webrtc', 'stream_offer_received', 'debug', {
+        transport: 'server',
+        role: this.options.localStream ? 'publisher' : 'viewer',
+        sdp_bytes: sdp.length,
+        pending_ice_count: this.pendingCandidates.length,
+      })
       await this.peer.setRemoteDescription({ type: 'offer', sdp })
       const pending = this.pendingCandidates.splice(0)
       for (const candidate of pending) {
@@ -315,6 +457,11 @@ export class BrowserServerStreamSession {
       await applyAllSenderLimits(this.peer, this.options.preferences)
       const localSDP = this.peer.localDescription?.sdp
       if (!localSDP) throw new Error('Браузер не создал SDP-ответ трансляции')
+      clientDiagnostics.record('webrtc', 'stream_answer_created', 'debug', {
+        transport: 'server',
+        role: this.options.localStream ? 'publisher' : 'viewer',
+        sdp_bytes: localSDP.length,
+      })
       this.options.onAnswer(localSDP)
     })
     this.offerQueue = operation.catch((error: unknown) => {
@@ -327,6 +474,10 @@ export class BrowserServerStreamSession {
     if (this.closed) return
     if (!remoteDescriptionAcceptsCandidate(this.peer, candidate)) {
       if (this.pendingCandidates.length < 64) this.pendingCandidates.push(candidate)
+      clientDiagnostics.record('webrtc', 'stream_remote_ice_buffered', 'debug', {
+        transport: 'server',
+        pending_ice_count: this.pendingCandidates.length,
+      })
       return
     }
     try {
@@ -339,7 +490,12 @@ export class BrowserServerStreamSession {
   close() {
     if (this.closed) return
     this.closed = true
+    clientDiagnostics.record('webrtc', 'stream_session_closed', 'info', {
+      transport: 'server',
+      role: this.options.localStream ? 'publisher' : 'viewer',
+    })
     this.stopQualityMonitor()
+    this.stopDiagnosticMonitor()
     this.peer.close()
     this.pendingCandidates.length = 0
   }
@@ -357,6 +513,7 @@ interface PeerState {
   peer: RTCPeerConnection
   pendingCandidates: StreamICECandidate[]
   stopQualityMonitor: () => void
+  stopDiagnosticMonitor: () => void
   recovery: WebRTCRecoveryController
   operation: Promise<void>
 }
@@ -382,15 +539,32 @@ export class BrowserP2PStreamPublisher {
         'outbound-rtp',
         this.options.onQualityStats,
       ),
+      stopDiagnosticMonitor: monitorPeerDiagnostics(peer, {
+        transport: 'p2p',
+        role: 'publisher',
+        peer_connection_id: connectionId,
+      }),
       recovery: new WebRTCRecoveryController(),
       operation: Promise.resolve(),
     }
     this.peers.set(connectionId, state)
-    wirePeer(peer, this.options, (connectionState) => {
-      this.handlePeerConnectionState(connectionId, state, connectionState)
-    })
+    wirePeer(
+      peer,
+      this.options,
+      (connectionState) => {
+        this.handlePeerConnectionState(connectionId, state, connectionState)
+      },
+      { transport: 'p2p', role: 'publisher', peer_connection_id: connectionId },
+    )
     peer.onicecandidate = (event) => {
       if (!event.candidate) return
+      clientDiagnostics.record('webrtc', 'stream_local_ice', 'debug', {
+        transport: 'p2p',
+        role: 'publisher',
+        peer_connection_id: connectionId,
+        type: event.candidate.type ?? null,
+        protocol: event.candidate.protocol ?? null,
+      })
       const candidate = wireICECandidate(event.candidate)
       if (candidate) this.options.onICECandidate(connectionId, candidate)
     }
@@ -412,6 +586,12 @@ export class BrowserP2PStreamPublisher {
     const operation = state.operation.then(async () => {
       if (this.closed || this.peers.get(connectionId) !== state) return
       await state.peer.setRemoteDescription({ type: 'answer', sdp })
+      clientDiagnostics.record('webrtc', 'stream_answer_received', 'debug', {
+        transport: 'p2p',
+        role: 'publisher',
+        peer_connection_id: connectionId,
+        sdp_bytes: sdp.length,
+      })
       const pending = state.pendingCandidates.splice(0)
       for (const candidate of pending) {
         if (remoteDescriptionAcceptsCandidate(state.peer, candidate)) {
@@ -445,6 +625,7 @@ export class BrowserP2PStreamPublisher {
     const state = this.peers.get(connectionId)
     state?.recovery.stop()
     state?.stopQualityMonitor()
+    state?.stopDiagnosticMonitor()
     state?.peer.close()
     this.peers.delete(connectionId)
   }
@@ -452,9 +633,10 @@ export class BrowserP2PStreamPublisher {
   close() {
     if (this.closed) return
     this.closed = true
-    this.peers.forEach(({ peer, stopQualityMonitor, recovery }) => {
+    this.peers.forEach(({ peer, stopQualityMonitor, stopDiagnosticMonitor, recovery }) => {
       recovery.stop()
       stopQualityMonitor()
+      stopDiagnosticMonitor()
       peer.close()
     })
     this.peers.clear()
@@ -503,6 +685,13 @@ export class BrowserP2PStreamPublisher {
       await applyAllSenderLimits(state.peer, this.options.preferences)
       const localSDP = state.peer.localDescription?.sdp
       if (!localSDP) throw new Error('Браузер не создал P2P SDP-предложение')
+      clientDiagnostics.record('webrtc', 'stream_offer_created', 'debug', {
+        transport: 'p2p',
+        role: 'publisher',
+        peer_connection_id: connectionId,
+        ice_restart: restartICE,
+        sdp_bytes: localSDP.length,
+      })
       this.options.onOffer(connectionId, localSDP)
     })
     state.operation = operation.catch(() => undefined)
@@ -539,16 +728,33 @@ export class BrowserP2PStreamViewer {
           'inbound-rtp',
           this.options.onQualityStats,
         ),
+        stopDiagnosticMonitor: monitorPeerDiagnostics(peer, {
+          transport: 'p2p',
+          role: 'viewer',
+          peer_connection_id: connectionId,
+        }),
         recovery: new WebRTCRecoveryController(),
         operation: Promise.resolve(),
       }
       this.state = state
       this.publisherConnectionId = connectionId
-      wirePeer(peer, this.options, (connectionState) => {
-        this.handleConnectionState(state, connectionState)
-      })
+      wirePeer(
+        peer,
+        this.options,
+        (connectionState) => {
+          this.handleConnectionState(state, connectionState)
+        },
+        { transport: 'p2p', role: 'viewer', peer_connection_id: connectionId },
+      )
       peer.onicecandidate = (event) => {
         if (!event.candidate) return
+        clientDiagnostics.record('webrtc', 'stream_local_ice', 'debug', {
+          transport: 'p2p',
+          role: 'viewer',
+          peer_connection_id: connectionId,
+          type: event.candidate.type ?? null,
+          protocol: event.candidate.protocol ?? null,
+        })
         const candidate = wireICECandidate(event.candidate)
         if (candidate) this.options.onICECandidate(connectionId, candidate)
       }
@@ -558,6 +764,12 @@ export class BrowserP2PStreamViewer {
     const operation = state.operation.then(async () => {
       if (this.closed || this.state !== state) return
       await state.peer.setRemoteDescription({ type: 'offer', sdp })
+      clientDiagnostics.record('webrtc', 'stream_offer_received', 'debug', {
+        transport: 'p2p',
+        role: 'viewer',
+        peer_connection_id: connectionId,
+        sdp_bytes: sdp.length,
+      })
       const pending = state.pendingCandidates.splice(0)
       for (const candidate of pending) {
         if (remoteDescriptionAcceptsCandidate(state.peer, candidate)) {
@@ -568,6 +780,12 @@ export class BrowserP2PStreamViewer {
       await state.peer.setLocalDescription(answer)
       const localSDP = state.peer.localDescription?.sdp
       if (!localSDP) throw new Error('Браузер не создал P2P SDP-ответ')
+      clientDiagnostics.record('webrtc', 'stream_answer_created', 'debug', {
+        transport: 'p2p',
+        role: 'viewer',
+        peer_connection_id: connectionId,
+        sdp_bytes: localSDP.length,
+      })
       this.options.onAnswer(connectionId, localSDP)
     })
     state.operation = operation.catch((error: unknown) => {
@@ -619,6 +837,7 @@ export class BrowserP2PStreamViewer {
   private disposeState() {
     this.state?.recovery.stop()
     this.state?.stopQualityMonitor()
+    this.state?.stopDiagnosticMonitor()
     this.state?.peer.close()
     this.state = null
   }
