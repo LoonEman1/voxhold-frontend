@@ -12,6 +12,7 @@ interface VoiceMediaOptions {
   onConnectionStateChange: (state: VoiceMediaConnectionState) => void
   onError: (error: Error) => void
   onInputLevel?: (level: number) => void
+  onRemoteLevels?: (levels: VoiceRemoteLevel[]) => void
 }
 
 interface VoiceInputChain {
@@ -28,6 +29,17 @@ interface VoiceRemoteOutput {
   stream: MediaStream
   track: MediaStreamTrack
   audio: HTMLAudioElement
+}
+
+interface VoiceRemoteAnalyser {
+  source: MediaStreamAudioSourceNode
+  analyser: AnalyserNode
+  values: Uint8Array<ArrayBuffer>
+}
+
+export interface VoiceRemoteLevel {
+  connectionId: string
+  level: number
 }
 
 interface AudioRTPDiagnosticStats extends RTCStats {
@@ -123,6 +135,13 @@ export class BrowserVoiceSession {
   private input: VoiceInputChain | null = null
   private inputSender: RTCRtpSender | null = null
   private readonly remoteOutputs = new Map<string, VoiceRemoteOutput>()
+  // The server names every relayed track "audio-<connectionId>" in the offer
+  // msid, which lets us attribute remote audio levels to room participants.
+  private readonly midOwners = new Map<string, string>()
+  private readonly trackOwners = new Map<string, string>()
+  private analysis: { context: AudioContext; sink: GainNode } | null = null
+  private readonly remoteAnalysers = new Map<string, VoiceRemoteAnalyser>()
+  private levelTimer: number | null = null
   private preferences: VoicePreferences | null = null
   private pendingRemoteCandidates: VoiceICECandidate[] = []
   private offerQueue: Promise<void> = Promise.resolve()
@@ -194,8 +213,10 @@ export class BrowserVoiceSession {
       if (wireCandidate) this.options.onICECandidate(wireCandidate)
     }
 
-    peer.ontrack = ({ track }) => {
+    peer.ontrack = ({ track, transceiver }) => {
       if (this.closed || track.kind !== 'audio' || this.remoteOutputs.has(track.id)) return
+      const connectionId = transceiver?.mid != null ? this.midOwners.get(transceiver.mid) : undefined
+      if (connectionId) this.trackOwners.set(track.id, connectionId)
       const stream = new MediaStream([track])
       const audio = document.createElement('audio')
       audio.autoplay = true
@@ -228,6 +249,7 @@ export class BrowserVoiceSession {
       void this.applyOutputDevice(this.preferences?.outputDeviceId ?? '', audio).catch(() => {
         // Keep the default output when the selected device disappeared.
       })
+      this.attachRemoteAnalyser(track.id, stream)
       this.playRemoteAudio(output, 'track_added')
     }
 
@@ -252,6 +274,82 @@ export class BrowserVoiceSession {
       })
     }
     this.statsTimer = window.setInterval(() => { void this.sampleStats() }, 15_000)
+  }
+
+  // The relayed offer names each remote participant track "audio-<connectionId>"
+  // inside its msid line. Pairing that track id with the m-line mid lets ontrack
+  // attribute incoming audio to a specific room participant.
+  private rememberOfferTracks(sdp: string) {
+    let mid: string | null = null
+    for (const rawLine of sdp.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (line.startsWith('a=mid:')) {
+        mid = line.slice('a=mid:'.length).trim() || null
+      } else if (line.startsWith('a=msid:')) {
+        const trackId = line.slice('a=msid:'.length).trim().split(/\s+/)[1] ?? ''
+        if (mid !== null && trackId.startsWith('audio-')) {
+          this.midOwners.set(mid, trackId.slice('audio-'.length))
+        }
+      }
+    }
+  }
+
+  private attachRemoteAnalyser(trackId: string, stream: MediaStream) {
+    if (!this.options.onRemoteLevels || typeof AudioContext === 'undefined') return
+    try {
+      if (!this.analysis) {
+        const context = new AudioContext({ latencyHint: 'interactive' })
+        const sink = context.createGain()
+        sink.gain.value = 0
+        sink.connect(context.destination)
+        this.analysis = { context, sink }
+      }
+      const { context, sink } = this.analysis
+      const source = context.createMediaStreamSource(stream)
+      const analyser = context.createAnalyser()
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.55
+      source.connect(analyser)
+      analyser.connect(sink)
+      this.remoteAnalysers.set(trackId, { source, analyser, values: new Uint8Array(analyser.fftSize) })
+      if (context.state === 'suspended') void context.resume().catch(() => undefined)
+      this.ensureLevelTimer()
+    } catch {
+      // Level metering is best-effort; voice keeps working without it.
+    }
+  }
+
+  private detachRemoteAnalyser(trackId: string) {
+    const entry = this.remoteAnalysers.get(trackId)
+    if (!entry) return
+    this.remoteAnalysers.delete(trackId)
+    this.trackOwners.delete(trackId)
+    try {
+      entry.source.disconnect()
+      entry.analyser.disconnect()
+    } catch {
+      // The node may already be detached with its context.
+    }
+  }
+
+  private ensureLevelTimer() {
+    if (this.levelTimer !== null || !this.options.onRemoteLevels) return
+    this.levelTimer = window.setInterval(() => {
+      if (this.closed) return
+      const levels: VoiceRemoteLevel[] = []
+      this.remoteAnalysers.forEach((entry, trackId) => {
+        const connectionId = this.trackOwners.get(trackId)
+        if (!connectionId) return
+        entry.analyser.getByteTimeDomainData(entry.values)
+        let energy = 0
+        for (const value of entry.values) {
+          const normalized = (value - 128) / 128
+          energy += normalized * normalized
+        }
+        levels.push({ connectionId, level: Math.min(1, Math.sqrt(energy / entry.values.length) * 4.5) })
+      })
+      this.options.onRemoteLevels?.(levels)
+    }, 120)
   }
 
   private playRemoteAudio(output: VoiceRemoteOutput, reason: string) {
@@ -398,6 +496,7 @@ export class BrowserVoiceSession {
   private removeRemoteOutput(trackId: string, output: VoiceRemoteOutput) {
     if (this.remoteOutputs.get(trackId) !== output) return
     this.remoteOutputs.delete(trackId)
+    this.detachRemoteAnalyser(trackId)
     output.audio.pause()
     output.audio.srcObject = null
     output.audio.remove()
@@ -464,6 +563,7 @@ export class BrowserVoiceSession {
         sdp_bytes: sdp.length,
         pending_ice_count: this.pendingRemoteCandidates.length,
       })
+      this.rememberOfferTracks(sdp)
       await peer.setRemoteDescription({ type: 'offer', sdp })
       const candidates = this.pendingRemoteCandidates.splice(0)
       for (const candidate of candidates) {
@@ -518,6 +618,9 @@ export class BrowserVoiceSession {
   }
 
   resumeAudio() {
+    if (this.analysis?.context.state === 'suspended') {
+      void this.analysis.context.resume().catch(() => undefined)
+    }
     if (!this.selfDeaf) {
       this.remoteOutputs.forEach((output) => this.playRemoteAudio(output, 'user_interaction'))
     }
@@ -538,7 +641,15 @@ export class BrowserVoiceSession {
     })
     if (this.statsTimer !== null) window.clearInterval(this.statsTimer)
     this.statsTimer = null
+    if (this.levelTimer !== null) window.clearInterval(this.levelTimer)
+    this.levelTimer = null
     this.pendingRemoteCandidates = []
+    Array.from(this.remoteAnalysers.keys()).forEach((trackId) => this.detachRemoteAnalyser(trackId))
+    this.remoteAnalysers.clear()
+    this.trackOwners.clear()
+    this.midOwners.clear()
+    void this.analysis?.context.close().catch(() => undefined)
+    this.analysis = null
     this.disposeInput(this.input)
     this.remoteOutputs.forEach((output, trackId) => {
       output.track.stop()

@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { ActiveStream, Channel, ServerMember, ServerRole, VoiceParticipant } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
@@ -14,6 +15,7 @@ interface VoicePanelProps {
   participants: VoiceParticipant[]
   members: ServerMember[]
   currentUserId: number
+  speakingUserIds: number[]
   connectionStatus: VoiceConnectionStatus
   realtimeOnline: boolean
   selfMute: boolean
@@ -44,9 +46,10 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream }: VoicePanelProps) {
+export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream }: VoicePanelProps) {
   const activeHere = activeChannel?.id === channel.id
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
+  const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
 
   return (
     <section className="chat-panel voice-room voice-room--active">
@@ -74,10 +77,11 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
           const username = member?.username ?? `Пользователь #${participant.user_id}`
           const role = member?.role ?? 'member'
           const isMe = participant.user_id === currentUserId
-          return <button className={`voice-participant ${isMe ? 'is-me' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)}>
+          const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
+          return <button className={`voice-participant ${isMe ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)}>
             <div className="voice-participant__avatar"><Avatar name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
             <span><b className={`member-name--${role}`}>{username}{isMe && <small>вы</small>}</b><em>{roleMeta[role].shortLabel}</em></span>
-            <div className="voice-participant__state">{participant.self_deaf && <span title="Не слышит"><Icon name="headphones" size={14}/></span>}{participant.self_mute && <span title="Микрофон выключен"><Icon name="mic" size={14}/></span>}</div>
+            <div className="voice-participant__state">{participant.self_deaf && <span title="Звук выключен"><Icon name="headphonesOff" size={14}/></span>}{participant.self_mute && <span title="Микрофон выключен"><Icon name="micOff" size={14}/></span>}</div>
           </button>
         })}</div> : <div className="voice-empty"><span><Icon name="people" size={25}/></span><div><b>Здесь пока тихо</b><p>Подключитесь первым — остальные увидят вас в комнате сразу.</p></div></div>}
       </section>

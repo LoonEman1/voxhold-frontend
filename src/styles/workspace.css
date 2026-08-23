@@ -112,6 +112,12 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .voice-participant > span > em { color: var(--muted); font-size: 7px; font-style: normal; }
 .voice-participant__state { display: flex; align-items: center; gap: 4px; color: var(--coral); }
 .voice-participant__state > span { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 7px; background: rgba(255,135,111,.08); }
+.voice-participant.is-speaking { border-color: rgba(231,255,91,.5); background: rgba(231,255,91,.06); }
+.voice-participant.is-speaking > span > b { color: var(--lime); }
+.voice-participant.is-speaking .voice-participant__avatar { border-radius: 11px; box-shadow: 0 0 0 2px rgba(231,255,91,.6); }
+.channel-voice-users > button.is-speaking { color: var(--lime); }
+.channel-voice-users > button.is-speaking > i { box-shadow: 0 0 10px rgba(231,255,91,.8); }
+.channel-voice-users > button.is-speaking > svg { color: var(--coral); }
 .voice-empty { display: flex; min-height: 92px; align-items: center; gap: 13px; padding: 16px; border: 1px dashed var(--line-strong); border-radius: 13px; color: var(--muted); }
 .voice-empty > span { display: grid; width: 46px; height: 46px; flex: 0 0 auto; place-items: center; border-radius: 13px; color: var(--cyan); background: rgba(99,216,230,.08); }
 .voice-empty b { color: var(--text); font-size: 11px; }
@@ -122,7 +128,10 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 [data-theme="light"] .voice-dock > div > button { color: #575850; background: rgba(255,255,255,.65); }
 [data-theme="light"] .voice-participant { background: #fff; }
 [data-theme="light"] .voice-participant.is-me { background: rgba(181,207,22,.09); }
+[data-theme="light"] .voice-participant.is-speaking { border-color: rgba(122,145,15,.55); background: rgba(181,207,22,.1); }
+[data-theme="light"] .voice-participant.is-speaking > span > b { color: #5f7010; }
 [data-theme="light"] .voice-participant__avatar > i { border-color: #fff; }
+[data-theme="light"] .voice-participant.is-speaking .voice-participant__avatar { box-shadow: 0 0 0 2px rgba(122,145,15,.6); }
 [data-theme="light"] .voice-error { color: #a43f3a; background: #fff4f2; }
 
 @keyframes voice-breathe { 50% { box-shadow: 0 0 70px rgba(231,255,91,.25); transform: scale(1.04); } }
