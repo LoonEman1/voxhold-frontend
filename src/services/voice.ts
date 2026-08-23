@@ -132,6 +132,8 @@ export class BrowserVoiceSession {
   private closed = false
   private selfMute = false
   private selfDeaf = false
+  private autoplayRetryAttached = false
+  private autoplayRetryHandler: (() => void) | null = null
 
   constructor(private readonly options: VoiceMediaOptions) {}
 
@@ -266,7 +268,35 @@ export class BrowserVoiceSession {
         reason,
         error_name: error instanceof Error ? error.name : typeof error,
       })
+      if (error instanceof DOMException && error.name === 'NotAllowedError') {
+        this.ensureAutoplayRetry()
+      }
     })
+  }
+
+  // Browsers block audible playback without a recent user gesture. Tracks that
+  // arrive from renegotiation (a new participant joining later) have no gesture
+  // available, so playback stays blocked until the next interaction. Retry on
+  // the first global interaction instead of waiting for mute/unmute toggling.
+  private ensureAutoplayRetry() {
+    if (this.autoplayRetryAttached || this.closed || typeof document === 'undefined') return
+    this.autoplayRetryAttached = true
+    const handler = () => {
+      document.removeEventListener('pointerdown', handler)
+      document.removeEventListener('keydown', handler)
+      this.autoplayRetryAttached = false
+      this.autoplayRetryHandler = null
+      if (this.closed || this.selfDeaf) return
+      this.remoteOutputs.forEach((output) => {
+        if (output.audio.paused) this.playRemoteAudio(output, 'autoplay_retry')
+      })
+      if (this.input?.context?.state === 'suspended') {
+        void this.input.context.resume().catch(() => undefined)
+      }
+    }
+    this.autoplayRetryHandler = handler
+    document.addEventListener('pointerdown', handler)
+    document.addEventListener('keydown', handler)
   }
 
   private async sampleStats() {
@@ -497,6 +527,12 @@ export class BrowserVoiceSession {
   close() {
     if (this.closed) return
     this.closed = true
+    if (this.autoplayRetryHandler) {
+      document.removeEventListener('pointerdown', this.autoplayRetryHandler)
+      document.removeEventListener('keydown', this.autoplayRetryHandler)
+      this.autoplayRetryHandler = null
+    }
+    this.autoplayRetryAttached = false
     clientDiagnostics.record('webrtc', 'voice_closed', 'info', {
       remote_track_count: this.remoteOutputs.size,
     })
