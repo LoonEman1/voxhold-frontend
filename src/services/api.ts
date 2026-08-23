@@ -7,7 +7,6 @@ import type {
   CreatedInvite,
   IncomingInvite,
   InstanceMetadata,
-  InviteLinkAcceptance,
   InviteLinkPreview,
   CreatedInviteLink,
   Message,
@@ -196,7 +195,7 @@ export function createApi(transport: Transport) {
           body: { username },
         }) as Promise<CreatedInvite>,
       accept: (token: string, inviteId: number) =>
-        authorized(token, { path: `/api/v1/me/server-invites/${url(inviteId)}/accept`, method: 'POST' }) as Promise<void>,
+        authorized(token, { path: `/api/v1/me/server-invites/${url(inviteId)}/accept`, method: 'POST' }) as Promise<Server>,
       decline: (token: string, inviteId: number) =>
         authorized(token, { path: `/api/v1/me/server-invites/${url(inviteId)}/decline`, method: 'POST' }) as Promise<void>,
     },
@@ -222,7 +221,7 @@ export function createApi(transport: Transport) {
           path: '/api/v1/invite-links/accept',
           method: 'POST',
           body: { token: inviteToken },
-        }) as Promise<InviteLinkAcceptance>,
+        }) as Promise<Server>,
     },
     diagnostics: {
       list: (token: string, limit = 5_000, signal?: AbortSignal) =>

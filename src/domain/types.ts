@@ -310,11 +310,6 @@ export interface CreatedInviteLink extends InviteLinkPreview {
   created_at: number
 }
 
-export interface InviteLinkAcceptance {
-  server_id: EntityId
-  already_member: boolean
-}
-
 export interface ApiErrorPayload {
   error?: string
 }
