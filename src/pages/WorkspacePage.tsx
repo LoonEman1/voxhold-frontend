@@ -1326,10 +1326,16 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   const respondInvite = async (invite: IncomingInvite, action: 'accept' | 'decline') => {
     if (!token) return
-    if (action === 'accept') await api.invites.accept(token, invite.id)
-    else await api.invites.decline(token, invite.id)
+    if (action === 'accept') {
+      const server = await api.invites.accept(token, invite.id)
+      setInvites((current) => current.filter((item) => item.id !== invite.id))
+      setServers((current) => current.some((item) => item.id === server.id) ? current : [...current, server])
+      setSelectedServerId((current) => current ?? server.id)
+      notify(`Вы присоединились к ${server.name}`, 'success')
+      return
+    }
+    await api.invites.decline(token, invite.id)
     setInvites((current) => current.filter((item) => item.id !== invite.id))
-    if (action === 'accept') { await loadServers(); notify(`Вы присоединились к ${invite.server_name}`, 'success') }
   }
 
   const onlineUserIds = useMemo(() => new Set(selectedServerId ? (onlineByServer[selectedServerId] ?? []) : []), [onlineByServer, selectedServerId])
