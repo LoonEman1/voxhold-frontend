@@ -1,13 +1,19 @@
 import type { VoiceICECandidate } from '../domain/types'
-import { noiseGateOpenLevel, normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
+import { normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
 import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
+import { BrowserVoiceInput } from './voiceInput'
+
+export { inputConstraints } from './voiceInput'
+export { BrowserVoiceInput } from './voiceInput'
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
 interface VoiceMediaOptions {
+  /** The pre-started microphone capture. The session never closes it. */
+  input: BrowserVoiceInput
   /** Runtime ICE configuration loaded from the backend; empty means host-only. */
   iceConfiguration?: RTCConfiguration
   onAnswer: (sdp: string) => void
@@ -16,18 +22,8 @@ interface VoiceMediaOptions {
   onError: (error: Error) => void
   onInputLevel?: (level: number) => void
   onRemoteLevels?: (levels: VoiceRemoteLevel[]) => void
-}
-
-interface VoiceInputChain {
-  raw: MediaStream
-  stream: MediaStream
-  track: MediaStreamTrack
-  context: AudioContext | null
-  gate: GainNode | null
-  gateAnalyser: AnalyserNode | null
-  gain: GainNode | null
-  analyser: AnalyserNode | null
-  meterTimer: number | null
+  /** Browser blocked audible playback; the UI should offer an explicit action. */
+  onPlaybackBlocked?: () => void
 }
 
 interface VoiceRemoteOutput {
@@ -100,28 +96,13 @@ function toBrowserCandidate(candidate: VoiceICECandidate): RTCIceCandidateInit {
   }
 }
 
-export function inputConstraints(preferences: VoicePreferences): MediaTrackConstraints {
-  return {
-    ...(preferences.inputDeviceId ? { deviceId: { exact: preferences.inputDeviceId } } : {}),
-    autoGainControl: preferences.autoGainControl,
-    echoCancellation: preferences.echoCancellation,
-    // In threshold mode the software gate below replaces browser processing.
-    noiseSuppression: preferences.noiseSuppression && preferences.noiseSuppressionMode === 'auto',
-    channelCount: 1,
-  }
-}
-
-function needsNewInput(previous: VoicePreferences, next: VoicePreferences) {
-  return previous.inputDeviceId !== next.inputDeviceId
-    || previous.autoGainControl !== next.autoGainControl
-    || previous.echoCancellation !== next.echoCancellation
-    || previous.noiseSuppression !== next.noiseSuppression
-    || previous.noiseSuppressionMode !== next.noiseSuppressionMode
-}
-
+/**
+ * Owns only the peer connection, its sender and the remote outputs. It accepts
+ * an existing BrowserVoiceInput so that signalling reconnect can recreate the
+ * peer while keeping the already granted microphone.
+ */
 export class BrowserVoiceSession {
   private peer: RTCPeerConnection | null = null
-  private input: VoiceInputChain | null = null
   private inputSender: RTCRtpSender | null = null
   private readonly remoteOutputs = new Map<string, VoiceRemoteOutput>()
   // The server names every relayed track "audio-<connectionId>" in the offer
@@ -136,20 +117,25 @@ export class BrowserVoiceSession {
   private preferences: VoicePreferences | null = null
   private pendingRemoteCandidates: VoiceICECandidate[] = []
   private offerQueue: Promise<void> = Promise.resolve()
-  private inputQueue: Promise<void> = Promise.resolve()
   private statsTimer: number | null = null
   private statsSampling = false
   private closed = false
   private selfMute = false
   private selfDeaf = false
-  // Software noise gate: null disables it, otherwise the threshold in the same
-  // 0-100 scale shown on the input meter, plus hysteresis state.
-  private noiseGateThresholdPercent: number | null = null
-  private noiseGateOpen = true
   private autoplayRetryAttached = false
   private autoplayRetryHandler: (() => void) | null = null
+  private unsubscribeInput: (() => void) | null = null
+  private readonly visibilityHandler = () => {
+    if (!this.closed && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      this.resumeAudio()
+    }
+  }
 
-  constructor(private readonly options: VoiceMediaOptions) {}
+  constructor(private readonly options: VoiceMediaOptions) {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.visibilityHandler)
+    }
+  }
 
   static supported() {
     return typeof RTCPeerConnection !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
@@ -164,14 +150,15 @@ export class BrowserVoiceSession {
     if (!BrowserVoiceSession.supported()) {
       throw new Error('Голосовые каналы требуют современный браузер и защищённое HTTPS-соединение')
     }
+    const track = this.options.input.currentTrack()
+    const stream = this.options.input.currentStream()
+    if (!track || !stream || !this.options.input.isHealthy) {
+      throw new Error('Микрофон не готов: запустите захват перед стартом сессии')
+    }
 
     this.selfMute = selfMute
     this.selfDeaf = selfDeaf
     this.preferences = normalizeVoicePreferences(preferences)
-    this.noiseGateThresholdPercent = this.preferences.noiseSuppressionMode === 'threshold'
-      ? this.preferences.noiseGateThreshold
-      : null
-    this.noiseGateOpen = true
     clientDiagnostics.record('webrtc', 'voice_starting', 'info', {
       self_mute: selfMute,
       self_deaf: selfDeaf,
@@ -179,21 +166,15 @@ export class BrowserVoiceSession {
       selected_input: !!this.preferences.inputDeviceId,
       selected_output: !!this.preferences.outputDeviceId,
       noise_suppression_mode: this.preferences.noiseSuppressionMode,
-      noise_gate_threshold: this.noiseGateThresholdPercent,
     })
-    const input = await this.createInput(this.preferences)
 
-    if (this.closed) {
-      this.disposeInput(input)
-      return
-    }
+    this.options.input.setState(!selfMute)
 
     const peer = new RTCPeerConnection(
       this.options.iceConfiguration ? cloneRTCConfiguration(this.options.iceConfiguration) : {},
     )
-    this.input = input
     this.peer = peer
-    const inputSettings = input.track.getSettings?.() ?? {}
+    const inputSettings = track.getSettings?.() ?? {}
     clientDiagnostics.record('media', 'voice_input_ready', 'info', {
       sample_rate: inputSettings.sampleRate ?? null,
       channel_count: inputSettings.channelCount ?? null,
@@ -201,8 +182,7 @@ export class BrowserVoiceSession {
       noise_suppression: inputSettings.noiseSuppression ?? null,
       auto_gain_control: inputSettings.autoGainControl ?? null,
     })
-    input.track.enabled = !selfMute
-    this.inputSender = peer.addTrack(input.track, input.stream)
+    this.inputSender = peer.addTrack(track, stream)
     await this.applySenderBitrate(this.preferences.bitrateKbps).catch(() => {
       // Keep voice available in WebViews that do not expose encoding controls.
     })
@@ -216,41 +196,41 @@ export class BrowserVoiceSession {
       if (wireCandidate) this.options.onICECandidate(wireCandidate)
     }
 
-    peer.ontrack = ({ track, transceiver }) => {
-      if (this.closed || track.kind !== 'audio' || this.remoteOutputs.has(track.id)) return
+    peer.ontrack = ({ track: remoteTrack, transceiver }) => {
+      if (this.closed || remoteTrack.kind !== 'audio' || this.remoteOutputs.has(remoteTrack.id)) return
       const connectionId = transceiver?.mid != null ? this.midOwners.get(transceiver.mid) : undefined
-      if (connectionId) this.trackOwners.set(track.id, connectionId)
-      const stream = new MediaStream([track])
+      if (connectionId) this.trackOwners.set(remoteTrack.id, connectionId)
+      const media = new MediaStream([remoteTrack])
       const audio = document.createElement('audio')
       audio.autoplay = true
       audio.muted = this.selfDeaf
       audio.volume = this.remoteAudioVolume(connectionId)
       audio.setAttribute('aria-hidden', 'true')
       audio.className = 'voice-audio-output'
-      audio.srcObject = stream
-      const output = { stream, track, audio }
-      this.remoteOutputs.set(track.id, output)
+      audio.srcObject = media
+      const output = { stream: media, track: remoteTrack, audio }
+      this.remoteOutputs.set(remoteTrack.id, output)
       document.body.append(audio)
       clientDiagnostics.record('media', 'voice_remote_track_added', 'info', {
-        track_id: track.id,
-        muted: track.muted,
-        ready_state: track.readyState,
+        track_id: remoteTrack.id,
+        muted: remoteTrack.muted,
+        ready_state: remoteTrack.readyState,
         remote_track_count: this.remoteOutputs.size,
       })
-      track.addEventListener('mute', () => {
-        clientDiagnostics.record('media', 'voice_remote_track_muted', 'warn', { track_id: track.id })
+      remoteTrack.addEventListener('mute', () => {
+        clientDiagnostics.record('media', 'voice_remote_track_muted', 'warn', { track_id: remoteTrack.id })
       })
-      track.addEventListener('unmute', () => {
-        clientDiagnostics.record('media', 'voice_remote_track_unmuted', 'info', { track_id: track.id })
+      remoteTrack.addEventListener('unmute', () => {
+        clientDiagnostics.record('media', 'voice_remote_track_unmuted', 'info', { track_id: remoteTrack.id })
       })
-      track.addEventListener('ended', () => {
-        clientDiagnostics.record('media', 'voice_remote_track_ended', 'warn', { track_id: track.id })
-        this.removeRemoteOutput(track.id, output)
+      remoteTrack.addEventListener('ended', () => {
+        clientDiagnostics.record('media', 'voice_remote_track_ended', 'warn', { track_id: remoteTrack.id })
+        this.removeRemoteOutput(remoteTrack.id, output)
       }, { once: true })
       void this.applyOutputDevice(this.preferences?.outputDeviceId ?? '', audio).catch(() => {
         // Keep the default output when the selected device disappeared.
       })
-      this.attachRemoteAnalyser(track.id, stream)
+      this.attachRemoteAnalyser(remoteTrack.id, media)
       this.playRemoteAudio(output, 'track_added')
     }
 
@@ -274,7 +254,27 @@ export class BrowserVoiceSession {
         ice_gathering_state: peer.iceGatheringState,
       })
     }
+
+    // A replacement track (device restored/retry) is swapped into the sender
+    // without touching the rest of the session.
+    this.unsubscribeInput = this.options.input.subscribe((nextTrack) => {
+      void this.handleInputReplacement(nextTrack)
+    })
     this.statsTimer = window.setInterval(() => { void this.sampleStats() }, 15_000)
+  }
+
+  private async handleInputReplacement(nextTrack: MediaStreamTrack) {
+    const sender = this.inputSender
+    if (!sender || this.closed) return
+    nextTrack.enabled = !this.selfMute
+    try {
+      await sender.replaceTrack(nextTrack)
+      clientDiagnostics.record('media', 'voice_input_sender_replaced', 'info')
+    } catch (error) {
+      if (!this.closed) {
+        this.options.onError(error instanceof Error ? error : new Error('Не удалось заменить микрофон в сессии'))
+      }
+    }
   }
 
   // The relayed offer names each remote participant track "audio-<connectionId>"
@@ -295,7 +295,7 @@ export class BrowserVoiceSession {
     }
   }
 
-  private attachRemoteAnalyser(trackId: string, stream: MediaStream) {
+  private attachRemoteAnalyser(trackId: string, media: MediaStream) {
     if (!this.options.onRemoteLevels || typeof AudioContext === 'undefined') return
     try {
       if (!this.analysis) {
@@ -306,7 +306,7 @@ export class BrowserVoiceSession {
         this.analysis = { context, sink }
       }
       const { context, sink } = this.analysis
-      const source = context.createMediaStreamSource(stream)
+      const source = context.createMediaStreamSource(media)
       const analyser = context.createAnalyser()
       analyser.fftSize = 512
       analyser.smoothingTimeConstant = 0.55
@@ -369,6 +369,7 @@ export class BrowserVoiceSession {
       })
       if (error instanceof DOMException && error.name === 'NotAllowedError') {
         this.ensureAutoplayRetry()
+        this.options.onPlaybackBlocked?.()
       }
     })
   }
@@ -389,9 +390,7 @@ export class BrowserVoiceSession {
       this.remoteOutputs.forEach((output) => {
         if (output.audio.paused) this.playRemoteAudio(output, 'autoplay_retry')
       })
-      if (this.input?.context?.state === 'suspended') {
-        void this.input.context.resume().catch(() => undefined)
-      }
+      this.options.input.resume()
     }
     this.autoplayRetryHandler = handler
     document.addEventListener('pointerdown', handler)
@@ -428,103 +427,6 @@ export class BrowserVoiceSession {
     }
   }
 
-  private async createInput(preferences: VoicePreferences): Promise<VoiceInputChain> {
-    const raw = await navigator.mediaDevices.getUserMedia({
-      audio: inputConstraints(preferences),
-      video: false,
-    })
-    const rawTrack = raw.getAudioTracks()[0]
-    if (!rawTrack) {
-      raw.getTracks().forEach((track) => track.stop())
-      throw new Error('Микрофон не передал аудиодорожку')
-    }
-
-    if (typeof AudioContext === 'undefined') {
-      return { raw, stream: raw, track: rawTrack, context: null, gate: null, gateAnalyser: null, gain: null, analyser: null, meterTimer: null }
-    }
-
-    let context: AudioContext | null = null
-    try {
-      context = new AudioContext({ latencyHint: 'interactive' })
-      const source = context.createMediaStreamSource(raw)
-      const gating = preferences.noiseSuppressionMode === 'threshold'
-      const gate = gating ? context.createGain() : null
-      const gateAnalyser = gating ? context.createAnalyser() : null
-      const gain = context.createGain()
-      const analyser = context.createAnalyser()
-      const destination = context.createMediaStreamDestination()
-      if (gate) {
-        // Starts closed so background noise never leaks before the first
-        // metering tick opens it.
-        gate.gain.value = 0
-      }
-      if (gateAnalyser) {
-        gateAnalyser.fftSize = 256
-        gateAnalyser.smoothingTimeConstant = 0.4
-        source.connect(gateAnalyser)
-      }
-      gain.gain.value = preferences.inputVolume / 100
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.72
-      source.connect(gate ?? gain)
-      if (gate) gate.connect(gain)
-      gain.connect(analyser)
-      analyser.connect(destination)
-      if (context.state === 'suspended') await context.resume()
-
-      const track = destination.stream.getAudioTracks()[0]
-      if (!track) throw new Error('Не удалось подготовить аудиодорожку')
-      const chain: VoiceInputChain = { raw, stream: destination.stream, track, context, gate, gateAnalyser, gain, analyser, meterTimer: null }
-      this.startInputMeter(chain)
-      return chain
-    } catch (error) {
-      void context?.close().catch(() => undefined)
-      raw.getTracks().forEach((track) => track.stop())
-      throw error
-    }
-  }
-
-  private startInputMeter(input: VoiceInputChain) {
-    if (!input.analyser || !this.options.onInputLevel) return
-    const values = new Uint8Array(input.analyser.fftSize)
-    const gateValues = input.gateAnalyser ? new Uint8Array(input.gateAnalyser.fftSize) : null
-    input.meterTimer = window.setInterval(() => {
-      // The gate must react to the pre-gate signal, otherwise a closed gate
-      // would silence the meter and never reopen.
-      const analyser = (gateValues && input.gateAnalyser) ? input.gateAnalyser : input.analyser
-      const buffer = gateValues && input.gateAnalyser ? gateValues : values!
-      if (this.closed || !analyser) return
-      analyser.getByteTimeDomainData(buffer)
-      let energy = 0
-      for (const value of buffer) {
-        const normalized = (value - 128) / 128
-        energy += normalized * normalized
-      }
-      const level = Math.min(1, Math.sqrt(energy / buffer.length) * 4.5)
-      this.applyNoiseGate(input, level)
-      this.options.onInputLevel?.(this.selfMute ? 0 : level)
-    }, 90)
-  }
-
-  private applyNoiseGate(input: VoiceInputChain, level: number) {
-    const thresholdPercent = this.noiseGateThresholdPercent
-    if (!input.gate || !input.context || thresholdPercent === null) return
-    const openLevel = noiseGateOpenLevel(thresholdPercent)
-    // Hysteresis keeps the gate from chattering when speech sits at the bar.
-    if (!this.noiseGateOpen && level > openLevel + 0.02) this.noiseGateOpen = true
-    else if (this.noiseGateOpen && level < openLevel - 0.02) this.noiseGateOpen = false
-    const now = input.context.currentTime
-    input.gate.gain.setTargetAtTime(this.noiseGateOpen ? 1 : 0, now, this.noiseGateOpen ? 0.02 : 0.18)
-  }
-
-  private disposeInput(input: VoiceInputChain | null) {
-    if (!input) return
-    if (input.meterTimer !== null) window.clearInterval(input.meterTimer)
-    input.raw.getTracks().forEach((track) => track.stop())
-    if (input.stream !== input.raw) input.stream.getTracks().forEach((track) => track.stop())
-    void input.context?.close().catch(() => undefined)
-  }
-
   private removeRemoteOutput(trackId: string, output: VoiceRemoteOutput) {
     if (this.remoteOutputs.get(trackId) !== output) return
     this.remoteOutputs.delete(trackId)
@@ -556,7 +458,18 @@ export class BrowserVoiceSession {
     const outputs = target
       ? [target]
       : Array.from(this.remoteOutputs.values(), ({ audio }) => audio)
-    await Promise.all(outputs.map((audio) => audio.setSinkId(deviceId)))
+    await Promise.all(outputs.map(async (audio) => {
+      try {
+        await audio.setSinkId(deviceId)
+      } catch (error) {
+        clientDiagnostics.record('media', 'voice_output_device_failed', 'warn', {
+          device_id_length: deviceId.length,
+          error_name: error instanceof Error ? error.name : typeof error,
+        })
+        // A failing setSinkId must not break playback: fall back to default.
+        await audio.setSinkId('').catch(() => undefined)
+      }
+    }))
   }
 
   private async applySenderBitrate(bitrateKbps: number) {
@@ -573,43 +486,16 @@ export class BrowserVoiceSession {
     const next = normalizeVoicePreferences(value)
     const previous = this.preferences ?? next
     this.preferences = next
-    // Threshold tweaks apply instantly; only mode/device changes rebuild input.
-    if (next.noiseSuppressionMode === 'threshold') {
-      if (this.noiseGateThresholdPercent === null) {
-        this.noiseGateOpen = true
-        if (this.input?.gate) this.input.gate.gain.value = 1
-      }
-      this.noiseGateThresholdPercent = next.noiseGateThreshold
-    } else {
-      this.noiseGateThresholdPercent = null
-      this.noiseGateOpen = true
-    }
-    this.remoteOutputs.forEach((output, trackId) => { output.audio.volume = this.remoteAudioVolume(this.trackOwners.get(trackId)) })
-    if (this.input?.gain) this.input.gain.gain.value = next.inputVolume / 100
-
-    const operation = this.inputQueue.then(async () => {
-      if (this.closed) return
-      await this.applyOutputDevice(next.outputDeviceId)
-      if (previous.bitrateKbps !== next.bitrateKbps) await this.applySenderBitrate(next.bitrateKbps)
-      if (!this.peer || !this.inputSender || !needsNewInput(previous, next)) return
-
-      const replacement = await this.createInput(next)
-      if (this.closed) {
-        this.disposeInput(replacement)
-        return
-      }
-      replacement.track.enabled = !this.selfMute
-      try {
-        await this.inputSender.replaceTrack(replacement.track)
-      } catch (error) {
-        this.disposeInput(replacement)
-        throw error
-      }
-      const old = this.input
-      this.input = replacement
-      this.disposeInput(old)
+    this.remoteOutputs.forEach((output, trackId) => {
+      output.audio.volume = this.remoteAudioVolume(this.trackOwners.get(trackId))
     })
-    this.inputQueue = operation.catch(() => undefined)
+    const tasks: Array<Promise<void> | undefined> = [
+      previous.bitrateKbps !== next.bitrateKbps ? this.applySenderBitrate(next.bitrateKbps) : undefined,
+      this.applyOutputDevice(next.outputDeviceId).catch(() => undefined),
+      this.options.input.applyPreferences(next),
+    ]
+    const operation = Promise.all(tasks).then(() => undefined)
+    operation.catch(() => undefined)
     return operation
   }
 
@@ -668,7 +554,7 @@ export class BrowserVoiceSession {
   setState(selfMute: boolean, selfDeaf: boolean) {
     this.selfMute = selfMute
     this.selfDeaf = selfDeaf
-    if (this.input) this.input.track.enabled = !selfMute
+    this.options.input.setState(!selfMute)
     if (selfMute) this.options.onInputLevel?.(0)
     this.remoteOutputs.forEach((output) => {
       output.audio.muted = selfDeaf
@@ -681,14 +567,21 @@ export class BrowserVoiceSession {
       void this.analysis.context.resume().catch(() => undefined)
     }
     if (!this.selfDeaf) {
-      this.remoteOutputs.forEach((output) => this.playRemoteAudio(output, 'user_interaction'))
+      this.remoteOutputs.forEach((output) => {
+        if (output.audio.paused) this.playRemoteAudio(output, 'user_interaction')
+      })
     }
-    if (this.input?.context?.state === 'suspended') void this.input.context.resume().catch(() => undefined)
+    this.options.input.resume()
   }
 
   close() {
     if (this.closed) return
     this.closed = true
+    if (this.unsubscribeInput) this.unsubscribeInput()
+    this.unsubscribeInput = null
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+    }
     if (this.autoplayRetryHandler) {
       document.removeEventListener('pointerdown', this.autoplayRetryHandler)
       document.removeEventListener('keydown', this.autoplayRetryHandler)
@@ -709,14 +602,14 @@ export class BrowserVoiceSession {
     this.midOwners.clear()
     void this.analysis?.context.close().catch(() => undefined)
     this.analysis = null
-    this.disposeInput(this.input)
+    // Deliberately NOT stopping the shared input: it is owned by
+    // BrowserVoiceInput and may outlive this peer (signalling recovery).
     this.remoteOutputs.forEach((output, trackId) => {
       output.track.stop()
       this.removeRemoteOutput(trackId, output)
     })
     this.remoteOutputs.clear()
     this.peer?.close()
-    this.input = null
     this.inputSender = null
     this.peer = null
     this.options.onInputLevel?.(0)

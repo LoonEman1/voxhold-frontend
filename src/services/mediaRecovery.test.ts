@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DecodeWatchdog, type InboundVideoSample } from './mediaRecovery'
+import {
+  DecodeWatchdog,
+  SignallingRecoveryCoordinator,
+  type InboundVideoSample,
+  type RecoveryIntent,
+} from './mediaRecovery'
 
 type Counters = {
   keyframes: number
@@ -144,5 +149,133 @@ describe('DecodeWatchdog', () => {
     expect(counters.rewatches).toBe(2)
     expect(watchdog.phaseName()).toBe('exhausted')
     watchdog.stop()
+  })
+})
+
+describe('SignallingRecoveryCoordinator', () => {
+  function makeIntent(overrides: Partial<RecoveryIntent> = {}): RecoveryIntent {
+    return {
+      serverId: 1,
+      channelId: 2,
+      channelName: 'Общий',
+      staleConnectionId: 'old-conn',
+      selfMute: false,
+      selfDeaf: false,
+      streamRole: null,
+      ...overrides,
+    }
+  }
+
+  function makeTimers() {
+    const timers = {
+      setTimeout: vi.fn((handler: () => void, ms: number) => {
+        timers.pending.push({ handler, ms })
+        return timers.pending.length
+      }),
+      clearTimeout: vi.fn((handle: number) => {
+        delete timers.pending[handle - 1]
+      }),
+      pending: [] as Array<{ handler: () => void; ms: number }>,
+      fireDeadline() {
+        const last = this.pending.filter(Boolean).at(-1)
+        if (last) last.handler()
+      },
+    }
+    return timers
+  }
+
+  it('runs the automaton once per generation and ignores double ready', () => {
+    const rejoin = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ beginVoiceRejoin: rejoin })
+    expect(coordinator.begin(makeIntent())).toBe(true)
+    expect(coordinator.phase).toBe('signalling_lost')
+
+    expect(coordinator.handleReady()).toBe(true)
+    expect(coordinator.phase).toBe('rejoining_voice')
+    expect(rejoin).toHaveBeenCalledOnce()
+
+    // A duplicate ready event must not start a second join.
+    expect(coordinator.handleReady()).toBe(false)
+    expect(rejoin).toHaveBeenCalledOnce()
+  })
+
+  it('restores the stream only after a confirmed join with fresh id', () => {
+    const restore = vi.fn()
+    const finished = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ restoreStream: restore, finished })
+    coordinator.begin(makeIntent({ streamRole: 'viewer' }))
+    coordinator.handleReady()
+
+    // The stale teardown of the old generation is ignored.
+    coordinator.markVoiceJoined('old-conn', true)
+    expect(restore).not.toHaveBeenCalled()
+
+    coordinator.markVoiceJoined('new-conn', true)
+    expect(coordinator.phase).toBe('restoring_stream')
+    coordinator.markStreamRestored()
+    expect(coordinator.phase).toBe('active')
+    expect(finished).toHaveBeenCalledWith('active', 'stream restored')
+  })
+
+  it('finishes as active when voice-only intent is confirmed', () => {
+    const restore = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ restoreStream: restore })
+    coordinator.begin(makeIntent())
+    coordinator.handleReady()
+    coordinator.markVoiceJoined('new-conn', false)
+    expect(coordinator.phase).toBe('active')
+    expect(restore).not.toHaveBeenCalled()
+  })
+
+  it('expires after the grace period', () => {
+    vi.useFakeTimers()
+    const finished = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ finished }, undefined, 60_000)
+    coordinator.begin(makeIntent())
+    vi.advanceTimersByTime(60_000)
+    expect(finished).toHaveBeenCalledWith('expired', 'recovery grace period elapsed')
+    expect(coordinator.phase).toBe('expired')
+    vi.useRealTimers()
+  })
+
+  it('cancel prevents handleReady and later stale events are ignored', () => {
+    const rejoin = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ beginVoiceRejoin: rejoin })
+    coordinator.begin(makeIntent())
+    coordinator.cancel('explicit leave')
+    expect(rejoin).not.toHaveBeenCalled()
+    expect(coordinator.staleConnectionId()).toBeNull()
+  })
+
+  it('a second disconnect during rejoin starts a new generation', () => {
+    vi.useFakeTimers()
+    const finished = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ finished }, undefined, 60_000)
+    coordinator.begin(makeIntent())
+    coordinator.handleReady()
+    const firstGeneration = coordinator.generation
+
+    // A disconnect that arrives while rejoining supersedes the old attempt.
+    expect(coordinator.begin(makeIntent())).toBe(true)
+    expect(coordinator.generation).toBe(firstGeneration + 1)
+    expect(coordinator.phase).toBe('signalling_lost')
+    // The old deadline must not expire the new generation.
+    vi.advanceTimersByTime(59_999)
+    expect(finished).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(60_000)
+    expect(finished).toHaveBeenCalledTimes(1)
+    expect(coordinator.phase).toBe('expired')
+    vi.useRealTimers()
+  })
+
+  it('dropStreamIntent keeps the voice rejoin alive when capture dies', () => {
+    const restore = vi.fn()
+    const coordinator = new SignallingRecoveryCoordinator({ restoreStream })
+    coordinator.begin(makeIntent({ streamRole: 'publisher' }))
+    coordinator.dropStreamIntent()
+    coordinator.handleReady()
+    coordinator.markVoiceJoined('new-conn', false)
+    expect(restore).not.toHaveBeenCalled()
+    expect(coordinator.phase).toBe('active')
   })
 })

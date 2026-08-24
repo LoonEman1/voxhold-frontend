@@ -241,3 +241,170 @@ export async function sampleInboundVideoStats(
   })
   return result
 }
+
+// ---------------------------------------------------------------------------
+// Signalling-loss recovery state machine
+// ---------------------------------------------------------------------------
+
+export interface RecoveryIntent {
+  serverId: number
+  channelId: number
+  channelName: string
+  /** Connection id whose teardown events must be ignored as stale. */
+  staleConnectionId: string | null
+  selfMute: boolean
+  selfDeaf: boolean
+  streamRole: 'publisher' | 'viewer' | null
+}
+
+export type RecoveryPhase =
+  | 'idle'
+  | 'signalling_lost'
+  | 'rejoining_voice'
+  | 'restoring_stream'
+  | 'active'
+  | 'cancelled'
+  | 'expired'
+  | 'failed'
+
+export interface SignallingRecoveryCallbacks {
+  /** Fired once per generation from handleReady(): rejoin voice now. */
+  beginVoiceRejoin?: (generation: number, intent: RecoveryIntent) => void
+  /** Fired once voice.joined confirmed the new session: restore the stream. */
+  restoreStream?: (generation: number, intent: RecoveryIntent) => void
+  finished?: (phase: RecoveryPhase, reason: string) => void
+}
+
+interface SignallingRecoveryTimers {
+  setTimeout: (handler: () => void, ms: number) => number
+  clearTimeout: (handle: number) => void
+}
+
+const DEFAULT_GRACE_MS = 60_000
+
+/**
+ * Clean finite automaton for unexpected WebSocket loss while voice/stream is
+ * active: idle -> signalling_lost -> rejoining_voice -> restoring_stream ->
+ * active, with cancelled|expired|failed terminals. Every generation cancels
+ * async callbacks of the previous one.
+ */
+export class SignallingRecoveryCoordinator {
+  private phaseValue: RecoveryPhase = 'idle'
+  private generationValue = 0
+  private intentValue: RecoveryIntent | null = null
+  private deadlineTimer: number | null = null
+  private rejoinStarted = false
+  private streamRestored = false
+
+  constructor(
+    private readonly callbacks: SignallingRecoveryCallbacks = {},
+    private readonly timers: SignallingRecoveryTimers = {
+      setTimeout: (handler, ms) => window.setTimeout(handler, ms),
+      clearTimeout: (handle) => window.clearTimeout(handle),
+    },
+    private readonly graceMs: number = DEFAULT_GRACE_MS,
+  ) {}
+
+  get phase() { return this.phaseValue }
+  get generation() { return this.generationValue }
+  get intent() { return this.intentValue }
+
+  /**
+   * Starts recovery for a fresh offline event. A disconnect that arrives while
+   * an earlier recovery is still running supersedes it: the new generation
+   * invalidates every async callback of the old one.
+   */
+  begin(intent: RecoveryIntent): boolean {
+    if (this.deadlineTimer !== null) this.timers.clearTimeout(this.deadlineTimer)
+    this.generationValue += 1
+    this.rejoinStarted = false
+    this.streamRestored = false
+    this.intentValue = { ...intent }
+    this.phaseValue = 'signalling_lost'
+    if (this.deadlineTimer !== null) this.timers.clearTimeout(this.deadlineTimer)
+    const generation = this.generationValue
+    this.deadlineTimer = this.timers.setTimeout(() => {
+      if (generation !== this.generationValue || this.isTerminal(this.phaseValue)) return
+      this.finish('expired', 'recovery grace period elapsed')
+    }, this.graceMs)
+    return true
+  }
+
+  /**
+   * The realtime connection is online again. Returns true when a voice rejoin
+   * was initiated; fires at most once per generation so double `ready` events
+   * never duplicate joins.
+   */
+  handleReady(): boolean {
+    if (this.phaseValue !== 'signalling_lost' || this.rejoinStarted || !this.intentValue) return false
+    this.rejoinStarted = true
+    this.setPhase('rejoining_voice')
+    this.callbacks.beginVoiceRejoin?.(this.generationValue, this.intentValue)
+    return true
+  }
+
+  /**
+   * Confirms the new voice session with the server-issued connection id.
+   * Stale generations are ignored; a confirmed join triggers the single
+   * stream restoration step when a stream intent exists and its capture is
+   * still alive.
+   */
+  markVoiceJoined(connectionId: string, streamCaptureAlive: boolean) {
+    if (!this.intentValue || !isRecoveryPhase(this.phaseValue)) return
+    if (connectionId === this.intentValue.staleConnectionId) return
+    if (this.intentValue.streamRole && streamCaptureAlive && !this.streamRestored) {
+      this.streamRestored = true
+      this.setPhase('restoring_stream')
+      const intent = this.intentValue
+      this.callbacks.restoreStream?.(this.generationValue, intent)
+      return
+    }
+    this.finish('active', 'voice restored')
+  }
+
+  markStreamRestored() {
+    if (!isRecoveryPhase(this.phaseValue)) return
+    this.finish('active', 'stream restored')
+  }
+
+  /** The screen capture died during the grace period: drop that part only. */
+  dropStreamIntent() {
+    if (this.intentValue) this.intentValue.streamRole = null
+  }
+
+  cancel(reason: string) {
+    if (this.isTerminal(this.phaseValue)) return
+    this.finish('cancelled', reason)
+  }
+
+  fail(reason: string) {
+    if (this.isTerminal(this.phaseValue)) return
+    this.finish('failed', reason)
+  }
+
+  /** Connection id of the dead generation while recovery is in progress. */
+  staleConnectionId() {
+    if (!isRecoveryPhase(this.phaseValue)) return null
+    return this.intentValue?.staleConnectionId ?? null
+  }
+
+  private finish(phase: RecoveryPhase, reason: string) {
+    if (this.deadlineTimer !== null) this.timers.clearTimeout(this.deadlineTimer)
+    this.deadlineTimer = null
+    this.setPhase(phase)
+    this.callbacks.finished?.(phase, reason)
+  }
+
+  private setPhase(phase: RecoveryPhase) {
+    this.phaseValue = phase
+  }
+
+  private isTerminal(phase: RecoveryPhase) {
+    return phase === 'cancelled' || phase === 'expired' || phase === 'failed'
+      || phase === 'idle' || phase === 'active'
+  }
+}
+
+function isRecoveryPhase(phase: RecoveryPhase) {
+  return phase === 'signalling_lost' || phase === 'rejoining_voice' || phase === 'restoring_stream'
+}
