@@ -1182,7 +1182,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const createChannel = async (name: string, kind: ChannelKind) => {
     if (!token || !selectedServerId) return
     const created = await api.channels.create(token, selectedServerId, name, kind)
-    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(kind === 'text'); setChannels((current) => [...current, { ...created, last_message_id: created.last_message_id ?? 0 }]); setSelectedChannelId(created.id)
+    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(kind === 'text');     setChannels((current) => {
+      const nextChannel = { ...created, last_message_id: created.last_message_id ?? current.find((item) => item.id === created.id)?.last_message_id ?? 0 }
+      const next = [...current.filter((item) => item.id !== created.id), nextChannel]
+        .sort((left, right) => left.position - right.position || left.id - right.id)
+      channelsRef.current = next
+      return next
+    }); setSelectedChannelId(created.id)
     notify('Канал создан', 'success')
   }
 
