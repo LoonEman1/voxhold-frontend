@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { Avatar } from '../components/Avatar'
 import { Brand } from '../components/Brand'
 import { ChatPanel } from '../components/ChatPanel'
+import { ContextMenu, type ContextMenuItem, type ContextMenuState } from '../components/ContextMenu'
 import { Icon } from '../components/Icon'
 import { MessageSearchPanel, PinnedMessagesPanel } from '../components/MessagePanels'
 import { PersistentStreamPlayer } from '../components/PersistentStreamPlayer'
@@ -12,6 +13,7 @@ import { VoicePanel, type VoiceConnectionStatus } from '../components/VoicePanel
 import { VoiceSettingsDialog } from '../components/VoiceSettingsDialog'
 import {
   ChannelSettingsDialog,
+  ConfirmDialog,
   CreateChannelDialog,
   InvitesDialog,
   InviteUserDialog,
@@ -31,7 +33,7 @@ import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
-import { isEditableKeyboardTarget, loadVoicePreferences, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
+import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { useTheme } from '../theme/ThemeContext'
 
@@ -104,6 +106,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [viewedProfileRole, setViewedProfileRole] = useState<ServerRole>('member')
   const [viewedProfileLoading, setViewedProfileLoading] = useState(false)
   const [viewedProfileError, setViewedProfileError] = useState('')
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [confirmRequest, setConfirmRequest] = useState<{ title: string; description: string; confirmLabel: string; action: () => Promise<void> } | null>(null)
+  const [userVolumes, setUserVolumes] = useState<Record<number, number>>(loadUserVolumes)
   const realtimeRef = useRef<RealtimeClient | null>(null)
   const voiceMediaRef = useRef<BrowserVoiceSession | null>(null)
   const voiceSessionRef = useRef<ActiveVoiceSession | null>(voiceSession)
@@ -1210,17 +1215,23 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     notify('Канал переименован', 'success')
   }
 
-  const deleteChannel = async () => {
-    if (!token || !selectedServerId || !editingChannel) return
-    await api.channels.delete(token, selectedServerId, editingChannel.id)
-    const remaining = channels.filter((item) => item.id !== editingChannel.id)
+  const removeChannel = async (channel: Channel) => {
+    if (!token || !selectedServerId) return
+    await api.channels.delete(token, selectedServerId, channel.id)
+    const remaining = channelsRef.current.filter((item) => item.id !== channel.id)
+    channelsRef.current = remaining
     setChannels(remaining)
-    if (selectedChannelId === editingChannel.id) {
+    if (activeChannelRef.current === channel.id) {
       const nextChannel = remaining[0] ?? null
       setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(nextChannel?.kind === 'text'); setSelectedChannelId(nextChannel?.id ?? null)
     }
-    setEditingChannel(null)
     notify('Канал удалён', 'success')
+  }
+
+  const deleteChannel = async () => {
+    if (!editingChannel) return
+    await removeChannel(editingChannel)
+    setEditingChannel(null)
   }
 
   const openUserProfile = async (userId: number, role: ServerRole) => {
@@ -1258,6 +1269,108 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setMembers((current) => current.filter((member) => member.user_id !== viewedProfile.user_id))
     setDialog(null)
     notify(`${viewedProfile.username} забанен на инстансе`, 'success')
+  }
+
+  const changeMemberRole = async (userId: number, username: string, role: 'member' | 'admin') => {
+    if (!token || !selectedServerId) return
+    const updated = await api.servers.updateMemberRole(token, selectedServerId, userId, role)
+    setMembers((current) => current.map((member) => member.user_id === updated.user_id ? updated : member))
+    setViewedProfileRole((current) => viewedProfileRef.current?.user_id === userId ? updated.role : current)
+    notify(`Роль ${username} обновлена`, 'success')
+  }
+
+  const removeMemberFromServer = async (userId: number, username: string) => {
+    if (!token || !selectedServerId) return
+    await api.servers.banMember(token, selectedServerId, userId)
+    setMembers((current) => current.filter((member) => member.user_id !== userId))
+    notify(`${username} удалён с сервера`, 'success')
+  }
+
+  const updateUserVolume = useCallback((userId: number, volume: number) => {
+    setUserVolumes((current) => {
+      const next = { ...current, [userId]: Math.min(200, Math.max(0, volume)) }
+      saveUserVolumes(next)
+      return next
+    })
+  }, [])
+
+  // Per-user loudness is applied to the live WebRTC session as soon as the
+  // participant map or the stored overrides change.
+  useEffect(() => {
+    const media = voiceMediaRef.current
+    if (!media) return
+    Object.values(voiceParticipants).forEach((participant) => {
+      const volume = userVolumes[participant.user_id]
+      if (volume !== undefined) media.setRemoteGain(participant.connection_id, volume / 100)
+    })
+  }, [userVolumes, voiceParticipants])
+
+  const openMenu = (event: ReactMouseEvent, items: ContextMenuItem[], title?: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setContextMenu({ x: event.clientX, y: event.clientY, ...(title ? { title } : {}), items })
+  }
+
+  const memberPermissions = (target: ServerMember) => ({
+    canChangeRole: !!selectedServer && selectedServer.role === 'owner' && target.role !== 'owner' && target.user_id !== user?.id,
+    canRemove: !!selectedServer && target.user_id !== user?.id && target.role !== 'owner'
+      && (selectedServer.role === 'owner' || (selectedServer.role === 'admin' && target.role === 'member')),
+  })
+
+  const openChannelMenu = (event: ReactMouseEvent, channel: Channel) => {
+    const items: ContextMenuItem[] = [
+      {
+        key: 'open',
+        kind: 'action',
+        icon: channel.kind === 'text' ? 'hash' : 'volume',
+        label: channel.kind === 'text' ? 'Открыть канал' : 'Зайти в канал',
+        onSelect: () => selectChannel(channel.id),
+      },
+    ]
+    if (canManage) {
+      items.push({ key: 'sep-manage', kind: 'separator' })
+      items.push({ key: 'edit', kind: 'action', icon: 'edit', label: 'Изменить канал', onSelect: () => openChannelSettings(channel) })
+      items.push({
+        key: 'delete',
+        kind: 'action',
+        icon: 'trash',
+        label: 'Удалить канал',
+        danger: true,
+        onSelect: () => setConfirmRequest({
+          title: `Удалить «${channel.name}»?`,
+          description: 'Канал и его история исчезнут для всех участников. Это действие нельзя отменить.',
+          confirmLabel: 'Удалить канал',
+          action: () => removeChannel(channel),
+        }),
+      })
+    }
+    openMenu(event, items, channel.name)
+  }
+
+  const openMemberMenu = (event: ReactMouseEvent, member: ServerMember, options?: { volume?: boolean }) => {
+    const { canChangeRole, canRemove } = memberPermissions(member)
+    const items: ContextMenuItem[] = [
+      { key: 'profile', kind: 'action', icon: 'people', label: 'Просмотреть профиль', onSelect: () => void openUserProfile(member.user_id, member.role) },
+    ]
+    if (canChangeRole) items.push({ key: 'roles', kind: 'roles', currentRole: member.role === 'admin' ? 'admin' : 'member', onChange: (role) => void changeMemberRole(member.user_id, member.username, role).catch((error: unknown) => handleError(error)) })
+    if (canRemove) items.push({
+      key: 'remove',
+      kind: 'action',
+      icon: 'logout',
+      label: 'Удалить с сервера',
+      danger: true,
+      onSelect: () => setConfirmRequest({
+        title: `Удалить ${member.username} с сервера?`,
+        description: `${member.username} потеряет доступ к пространству и будет забанен на этом инстансе.`,
+        confirmLabel: 'Удалить',
+        action: () => removeMemberFromServer(member.user_id, member.username),
+      }),
+    })
+    if (options?.volume) {
+      items.push({ key: 'sep-volume', kind: 'separator' })
+      items.push({ key: 'volume', kind: 'volume', value: userVolumes[member.user_id] ?? 100, onChange: (value) => updateUserVolume(member.user_id, value) })
+    }
+    openMenu(event, items, member.username)
   }
 
   const returnToLatest = async () => {
@@ -1405,16 +1518,16 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   if (initialLoading) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div><span>Собираем ваши комнаты…</span></div>
 
   return (
-    <main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style}>
+    <main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()}>
       <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
           <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={() => setDialog('settings')} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
           <div className="channel-scroll">
             <ChannelGroup title="Текстовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
-              {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)}/>) }
+              {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onContextMenu={(event) => openChannelMenu(event, channel)}/>)}
             </ChannelGroup>
             <ChannelGroup title="Голосовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
-              {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} speakingUserIds={speakingUserIds} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)}/>) }
+              {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} speakingUserIds={speakingUserIds} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} onContextMenu={(event) => openChannelMenu(event, channel)} onParticipantContextMenu={(event, participant, member) => openMemberMenu(event, member ?? { user_id: participant.user_id, username: `Пользователь #${participant.user_id}`, role: 'member' } as ServerMember, { volume: true })}/>)}
             </ChannelGroup>
             {channels.length === 0 && <button className="sidebar-empty" onClick={() => canManage && setDialog('channel')}><span><Icon name="add"/></span><b>Создайте первый канал</b><small>Начните с общего чата</small></button>}
           </div>
@@ -1447,8 +1560,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       {selectedServer && workspaceLayout.membersOpen && <aside className="members-sidebar is-open">
         <div className="workspace-resizer workspace-resizer--members" role="separator" aria-label="Изменить ширину списка участников" aria-orientation="vertical" tabIndex={0} onPointerDown={(event) => workspaceLayout.beginResize('members', event)} onKeyDown={(event) => workspaceLayout.handleResizeKey('members', event)} onDoubleClick={() => workspaceLayout.resetPanel('members')}/>
         <header><span className="eyebrow">УЧАСТНИКИ · {members.length}</span><button className="icon-button members-close" onClick={workspaceLayout.closeMembers} title="Скрыть участников"><Icon name="close"/></button></header>
-        <div className="members-sidebar__scroll"><MemberGroup title={`В сети — ${onlineMembers.length}`} members={onlineMembers} online onOpenProfile={(member) => void openUserProfile(member.user_id, member.role)}/>
-        <MemberGroup title={`Не в сети — ${offlineMembers.length}`} members={offlineMembers} online={false} onOpenProfile={(member) => void openUserProfile(member.user_id, member.role)}/></div>
+        <div className="members-sidebar__scroll"><MemberGroup title={`В сети — ${onlineMembers.length}`} members={onlineMembers} online onOpenProfile={(member) => void openUserProfile(member.user_id, member.role)} onMemberContextMenu={(event, member) => openMemberMenu(event, member)}/>
+        <MemberGroup title={`Не в сети — ${offlineMembers.length}`} members={offlineMembers} online={false} onOpenProfile={(member) => void openUserProfile(member.user_id, member.role)} onMemberContextMenu={(event, member) => openMemberMenu(event, member)}/></div>
       </aside>}
 
       {mobileNav && <button className="mobile-scrim" aria-label="Закрыть меню" onClick={() => setMobileNav(false)}/>} 
@@ -1477,6 +1590,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} inputLevel={voiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>
       <StreamSettingsDialog open={dialog === 'streamSettings'} busy={streamStatus !== 'idle'} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/>
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
+      {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)}/>}
+      {confirmRequest && <ConfirmDialog open title={confirmRequest.title} description={confirmRequest.description} confirmLabel={confirmRequest.confirmLabel} onClose={() => setConfirmRequest(null)} onConfirm={confirmRequest.action}/>}
       <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics}/>
     </main>
   )
@@ -1486,13 +1601,13 @@ function ChannelGroup({ title, canAdd, onAdd, children }: { title: string; canAd
   return <section className="channel-group"><header><span>{title}</span>{canAdd && <button onClick={onAdd} aria-label={`Добавить: ${title}`}><Icon name="add" size={15}/></button>}</header>{children}</section>
 }
 
-function ChannelButton({ channel, active, unread = false, canManage, canShare = false, participants = [], members = [], currentVoiceConnectionId = null, speakingUserIds = [], onSelect, onEdit, onShare, onOpenProfile }: { channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void }) {
+function ChannelButton({ channel, active, unread = false, canManage, canShare = false, participants = [], members = [], currentVoiceConnectionId = null, speakingUserIds = [], onSelect, onEdit, onShare, onOpenProfile, onContextMenu, onParticipantContextMenu }: { channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void; onContextMenu?: (event: ReactMouseEvent) => void; onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void }) {
   const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
-  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
+  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
     const member = members.find((item) => item.user_id === participant.user_id)
     const username = member?.username ?? `Пользователь #${participant.user_id}`
     const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
-    return <button key={participant.connection_id} className={`${participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} onClick={() => onOpenProfile?.(participant.user_id, member?.role ?? 'member')}><Avatar name={username} size="small"/><span>{username}</span>{participant.self_deaf ? <Icon name="headphonesOff" size={12}/> : participant.self_mute ? <Icon name="micOff" size={12}/> : <i/>}</button>
+    return <button key={participant.connection_id} className={`${participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} onClick={() => onOpenProfile?.(participant.user_id, member?.role ?? 'member')} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)} title={username}><Avatar name={username} size="small"/><span>{username}</span>{participant.self_deaf ? <Icon name="headphonesOff" size={12}/> : participant.self_mute ? <Icon name="micOff" size={12}/> : <i/>}</button>
   })}</div>}</div>
 }
 
@@ -1500,9 +1615,9 @@ function VoiceDock({ channelName, status, selfMute, selfDeaf, onOpen, onToggleMu
   return <section className="voice-dock"><button className="voice-dock__room" onClick={onOpen}><span><i className={status === 'connected' ? 'is-connected' : ''}/><b>{status === 'connected' ? 'Голос подключён' : 'Подключение…'}</b></span><small><Icon name="volume" size={12}/>{channelName}</small></button><div><button className={selfMute ? 'is-disabled' : ''} onClick={onToggleMute} title={selfMute ? 'Включить микрофон' : 'Выключить микрофон'}><Icon name="mic" size={16}/></button><button className={selfDeaf ? 'is-disabled' : ''} onClick={onToggleDeaf} title={selfDeaf ? 'Включить звук' : 'Выключить звук'}><Icon name="headphones" size={16}/></button><button className="is-leave" onClick={onLeave} title="Отключиться"><Icon name="logout" size={16}/></button></div></section>
 }
 
-function MemberGroup({ title, members, online, onOpenProfile }: { title: string; members: ServerMember[]; online: boolean; onOpenProfile: (member: ServerMember) => void }) {
+function MemberGroup({ title, members, online, onOpenProfile, onMemberContextMenu }: { title: string; members: ServerMember[]; online: boolean; onOpenProfile: (member: ServerMember) => void; onMemberContextMenu?: (event: ReactMouseEvent, member: ServerMember) => void }) {
   if (!members.length) return null
-  return <section className="member-group"><h3>{title}</h3>{members.map((member) => <button className={`member-row member-row--${member.role}`} key={member.user_id} onClick={() => onOpenProfile(member)}><Avatar name={member.username} size="small" online={online}/><span><b className={`member-name member-name--${member.role}`}>{member.username}</b><small><span className={`role-dot role-dot--${member.role}`}/>{roleMeta[member.role].label}{!online && ` · ${relativeTime(member.last_seen_at)}`}</small></span>{member.country_code && <em>{member.country_code}</em>}</button>)}</section>
+  return <section className="member-group"><h3>{title}</h3>{members.map((member) => <button className={`member-row member-row--${member.role}`} key={member.user_id} onClick={() => onOpenProfile(member)} onContextMenu={(event) => onMemberContextMenu?.(event, member)}><Avatar name={member.username} size="small" online={online}/><span><b className={`member-name member-name--${member.role}`}>{member.username}</b><small><span className={`role-dot role-dot--${member.role}`}/>{roleMeta[member.role].label}{!online && ` · ${relativeTime(member.last_seen_at)}`}</small></span>{member.country_code && <em>{member.country_code}</em>}</button>)}</section>
 }
 
 function voiceRealtimeError(message: string) {
