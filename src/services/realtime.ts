@@ -219,6 +219,11 @@ export class RealtimeClient {
     return this.send('stream.p2p_restart', { target_connection_id: targetConnectionId })
   }
 
+  /** Bounded viewer-initiated recovery for server-mode streams. */
+  requestStreamRecovery(serverId: number, channelId: number, action: 'keyframe' | 'ice_restart') {
+    return this.send('stream.recovery_request', { server_id: serverId, channel_id: channelId, action })
+  }
+
   close() {
     clientDiagnostics.record('websocket', 'client_close', 'info', {
       ready_state: this.socket?.readyState ?? null,

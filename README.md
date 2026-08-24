@@ -71,8 +71,7 @@ npm run build
 | `WEBRTC_UDP_PORT` | `50000` | Единый UDP-порт медиатрафика WebRTC. |
 | `WEBRTC_MAX_PARTICIPANTS` | `32` | Максимум одновременных соединений в голосовой комнате. |
 | `WEBRTC_MAX_AUDIO_BITRATE_KBPS` | `128` | Серверный максимум входящего Opus-битрейта одного микрофона. |
-| `WEBRTC_ICE_SERVERS` | пусто | Опциональные STUN/TURN URL через запятую для backend. |
-| `VITE_WEBRTC_ICE_SERVERS` | пусто | STUN/TURN URL для браузерного peer connection; обычно совпадают с backend-настройкой. |
+| `WEBRTC_ICE_SERVERS` | пусто | Опциональные STUN/TURN URL через запятую для backend. Браузер получает их в рантайме через `GET /api/v1/webrtc/config`; пересборка frontend при смене TURN не нужна. |
 
 ## Подготовка к Wails
 

@@ -33,6 +33,7 @@ import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
+import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { useTheme } from '../theme/ThemeContext'
@@ -139,6 +140,48 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const skipNextMessageLoadRef = useRef(false)
   const syncLatestRef = useRef<() => void>(() => undefined)
   const syncPinsRef = useRef<() => void>(() => undefined)
+  const webrtcConfigPromiseRef = useRef<Promise<{ configuration: RTCConfiguration; degraded: boolean }> | null>(null)
+  const webrtcConfigRef = useRef<RTCConfiguration | null>(null)
+  // Unexpected signalling offline keeps the publisher screen capture alive for
+  // a bounded grace period so restoring the stream never needs a new
+  // getDisplayMedia permission gesture.
+  const captureStashRef = useRef<{ stream: MediaStream; serverId: number; channelId: number; hasAudio: boolean; expiresAt: number } | null>(null)
+  const captureStashTimerRef = useRef<number | null>(null)
+
+  const clearCapturedStreamStash = useCallback((stopTracks: boolean) => {
+    if (captureStashTimerRef.current !== null) {
+      window.clearTimeout(captureStashTimerRef.current)
+      captureStashTimerRef.current = null
+    }
+    const stash = captureStashRef.current
+    captureStashRef.current = null
+    if (stash && stopTracks) stash.stream.getTracks().forEach((track) => track.stop())
+  }, [])
+
+  const stashCapturedStream = useCallback((reason: string) => {
+    const role = streamRoleRef.current
+    const session = voiceSessionRef.current
+    const capture = streamCaptureRef.current
+    if (role !== 'publisher' || !capture || !session) return
+    const videoTrack = capture.getVideoTracks()[0]
+    if (!videoTrack || videoTrack.readyState !== 'live') {
+      clearCapturedStreamStash(true)
+      return
+    }
+    clientDiagnostics.record('media', 'stream_capture_stashed', 'warn', { reason })
+    clearCapturedStreamStash(false)
+    captureStashRef.current = {
+      stream: capture,
+      serverId: session.serverId,
+      channelId: session.channelId,
+      hasAudio: capture.getAudioTracks().length > 0,
+      expiresAt: Date.now() + 60_000,
+    }
+    captureStashTimerRef.current = window.setTimeout(() => {
+      clearCapturedStreamStash(true)
+      clientDiagnostics.record('media', 'stream_capture_grace_expired', 'info')
+    }, 60_000)
+  }, [clearCapturedStreamStash])
   activeChannelRef.current = selectedChannelId
   activeServerRef.current = selectedServerId
   serversRef.current = servers
@@ -190,6 +233,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     notify(error instanceof Error ? humanError(error) : fallback, 'error')
   }, [expire, notify])
+
+  // The backend is the single runtime source of ICE configuration. Media start
+  // awaits this promise so peers never get created in an undefined race.
+  const ensureWebRTCConfig = useCallback(async (): Promise<RTCConfiguration> => {
+    if (!token) return {}
+    if (!webrtcConfigPromiseRef.current) {
+      const service = createWebRTCConfigService({ fetcher: () => api.webrtc.config(token) })
+      webrtcConfigPromiseRef.current = service.load().then((state) => {
+        webrtcConfigRef.current = state.configuration
+        if (state.degraded) {
+          notify('TURN недоступен, соединение может не работать в закрытой сети', 'error')
+        }
+        return state
+      })
+    }
+    await webrtcConfigPromiseRef.current
+    return webrtcConfigRef.current ?? {}
+  }, [api, token, notify])
 
   // Speaking detection uses hysteresis: audio above 7% RMS marks a participant
   // as speaking, and they stay marked until it drops below 4%.
@@ -288,6 +349,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => () => {
     pendingReadMarksRef.current.forEach((pending) => window.clearTimeout(pending.timer))
     pendingReadMarksRef.current.clear()
+    // Unmount releases a stashed capture immediately: nobody can consume it.
+    if (captureStashTimerRef.current !== null) window.clearTimeout(captureStashTimerRef.current)
+    captureStashRef.current?.stream.getTracks().forEach((track) => track.stop())
+    captureStashRef.current = null
   }, [])
 
   const trackVoiceRequest = useCallback((requestId: string | null, kind: 'join' | 'state' | 'media' | 'leave') => {
@@ -335,10 +400,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     serverStreamRef.current = null
     p2pStreamPublisherRef.current = null
     p2pStreamViewerRef.current = null
-    if (streamRoleRef.current === 'publisher') {
+    // While a stashed capture is inside its grace period the tracks stay
+    // alive and the ref keeps pointing at them; the stash owner stops the
+    // tracks when it expires or consumes them.
+    if (streamRoleRef.current === 'publisher' && !captureStashRef.current) {
       streamCaptureRef.current?.getTracks().forEach((track) => track.stop())
+      streamCaptureRef.current = null
     }
-    streamCaptureRef.current = null
     streamRoleRef.current = null
     setStreamRole(null)
     setStreamMedia(null)
@@ -525,14 +593,21 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setConnection(state)
         if (state === 'offline') {
           setOnlineByServer({})
+          // Unexpected loss keeps the screen capture alive for a bounded grace
+          // period so restoring never requires a new permission gesture.
+          stashCapturedStream('signalling_offline')
           if (voiceSessionRef.current) {
-            setVoiceError('Realtime-соединение потеряно. Подключитесь к голосовому каналу снова')
+            setVoiceError('Соединение потеряно. Восстанавливаем подключение к голосовому каналу…')
             closeVoiceLocally()
           }
         }
       },
       onUnauthorized: expire,
-      onReady: () => { syncLatestRef.current(); syncPinsRef.current() },
+      onReady: () => {
+        syncLatestRef.current(); syncPinsRef.current()
+        // Allow the next media start to fetch fresh runtime ICE values.
+        webrtcConfigPromiseRef.current = null
+      },
       onSubscribed: () => { syncLatestRef.current(); syncPinsRef.current() },
       onMessage: (message) => {
         recordLastMessage(message.channel_id, message.id)
@@ -783,7 +858,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     realtimeRef.current = client
     client.connect()
     return () => { client.close(); realtimeRef.current = null }
-  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant])
+  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, stashCapturedStream])
 
   useEffect(() => {
     if (selectedServerId && selectedChannelId && selectedChannel?.kind === 'text') realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
@@ -835,6 +910,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceSessionRef.current = pending
     setVoiceSession(pending)
 
+    // Media start waits for the runtime ICE configuration (or a fixed
+    // host-only fallback) before any peer is created.
+    const iceConfiguration = await ensureWebRTCConfig()
+    if (voiceSessionRef.current !== pending) return
+
     let media: BrowserVoiceSession
     const fail = (error: unknown) => {
       if (voiceMediaRef.current !== media) return
@@ -844,6 +924,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       closeVoiceLocally()
     }
     media = new BrowserVoiceSession({
+      iceConfiguration,
       onAnswer: (sdp) => trackVoiceRequest(realtimeRef.current?.answerVoice(sdp) ?? null, 'media'),
       onICECandidate: (candidate) => trackVoiceRequest(realtimeRef.current?.sendVoiceICECandidate(candidate) ?? null, 'media'),
       onConnectionStateChange: (state) => {
@@ -933,8 +1014,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamStatus('requesting')
     try {
       const preferences = streamPreferencesRef.current
-      const codec = selectedStreamCodec(preferences)
-      const capture = await captureScreen(preferences)
+      const codec = selectedStreamCodec(preferences, 'send')
+      const iceConfiguration = await ensureWebRTCConfig()
+      // Reuse a capture kept alive during the signalling-loss grace period:
+      // restoring the stream must not require a new getDisplayMedia gesture.
+      const stash = captureStashRef.current
+      let capture: MediaStream
+      const stashLive = stash
+        && stash.channelId === channel.id
+        && Date.now() < stash.expiresAt
+        && stash.stream.getVideoTracks().every((track) => track.readyState === 'live')
+      if (stash && !stashLive) clearCapturedStreamStash(true)
+      if (stashLive && stash) {
+        clearCapturedStreamStash(false)
+        capture = stash.stream
+        streamCaptureRef.current = capture
+        clientDiagnostics.record('media', 'stream_capture_reused', 'info')
+      } else {
+        capture = await captureScreen(preferences)
+      }
       if (streamRoleRef.current) {
         capture.getTracks().forEach((track) => track.stop())
         return
@@ -947,6 +1045,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
       const ended = () => {
         if (streamCaptureRef.current !== capture) return
+        // The browser button stops the share: no grace period applies.
+        clearCapturedStreamStash(true)
         trackStreamRequest(realtimeRef.current?.stopStream() ?? null, 'leave')
         closeStreamLocally()
       }
@@ -965,6 +1065,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           localStream: capture,
           preferences,
           codec,
+          iceConfiguration,
           onAnswer: (sdp) => trackStreamRequest(realtimeRef.current?.answerStream(sdp) ?? null, 'media'),
           onICECandidate: (candidate) => trackStreamRequest(realtimeRef.current?.sendStreamICECandidate(candidate) ?? null, 'media'),
           onConnectionStateChange: connectionState,
@@ -976,6 +1077,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           localStream: capture,
           preferences,
           codec,
+          iceConfiguration,
           onOffer: (target, sdp) => trackStreamRequest(realtimeRef.current?.sendStreamP2POffer(target, sdp) ?? null, 'media'),
           onICECandidate: (target, candidate) => trackStreamRequest(realtimeRef.current?.sendStreamP2PICECandidate(target, candidate) ?? null, 'media'),
           onConnectionStateChange: connectionState,
@@ -1000,7 +1102,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
   }
 
-  const watchStream = () => {
+  const watchStream = async () => {
     const activeVoice = voiceSessionRef.current
     const client = realtimeRef.current
     const channel = selectedChannel
@@ -1013,7 +1115,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     const activeStream = streams[channel.id]
     if (!activeStream || streamRoleRef.current) return
-    if (!supportedStreamCodecs().includes(activeStream.codec)) {
+    if (!supportedStreamCodecs('receive').includes(activeStream.codec)) {
       setStreamError(`Кодек ${activeStream.codec.toUpperCase()} не поддерживается этим браузером`)
       return
     }
@@ -1022,6 +1124,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     streamRoleRef.current = 'viewer'
     setStreamRole('viewer')
     setStreamStatus('signaling')
+    const iceConfiguration = await ensureWebRTCConfig()
+    if (streamRoleRef.current !== 'viewer') return
     const connectionState = (state: RTCPeerConnectionState) => {
       if (streamRoleRef.current !== 'viewer') return
       if (state === 'connected') setStreamStatus('connected')
@@ -1033,8 +1137,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       serverStreamRef.current = new BrowserServerStreamSession({
         preferences: streamPreferencesRef.current,
         codec: activeStream.codec,
+        iceConfiguration,
         onAnswer: (sdp) => trackStreamRequest(realtimeRef.current?.answerStream(sdp) ?? null, 'media'),
         onICECandidate: (candidate) => trackStreamRequest(realtimeRef.current?.sendStreamICECandidate(candidate) ?? null, 'media'),
+        onRequestRecovery: (action) => {
+          trackStreamRequest(
+            realtimeRef.current?.requestStreamRecovery(selectedServerId, channel.id, action) ?? null,
+            'media',
+          )
+        },
+        onRequestRewatch: () => {
+          const client = realtimeRef.current
+          serverStreamRef.current?.close()
+          serverStreamRef.current = null
+          trackStreamRequest(client?.leaveStream() ?? null, 'leave')
+          watchStream()
+        },
         onRemoteStream: remoteStream,
         onConnectionStateChange: connectionState,
         onQualityStats: setStreamQuality,
@@ -1042,6 +1160,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       })
     } else {
       p2pStreamViewerRef.current = new BrowserP2PStreamViewer({
+        iceConfiguration,
         onAnswer: (target, sdp) => trackStreamRequest(realtimeRef.current?.sendStreamP2PAnswer(target, sdp) ?? null, 'media'),
         onICECandidate: (target, candidate) => trackStreamRequest(realtimeRef.current?.sendStreamP2PICECandidate(target, candidate) ?? null, 'media'),
         onRestartRequest: (target) => trackStreamRequest(realtimeRef.current?.requestStreamP2PRestart(target) ?? null, 'media'),
@@ -1059,6 +1178,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const leaveStream = () => {
     const role = streamRoleRef.current
     if (!role) return
+    // An explicit stop releases the stashed capture immediately.
+    clearCapturedStreamStash(true)
     const channelId = voiceSessionRef.current?.channelId
     trackStreamRequest(
       role === 'publisher'

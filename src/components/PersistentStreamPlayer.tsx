@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
+import { useMediaPlayback } from '../hooks/useMediaPlayback'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
-import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 interface PersistentStreamPlayerProps {
   mode: 'mini' | 'expanded'
@@ -22,49 +22,26 @@ interface PersistentStreamPlayerProps {
 }
 
 export function PersistentStreamPlayer({ mode, stream, role, status, media, channelName, preferences, quality, onPreferencesChange, onExpand, onCollapse, onLeave }: PersistentStreamPlayerProps) {
-  const videoRef = useRef<HTMLVideoElement>(null)
   const playerRef = useRef<HTMLElement>(null)
   const [uiHidden, setUIHidden] = useState(false)
   const isPublisher = role === 'publisher'
-  const muted = isPublisher || preferences.playbackVolume === 0
+  const wantMuted = isPublisher || preferences.playbackVolume === 0
+  const { videoRef, state: playbackState, muted, attach, enableAudio } = useMediaPlayback({
+    role,
+    muted: wantMuted,
+    context: { channel_id: stream?.channel_id ?? null },
+  })
 
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    video.srcObject = media
-    void video.play().then(() => {
-      clientDiagnostics.record('media', 'stream_playback_started', 'info', {
-        player: mode,
-        role,
-        audio_track_count: media.getAudioTracks?.().length ?? 0,
-        video_track_count: media.getVideoTracks?.().length ?? 0,
-      })
-    }).catch((error: unknown) => {
-      clientDiagnostics.record('media', 'stream_playback_blocked', 'warn', {
-        player: mode,
-        role,
-        error_name: error instanceof Error ? error.name : typeof error,
-      })
-    })
-    return () => {
-      if (video.srcObject === media) video.srcObject = null
-    }
-  }, [media, mode, role])
+    attach(media)
+    return () => attach(null)
+  }, [media, attach])
 
+  // Volume follows preferences without fighting the playback hook.
   useEffect(() => {
     const video = videoRef.current
-    if (!video) return
-    video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
-    video.muted = muted
-    if (!muted && video.srcObject) {
-      void video.play().catch((error: unknown) => {
-        clientDiagnostics.record('media', 'stream_unmute_blocked', 'warn', {
-          player: mode,
-          error_name: error instanceof Error ? error.name : typeof error,
-        })
-      })
-    }
-  }, [isPublisher, muted, preferences.playbackVolume, media, mode])
+    if (video) video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
+  }, [isPublisher, preferences.playbackVolume, videoRef])
 
   useEffect(() => {
     if (mode !== 'expanded') return
@@ -114,14 +91,21 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
   const updateVolume = (value: number) => {
     onPreferencesChange({ ...preferences, playbackVolume: Math.max(0, Math.min(100, value)) })
   }
-  const liveLabel = isPublisher ? 'Ваш предпросмотр' : status === 'connected' ? 'Прямой эфир' : 'Подключение…'
+  const liveLabel = isPublisher
+    ? 'Ваш предпросмотр'
+    : playbackState === 'playing'
+      ? 'Прямой эфир'
+      : status === 'connected' ? 'Ожидание первого кадра…' : 'Подключение…'
   const leaveLabel = isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'
+  const audioBlockedOverlay = !isPublisher && playbackState === 'audio_blocked'
 
   if (mode === 'mini') {
     return <aside className="stream-mini-player" aria-label={`Трансляция в канале ${channelName}`}>
       <button className="stream-mini-player__preview" type="button" onClick={onExpand} title="Открыть трансляцию на весь экран">
         <video ref={videoRef} autoPlay playsInline muted={muted}/>
-        <span className="stream-mini-player__live"><i/>{liveLabel}</span>
+        {audioBlockedOverlay
+          ? <span className="stream-mini-player__live"><i/>Без звука</span>
+          : <span className="stream-mini-player__live"><i/>{liveLabel}</span>}
         <span className="stream-mini-player__channel"><Icon name="volume" size={13}/>{channelName}</span>
       </button>
       <div className="stream-mini-player__actions">
@@ -142,7 +126,16 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     </header>
     <div className="stream-expanded-player__video" onDoubleClick={() => { if (uiHidden) void restoreUI(); else void enterCinemaMode() }}>
       <video ref={videoRef} autoPlay playsInline muted={muted}/>
-      <span><i/>{liveLabel}</span>
+      {audioBlockedOverlay && (
+        <div className="stream-audio-blocked-overlay">
+          <span>Трансляция идёт без звука: браузер заблокировал автовоспроизведение</span>
+          <button className="button button--primary" type="button" onClick={enableAudio}><Icon name="volume"/>Включить звук</button>
+        </div>
+      )}
+      {!audioBlockedOverlay && playbackState === 'stalled' && (
+        <div className="stream-audio-blocked-overlay"><span>Восстанавливаем соединение…</span></div>
+      )}
+      {!audioBlockedOverlay && playbackState !== 'stalled' && <span><i/>{liveLabel}</span>}
       {uiHidden && <button className="stream-expanded-player__restore-ui" type="button" onClick={() => void restoreUI()} onDoubleClick={(event) => event.stopPropagation()} title="Показать интерфейс"><Icon name="minimize"/><span>Показать интерфейс</span></button>}
     </div>
     <footer>

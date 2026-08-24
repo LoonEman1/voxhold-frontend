@@ -3,10 +3,13 @@ import { noiseGateOpenLevel, normalizeVoicePreferences, type VoicePreferences } 
 import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
+import { cloneRTCConfiguration } from './webrtcConfig'
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
 interface VoiceMediaOptions {
+  /** Runtime ICE configuration loaded from the backend; empty means host-only. */
+  iceConfiguration?: RTCConfiguration
   onAnswer: (sdp: string) => void
   onICECandidate: (candidate: VoiceICECandidate) => void
   onConnectionStateChange: (state: VoiceMediaConnectionState) => void
@@ -86,24 +89,6 @@ function audioRTPDiagnostics(report: RTCStatsReport) {
     })
   })
   return values
-}
-
-function browserICEConfiguration(): RTCConfiguration {
-  const urls = (import.meta.env.VITE_WEBRTC_ICE_SERVERS as string | undefined)
-    ?.split(',')
-    .map((url) => url.trim())
-    .filter(Boolean)
-
-  if (!urls?.length) return {}
-
-  const username = (import.meta.env.VITE_WEBRTC_ICE_USERNAME as string | undefined)?.trim()
-  const credential = (import.meta.env.VITE_WEBRTC_ICE_CREDENTIAL as string | undefined)?.trim()
-  return {
-    iceServers: [{
-      urls,
-      ...(username && credential ? { username, credential } : {}),
-    }],
-  }
 }
 
 function toBrowserCandidate(candidate: VoiceICECandidate): RTCIceCandidateInit {
@@ -203,7 +188,9 @@ export class BrowserVoiceSession {
       return
     }
 
-    const peer = new RTCPeerConnection(browserICEConfiguration())
+    const peer = new RTCPeerConnection(
+      this.options.iceConfiguration ? cloneRTCConfiguration(this.options.iceConfiguration) : {},
+    )
     this.input = input
     this.peer = peer
     const inputSettings = input.track.getSettings?.() ?? {}

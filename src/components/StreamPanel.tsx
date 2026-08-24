@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
+import { useMediaPlayback } from '../hooks/useMediaPlayback'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
-import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 interface StreamPanelProps {
   stream: ActiveStream | null
@@ -23,49 +23,23 @@ interface StreamPanelProps {
 }
 
 export function StreamPanel({ stream, currentUserId, voiceActive, status, error, media, preferences, quality, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand }: StreamPanelProps) {
-  const videoRef = useRef<HTMLVideoElement>(null)
   const pendingPublisher = !stream && !!media
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
+  const { videoRef, state: playbackState, attach, enableAudio } = useMediaPlayback({
+    role: isPublisher ? 'publisher' : 'viewer',
+    muted: !!isPublisher || preferences.playbackVolume === 0,
+    context: { player: 'channel' },
+  })
+
+  useEffect(() => {
+    attach(media)
+    return () => attach(null)
+  }, [media, attach])
 
   useEffect(() => {
     const video = videoRef.current
-    if (!video) return
-    video.srcObject = media
-    if (media) {
-      void video.play().then(() => {
-        clientDiagnostics.record('media', 'stream_playback_started', 'info', {
-          player: 'channel',
-          role: isPublisher ? 'publisher' : 'viewer',
-          audio_track_count: media.getAudioTracks?.().length ?? 0,
-          video_track_count: media.getVideoTracks?.().length ?? 0,
-        })
-      }).catch((error: unknown) => {
-        clientDiagnostics.record('media', 'stream_playback_blocked', 'warn', {
-          player: 'channel',
-          role: isPublisher ? 'publisher' : 'viewer',
-          error_name: error instanceof Error ? error.name : typeof error,
-        })
-      })
-    }
-    return () => {
-      if (video.srcObject === media) video.srcObject = null
-    }
-  }, [isPublisher, media])
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
-    video.muted = !!isPublisher || preferences.playbackVolume === 0
-    if (!video.muted && video.srcObject) {
-      void video.play().catch((error: unknown) => {
-        clientDiagnostics.record('media', 'stream_unmute_blocked', 'warn', {
-          player: 'channel',
-          error_name: error instanceof Error ? error.name : typeof error,
-        })
-      })
-    }
-  }, [isPublisher, preferences.playbackVolume, media])
+    if (video) video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
+  }, [isPublisher, preferences.playbackVolume, videoRef])
 
   if (!stream && !pendingPublisher) {
     if (!error) return null
@@ -78,6 +52,7 @@ export function StreamPanel({ stream, currentUserId, voiceActive, status, error,
   const updateVolume = (value: number) => {
     onPreferencesChange({ ...preferences, playbackVolume: Math.max(0, Math.min(100, value)) })
   }
+  const liveLabel = isPublisher ? 'Ваш предпросмотр' : playbackState === 'playing' ? 'В эфире' : 'Подключение…'
 
   return <section className="stream-panel">
     <header>
@@ -85,7 +60,16 @@ export function StreamPanel({ stream, currentUserId, voiceActive, status, error,
       <div className="stream-badges"><span className="stream-mode">{stream?.codec?.toUpperCase() ?? preferences.codec.toUpperCase()}</span><span className="stream-mode">{stream?.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span>{media && <button className="stream-expand-button" type="button" onClick={onExpand} title="Открыть трансляцию на весь экран"><Icon name="maximize" size={16}/><span>На весь экран</span></button>}</div>
     </header>
 
-    {media && <div className="stream-video"><video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0} controls={false}/><span>{isPublisher ? 'Ваш предпросмотр' : status === 'connected' ? 'Прямой эфир' : 'Подключение…'}</span></div>}
+    {media && <div className="stream-video">
+      <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0} controls={false}/>
+      <span>{liveLabel}</span>
+      {!isPublisher && playbackState === 'audio_blocked' && (
+        <div className="stream-audio-blocked-overlay">
+          <span>Трансляция идёт без звука</span>
+          <button className="button button--primary" type="button" onClick={enableAudio}><Icon name="volume"/>Включить звук</button>
+        </div>
+      )}
+    </div>}
     <StreamQualitySummary stats={quality}/>
     {error && <div className="voice-error" role="alert">{error}</div>}
 

@@ -3,6 +3,8 @@ import { normalizeStreamPreferences, selectedStreamResolution, type StreamPrefer
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
+import { cloneRTCConfiguration } from './webrtcConfig'
+import { DecodeWatchdog, sampleInboundVideoStats } from './mediaRecovery'
 
 export type StreamConnectionState = RTCPeerConnectionState
 
@@ -23,17 +25,6 @@ interface MediaCallbacks {
   onError: (error: Error) => void
 }
 
-function browserICEConfiguration(): RTCConfiguration {
-  const urls = (import.meta.env.VITE_WEBRTC_ICE_SERVERS as string | undefined)
-    ?.split(',')
-    .map((url) => url.trim())
-    .filter(Boolean)
-  if (!urls?.length) return {}
-  const username = (import.meta.env.VITE_WEBRTC_ICE_USERNAME as string | undefined)?.trim()
-  const credential = (import.meta.env.VITE_WEBRTC_ICE_CREDENTIAL as string | undefined)?.trim()
-  return { iceServers: [{ urls, ...(username && credential ? { username, credential } : {}) }] }
-}
-
 function browserCandidate(candidate: StreamICECandidate): RTCIceCandidateInit {
   return {
     candidate: candidate.candidate,
@@ -50,51 +41,114 @@ const STREAM_CODEC_MIME: Record<StreamCodec, string> = {
   av1: 'video/av1',
 }
 
+/** Compatibility-first auto order per RFC 7742: H.264 before VP8/VP9/AV1. */
+const AUTO_CODEC_ORDER: StreamCodec[] = ['h264', 'vp8', 'vp9', 'av1']
+
+export type CodecRole = 'send' | 'receive' | 'both'
+
+/**
+ * Tolerant fmtp parser: case-insensitive keys/values, tolerates spaces around
+ * separators and values.
+ */
+function parseFmtp(fmtpLine: string | undefined | null): Map<string, string> {
+  const result = new Map<string, string>()
+  for (const part of (fmtpLine ?? '').split(';')) {
+    const eq = part.indexOf('=')
+    if (eq <= 0) continue
+    const key = part.slice(0, eq).trim().toLowerCase()
+    const value = part.slice(eq + 1).trim().toLowerCase()
+    result.set(key, value)
+  }
+  return result
+}
+
+function isSupportedH264Fmtp(fmtpLine: string | undefined | null): boolean {
+  const parameters = parseFmtp(fmtpLine)
+  if (parameters.get('packetization-mode') !== '1') return false
+  // Constrained Baseline (42e0xx) or legacy Baseline-compatible (4200xx).
+  // The level byte must never be compared for exact equality.
+  const profile = parameters.get('profile-level-id')?.replace(/\s+/g, '') ?? ''
+  return /^42(e0|00)[0-9a-f]{2}$/.test(profile)
+}
+
 function codecCapabilities(
   capabilities: RTCRtpCapabilities | null | undefined,
   codec: StreamCodec,
 ) {
   return (capabilities?.codecs ?? []).filter((candidate) => {
     if (candidate.mimeType.toLowerCase() !== STREAM_CODEC_MIME[codec]) return false
-    const format = candidate.sdpFmtpLine?.toLowerCase() ?? ''
-    if (codec === 'vp9') return format === '' || /(?:^|;)profile-id=0(?:;|$)/.test(format)
-    if (codec === 'h264') {
-      return /(?:^|;)packetization-mode=1(?:;|$)/.test(format)
-        && /(?:^|;)profile-level-id=42001f(?:;|$)/.test(format)
+    const format = candidate.sdpFmtpLine ?? ''
+    if (codec === 'vp9') {
+      const parsed = format === '' ? new Map<string, string>() : parseFmtp(format)
+      const profile = parsed.get('profile-id')
+      return profile === undefined || profile === '0'
     }
+    if (codec === 'h264') return isSupportedH264Fmtp(format)
     return true
   })
 }
 
-export function supportedStreamCodecs(): StreamCodec[] {
-  const sender = typeof RTCRtpSender !== 'undefined' && typeof RTCRtpSender.getCapabilities === 'function'
-    ? RTCRtpSender.getCapabilities('video')
-    : null
-  const receiver = typeof RTCRtpReceiver !== 'undefined' && typeof RTCRtpReceiver.getCapabilities === 'function'
-    ? RTCRtpReceiver.getCapabilities('video')
-    : null
-  return (['vp9', 'h264', 'av1', 'vp8'] as const)
+function capabilitiesForRole(role: CodecRole) {
+  const getSender = typeof RTCRtpSender !== 'undefined' && typeof RTCRtpSender.getCapabilities === 'function'
+  const getReceiver = typeof RTCRtpReceiver !== 'undefined' && typeof RTCRtpReceiver.getCapabilities === 'function'
+  const sender = getSender && role !== 'receive' ? RTCRtpSender.getCapabilities('video') : null
+  const receiver = getReceiver && role !== 'send' ? RTCRtpReceiver.getCapabilities('video') : null
+  return { sender, receiver }
+}
+
+export function supportedStreamCodecs(role: CodecRole = 'both'): StreamCodec[] {
+  const { sender, receiver } = capabilitiesForRole(role)
+  return AUTO_CODEC_ORDER
     .filter((codec) => codecCapabilities(sender, codec).length > 0 && codecCapabilities(receiver, codec).length > 0)
 }
 
-export function selectedStreamCodec(preferences: StreamPreferences): StreamCodec {
-  const supported = supportedStreamCodecs()
+export function selectedStreamCodec(preferences: StreamPreferences, role: CodecRole = 'send'): StreamCodec {
+  const supported = supportedStreamCodecs(role)
   if (preferences.codec !== 'auto') {
     if (!supported.includes(preferences.codec)) throw new Error(`Кодек ${preferences.codec.toUpperCase()} не поддерживается этим браузером`)
     return preferences.codec
   }
-  const automatic = (['vp9', 'h264', 'av1', 'vp8'] as const).find((codec) => supported.includes(codec))
+  const automatic = AUTO_CODEC_ORDER.find((codec) => supported.includes(codec))
   if (!automatic) throw new Error('Браузер не поддерживает видеокодеки трансляции')
   return automatic
 }
 
+/**
+ * Moves the selected primary codecs to the front of the FULL unchanged
+ * capability list. RTX/RED/FEC and other primary codecs are never removed:
+ * filtering the list would disable RTX retransmission and FEC negotiation.
+ */
+function reorderCodecPreferences(
+  capabilities: RTCRtpCapabilities | null | undefined,
+  codec: StreamCodec,
+) {
+  const selected = codecCapabilities(capabilities, codec)
+  if (!selected.length) return null
+  const selectedIds = new Set(selected.map((item) => item.mimeType.toLowerCase() + '|' + (item.sdpFmtpLine ?? '')))
+  const rest = (capabilities.codecs ?? []).filter(
+    (item) => !selectedIds.has(item.mimeType.toLowerCase() + '|' + (item.sdpFmtpLine ?? '')),
+  )
+  return [...selected, ...rest]
+}
+
 function preferCodec(transceiver: RTCRtpTransceiver, codec: StreamCodec) {
   if (!transceiver.setCodecPreferences || typeof RTCRtpReceiver.getCapabilities !== 'function') {
-    throw new Error('Браузер не позволяет выбрать видеокодек трансляции')
+    clientDiagnostics.record('webrtc', 'stream_codec_preferences_unavailable', 'warn', { codec })
+    return
   }
-  const selected = codecCapabilities(RTCRtpReceiver.getCapabilities('video'), codec)
-  if (!selected.length) throw new Error(`Кодек ${codec.toUpperCase()} недоступен для WebRTC`)
-  transceiver.setCodecPreferences(selected)
+  const reordered = reorderCodecPreferences(RTCRtpReceiver.getCapabilities('video'), codec)
+  if (!reordered) {
+    clientDiagnostics.record('webrtc', 'stream_codec_unavailable', 'warn', { codec })
+    return
+  }
+  try {
+    transceiver.setCodecPreferences(reordered)
+  } catch (error) {
+    clientDiagnostics.record('webrtc', 'stream_codec_preferences_failed', 'warn', {
+      codec,
+      error_name: error instanceof Error ? error.name : typeof error,
+    })
+  }
 }
 
 async function applySenderLimits(sender: RTCRtpSender, preferences: StreamPreferences) {
@@ -385,25 +439,46 @@ interface ServerSessionOptions extends MediaCallbacks {
   localStream?: MediaStream
   preferences: StreamPreferences
   codec: StreamCodec
+  iceConfiguration?: RTCConfiguration
   onAnswer: (sdp: string) => void
   onICECandidate: (candidate: StreamICECandidate) => void
+  /** Server-mode viewer only: bounded recovery request to the backend. */
+  onRequestRecovery?: (action: 'keyframe' | 'ice_restart') => void
+  /** Server-mode viewer only: one full leaveStream -> watchStream recreation. */
+  onRequestRewatch?: () => void
 }
 
 export class BrowserServerStreamSession {
-  private readonly peer = new RTCPeerConnection(browserICEConfiguration())
+  private readonly peer: RTCPeerConnection
   private readonly pendingCandidates: StreamICECandidate[] = []
   private offerQueue = Promise.resolve()
   private tracksAdded = false
   private closed = false
   private readonly stopQualityMonitor: () => void
   private readonly stopDiagnosticMonitor: () => void
+  private readonly watchdog: DecodeWatchdog | null
 
   constructor(private readonly options: ServerSessionOptions) {
+    this.peer = new RTCPeerConnection(
+      options.iceConfiguration ? cloneRTCConfiguration(options.iceConfiguration) : {},
+    )
     const context = {
       transport: 'server',
       role: options.localStream ? 'publisher' : 'viewer',
     }
     wirePeer(this.peer, options, undefined, context)
+    if (!options.localStream) {
+      // Viewer-only: detect RTP flowing but no decodable frames (black live).
+      this.watchdog = new DecodeWatchdog({
+        getSample: () => sampleInboundVideoStats(this.peer),
+        requestKeyframe: () => options.onRequestRecovery?.('keyframe'),
+        requestIceRestart: () => options.onRequestRecovery?.('ice_restart'),
+        requestFullRewatch: () => options.onRequestRewatch?.(),
+      })
+      this.watchdog.start()
+    } else {
+      this.watchdog = null
+    }
     this.stopQualityMonitor = monitorVideoQuality(
       this.peer,
       options.localStream ? 'outbound-rtp' : 'inbound-rtp',
@@ -439,15 +514,15 @@ export class BrowserServerStreamSession {
         }
       }
       if (this.options.localStream && !this.tracksAdded) {
+        // The backend offer is already restricted to the announced codec
+        // family plus its RTX pair; the client must not re-filter codecs.
         for (const track of this.options.localStream.getTracks()) {
           const transceiver = this.peer.getTransceivers().find((item) => item.receiver.track.kind === track.kind && !item.sender.track)
           if (transceiver) {
             transceiver.direction = 'sendonly'
             await transceiver.sender.replaceTrack(track)
-            if (track.kind === 'video') preferCodec(transceiver, this.options.codec)
           } else {
-            const added = this.peer.addTransceiver(track, { direction: 'sendonly', streams: [this.options.localStream!] })
-            if (track.kind === 'video') preferCodec(added, this.options.codec)
+            this.peer.addTransceiver(track, { direction: 'sendonly', streams: [this.options.localStream!] })
           }
         }
         this.tracksAdded = true
@@ -494,6 +569,7 @@ export class BrowserServerStreamSession {
       transport: 'server',
       role: this.options.localStream ? 'publisher' : 'viewer',
     })
+    this.watchdog?.stop()
     this.stopQualityMonitor()
     this.stopDiagnosticMonitor()
     this.peer.close()
@@ -505,6 +581,7 @@ interface P2PPublisherOptions extends MediaCallbacks {
   localStream: MediaStream
   preferences: StreamPreferences
   codec: StreamCodec
+  iceConfiguration?: RTCConfiguration
   onOffer: (targetConnectionId: string, sdp: string) => void
   onICECandidate: (targetConnectionId: string, candidate: StreamICECandidate) => void
 }
@@ -530,7 +607,9 @@ export class BrowserP2PStreamPublisher {
       this.restartViewer(connectionId)
       return
     }
-    const peer = new RTCPeerConnection(browserICEConfiguration())
+    const peer = new RTCPeerConnection(
+      this.options.iceConfiguration ? cloneRTCConfiguration(this.options.iceConfiguration) : {},
+    )
     const state: PeerState = {
       peer,
       pendingCandidates: [],
@@ -700,6 +779,7 @@ export class BrowserP2PStreamPublisher {
 }
 
 interface P2PViewerOptions extends MediaCallbacks {
+  iceConfiguration?: RTCConfiguration
   onAnswer: (targetConnectionId: string, sdp: string) => void
   onICECandidate: (targetConnectionId: string, candidate: StreamICECandidate) => void
   onRestartRequest: (targetConnectionId: string) => void
@@ -719,7 +799,9 @@ export class BrowserP2PStreamViewer {
       && (this.state.peer.connectionState === 'failed' || this.state.peer.connectionState === 'closed')
     ) this.disposeState()
     if (!this.state) {
-      const peer = new RTCPeerConnection(browserICEConfiguration())
+      const peer = new RTCPeerConnection(
+        this.options.iceConfiguration ? cloneRTCConfiguration(this.options.iceConfiguration) : {},
+      )
       const state: PeerState = {
         peer,
         pendingCandidates: [],

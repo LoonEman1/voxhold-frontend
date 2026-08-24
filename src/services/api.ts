@@ -20,6 +20,7 @@ import type {
   ServerRole,
   Session,
   ClientDiagnosticsPayload,
+  WebRTCConfigPayload,
 } from '../domain/types'
 import type { Transport, TransportRequest } from '../platform/transport'
 
@@ -229,6 +230,10 @@ export function createApi(transport: Transport) {
           path: `/api/v1/diagnostics/client-events?limit=${url(limit)}`,
           signal,
         }) as Promise<ClientDiagnosticsPayload>,
+    },
+    webrtc: {
+      config: (token: string, signal?: AbortSignal) =>
+        authorized(token, { path: '/api/v1/webrtc/config', signal }) as Promise<WebRTCConfigPayload>,
     },
   }
 }

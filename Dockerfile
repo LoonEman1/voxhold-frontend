@@ -5,14 +5,10 @@ COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 FROM dependencies AS build
+# ICE/TURN configuration is fetched at runtime from the backend
+# (GET /api/v1/webrtc/config); no build-time WebRTC arguments are needed.
 ARG VITE_API_BASE_URL=""
-ARG VITE_WEBRTC_ICE_SERVERS=""
-ARG VITE_WEBRTC_ICE_USERNAME=""
-ARG VITE_WEBRTC_ICE_CREDENTIAL=""
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
-ENV VITE_WEBRTC_ICE_SERVERS=${VITE_WEBRTC_ICE_SERVERS}
-ENV VITE_WEBRTC_ICE_USERNAME=${VITE_WEBRTC_ICE_USERNAME}
-ENV VITE_WEBRTC_ICE_CREDENTIAL=${VITE_WEBRTC_ICE_CREDENTIAL}
 COPY tsconfig*.json vite.config.ts index.html ./
 COPY public ./public
 COPY scripts ./scripts
