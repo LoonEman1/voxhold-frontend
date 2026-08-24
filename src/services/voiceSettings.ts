@@ -1,4 +1,5 @@
 export type VoiceInputMode = 'voice_activity' | 'push_to_talk'
+export type VoiceNoiseMode = 'auto' | 'threshold'
 export const VOICE_BITRATES = [24, 32, 48, 64, 96, 128] as const
 export type VoiceBitrate = typeof VOICE_BITRATES[number]
 
@@ -10,6 +11,8 @@ export interface VoicePreferences {
   bitrateKbps: VoiceBitrate
   echoCancellation: boolean
   noiseSuppression: boolean
+  noiseSuppressionMode: VoiceNoiseMode
+  noiseGateThreshold: number
   autoGainControl: boolean
   inputMode: VoiceInputMode
   muteShortcut: string
@@ -25,6 +28,8 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   bitrateKbps: 64,
   echoCancellation: true,
   noiseSuppression: true,
+  noiseSuppressionMode: 'auto',
+  noiseGateThreshold: 15,
   autoGainControl: true,
   inputMode: 'voice_activity',
   muteShortcut: 'Control+Shift+KeyM',
@@ -40,6 +45,10 @@ function numberInRange(value: unknown, fallback: number, min: number, max: numbe
     : fallback
 }
 
+export function noiseGateOpenLevel(percent: number) {
+  return Math.min(1, Math.max(0, percent / 100))
+}
+
 export function normalizeVoicePreferences(value: unknown): VoicePreferences {
   const source = value && typeof value === 'object' ? value as Partial<VoicePreferences> : {}
   return {
@@ -50,6 +59,8 @@ export function normalizeVoicePreferences(value: unknown): VoicePreferences {
     bitrateKbps: VOICE_BITRATES.includes(source.bitrateKbps as VoiceBitrate) ? source.bitrateKbps as VoiceBitrate : DEFAULT_VOICE_PREFERENCES.bitrateKbps,
     echoCancellation: typeof source.echoCancellation === 'boolean' ? source.echoCancellation : true,
     noiseSuppression: typeof source.noiseSuppression === 'boolean' ? source.noiseSuppression : true,
+    noiseSuppressionMode: source.noiseSuppressionMode === 'threshold' ? 'threshold' : 'auto',
+    noiseGateThreshold: numberInRange(source.noiseGateThreshold, DEFAULT_VOICE_PREFERENCES.noiseGateThreshold, 0, 100),
     autoGainControl: typeof source.autoGainControl === 'boolean' ? source.autoGainControl : true,
     inputMode: source.inputMode === 'push_to_talk' ? 'push_to_talk' : 'voice_activity',
     muteShortcut: validShortcut(source.muteShortcut, DEFAULT_VOICE_PREFERENCES.muteShortcut),

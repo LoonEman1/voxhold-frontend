@@ -1,5 +1,5 @@
 import type { VoiceICECandidate } from '../domain/types'
-import { normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
+import { noiseGateOpenLevel, normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
 import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
@@ -20,6 +20,8 @@ interface VoiceInputChain {
   stream: MediaStream
   track: MediaStreamTrack
   context: AudioContext | null
+  gate: GainNode | null
+  gateAnalyser: AnalyserNode | null
   gain: GainNode | null
   analyser: AnalyserNode | null
   meterTimer: number | null
@@ -113,12 +115,13 @@ function toBrowserCandidate(candidate: VoiceICECandidate): RTCIceCandidateInit {
   }
 }
 
-function inputConstraints(preferences: VoicePreferences): MediaTrackConstraints {
+export function inputConstraints(preferences: VoicePreferences): MediaTrackConstraints {
   return {
     ...(preferences.inputDeviceId ? { deviceId: { exact: preferences.inputDeviceId } } : {}),
     autoGainControl: preferences.autoGainControl,
     echoCancellation: preferences.echoCancellation,
-    noiseSuppression: preferences.noiseSuppression,
+    // In threshold mode the software gate below replaces browser processing.
+    noiseSuppression: preferences.noiseSuppression && preferences.noiseSuppressionMode === 'auto',
     channelCount: 1,
   }
 }
@@ -128,6 +131,7 @@ function needsNewInput(previous: VoicePreferences, next: VoicePreferences) {
     || previous.autoGainControl !== next.autoGainControl
     || previous.echoCancellation !== next.echoCancellation
     || previous.noiseSuppression !== next.noiseSuppression
+    || previous.noiseSuppressionMode !== next.noiseSuppressionMode
 }
 
 export class BrowserVoiceSession {
@@ -151,6 +155,10 @@ export class BrowserVoiceSession {
   private closed = false
   private selfMute = false
   private selfDeaf = false
+  // Software noise gate: null disables it, otherwise the threshold in the same
+  // 0-100 scale shown on the input meter, plus hysteresis state.
+  private noiseGateThresholdPercent: number | null = null
+  private noiseGateOpen = true
   private autoplayRetryAttached = false
   private autoplayRetryHandler: (() => void) | null = null
 
@@ -173,12 +181,18 @@ export class BrowserVoiceSession {
     this.selfMute = selfMute
     this.selfDeaf = selfDeaf
     this.preferences = normalizeVoicePreferences(preferences)
+    this.noiseGateThresholdPercent = this.preferences.noiseSuppressionMode === 'threshold'
+      ? this.preferences.noiseGateThreshold
+      : null
+    this.noiseGateOpen = true
     clientDiagnostics.record('webrtc', 'voice_starting', 'info', {
       self_mute: selfMute,
       self_deaf: selfDeaf,
       bitrate_kbps: this.preferences.bitrateKbps,
       selected_input: !!this.preferences.inputDeviceId,
       selected_output: !!this.preferences.outputDeviceId,
+      noise_suppression_mode: this.preferences.noiseSuppressionMode,
+      noise_gate_threshold: this.noiseGateThresholdPercent,
     })
     const input = await this.createInput(this.preferences)
 
@@ -439,27 +453,41 @@ export class BrowserVoiceSession {
     }
 
     if (typeof AudioContext === 'undefined') {
-      return { raw, stream: raw, track: rawTrack, context: null, gain: null, analyser: null, meterTimer: null }
+      return { raw, stream: raw, track: rawTrack, context: null, gate: null, gateAnalyser: null, gain: null, analyser: null, meterTimer: null }
     }
 
     let context: AudioContext | null = null
     try {
       context = new AudioContext({ latencyHint: 'interactive' })
       const source = context.createMediaStreamSource(raw)
+      const gating = preferences.noiseSuppressionMode === 'threshold'
+      const gate = gating ? context.createGain() : null
+      const gateAnalyser = gating ? context.createAnalyser() : null
       const gain = context.createGain()
       const analyser = context.createAnalyser()
       const destination = context.createMediaStreamDestination()
+      if (gate) {
+        // Starts closed so background noise never leaks before the first
+        // metering tick opens it.
+        gate.gain.value = 0
+      }
+      if (gateAnalyser) {
+        gateAnalyser.fftSize = 256
+        gateAnalyser.smoothingTimeConstant = 0.4
+        source.connect(gateAnalyser)
+      }
       gain.gain.value = preferences.inputVolume / 100
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.72
-      source.connect(gain)
+      source.connect(gate ?? gain)
+      if (gate) gate.connect(gain)
       gain.connect(analyser)
       analyser.connect(destination)
       if (context.state === 'suspended') await context.resume()
 
       const track = destination.stream.getAudioTracks()[0]
       if (!track) throw new Error('Не удалось подготовить аудиодорожку')
-      const chain: VoiceInputChain = { raw, stream: destination.stream, track, context, gain, analyser, meterTimer: null }
+      const chain: VoiceInputChain = { raw, stream: destination.stream, track, context, gate, gateAnalyser, gain, analyser, meterTimer: null }
       this.startInputMeter(chain)
       return chain
     } catch (error) {
@@ -472,17 +500,34 @@ export class BrowserVoiceSession {
   private startInputMeter(input: VoiceInputChain) {
     if (!input.analyser || !this.options.onInputLevel) return
     const values = new Uint8Array(input.analyser.fftSize)
+    const gateValues = input.gateAnalyser ? new Uint8Array(input.gateAnalyser.fftSize) : null
     input.meterTimer = window.setInterval(() => {
-      if (this.closed || !input.analyser) return
-      input.analyser.getByteTimeDomainData(values)
+      // The gate must react to the pre-gate signal, otherwise a closed gate
+      // would silence the meter and never reopen.
+      const analyser = (gateValues && input.gateAnalyser) ? input.gateAnalyser : input.analyser
+      const buffer = gateValues && input.gateAnalyser ? gateValues : values!
+      if (this.closed || !analyser) return
+      analyser.getByteTimeDomainData(buffer)
       let energy = 0
-      for (const value of values) {
+      for (const value of buffer) {
         const normalized = (value - 128) / 128
         energy += normalized * normalized
       }
-      const rms = Math.sqrt(energy / values.length)
-      this.options.onInputLevel?.(this.selfMute ? 0 : Math.min(1, rms * 4.5))
+      const level = Math.min(1, Math.sqrt(energy / buffer.length) * 4.5)
+      this.applyNoiseGate(input, level)
+      this.options.onInputLevel?.(this.selfMute ? 0 : level)
     }, 90)
+  }
+
+  private applyNoiseGate(input: VoiceInputChain, level: number) {
+    const thresholdPercent = this.noiseGateThresholdPercent
+    if (!input.gate || !input.context || thresholdPercent === null) return
+    const openLevel = noiseGateOpenLevel(thresholdPercent)
+    // Hysteresis keeps the gate from chattering when speech sits at the bar.
+    if (!this.noiseGateOpen && level > openLevel + 0.02) this.noiseGateOpen = true
+    else if (this.noiseGateOpen && level < openLevel - 0.02) this.noiseGateOpen = false
+    const now = input.context.currentTime
+    input.gate.gain.setTargetAtTime(this.noiseGateOpen ? 1 : 0, now, this.noiseGateOpen ? 0.02 : 0.18)
   }
 
   private disposeInput(input: VoiceInputChain | null) {
@@ -525,6 +570,17 @@ export class BrowserVoiceSession {
     const next = normalizeVoicePreferences(value)
     const previous = this.preferences ?? next
     this.preferences = next
+    // Threshold tweaks apply instantly; only mode/device changes rebuild input.
+    if (next.noiseSuppressionMode === 'threshold') {
+      if (this.noiseGateThresholdPercent === null) {
+        this.noiseGateOpen = true
+        if (this.input?.gate) this.input.gate.gain.value = 1
+      }
+      this.noiseGateThresholdPercent = next.noiseGateThreshold
+    } else {
+      this.noiseGateThresholdPercent = null
+      this.noiseGateOpen = true
+    }
     this.remoteOutputs.forEach(({ audio }) => { audio.volume = next.outputVolume / 100 })
     if (this.input?.gain) this.input.gain.gain.value = next.inputVolume / 100
 
