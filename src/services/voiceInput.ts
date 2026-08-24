@@ -149,21 +149,25 @@ export class BrowserVoiceInput {
    * disabled ended track via onUnavailable and remote playback continues.
    */
   retry(): Promise<void> {
-    const operation = this.queue.then(async () => {
-      if (this.closed) return
-      const preferences = this.preferences
-      if (!preferences) return
-      // First attempt: the currently selected device.
-      if (await this.tryRebuild(preferences)) return
-      // Second attempt: default input without the exact deviceId constraint.
-      if (await this.tryRebuild({ ...preferences, inputDeviceId: '' })) return
-      clientDiagnostics.record('media', 'voice_input_unavailable', 'error')
-      this.enabled = true
-      if (this.chain) this.chain.track.enabled = false
-      this.options.onUnavailable?.()
-    })
+    // Must not chain onto this.queue from inside another queued callback:
+    // that would deadlock, so enqueue exactly once here.
+    const operation = this.queue.then(() => this.retryUnqueued())
     this.queue = operation.catch(() => undefined)
     return operation
+  }
+
+  private async retryUnqueued() {
+    if (this.closed) return
+    const preferences = this.preferences
+    if (!preferences) return
+    // First attempt: the currently selected device.
+    if (await this.tryRebuild(preferences)) return
+    // Second attempt: default input without the exact deviceId constraint.
+    if (await this.tryRebuild({ ...preferences, inputDeviceId: '' })) return
+    clientDiagnostics.record('media', 'voice_input_unavailable', 'error')
+    this.enabled = true
+    if (this.chain) this.chain.track.enabled = false
+    this.options.onUnavailable?.()
   }
 
   /** Stops the microphone exactly once. Only the owner/coordinator calls this. */
@@ -187,8 +191,10 @@ export class BrowserVoiceInput {
     const operation = this.queue.then(async () => {
       this.reacquireQueued = false
       if (this.closed || !this.preferences) return
+      // Already healthy again (e.g. devicechange fired spuriously).
       if (this.isHealthy && reason === 'devicechange') return
-      await this.retry()
+      // Already running on the queue: use the unqueued variant directly.
+      await this.retryUnqueued()
     })
     this.queue = operation.catch(() => undefined)
   }
@@ -220,6 +226,7 @@ export class BrowserVoiceInput {
   }
 
   private emitReplaced(track: MediaStreamTrack) {
+    this.options.onReplaced?.(track)
     this.replacementListeners.forEach((listener) => listener(track))
   }
 

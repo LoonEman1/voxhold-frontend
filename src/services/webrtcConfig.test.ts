@@ -3,6 +3,7 @@ import {
   cloneRTCConfiguration,
   createWebRTCConfigService,
   parseWebRTCConfig,
+  type WebRTCConfigState,
 } from './webrtcConfig'
 
 const fullPayload = {
@@ -16,6 +17,12 @@ const fullPayload = {
   ice_transport_policy: 'all',
 }
 
+function firstServer(state: RTCConfiguration | WebRTCConfigState['configuration']) {
+  const servers = state.iceServers ?? []
+  expect(servers.length).toBeGreaterThan(0)
+  return servers[0]!
+}
+
 describe('parseWebRTCConfig', () => {
   it('maps an empty list to host-only configuration with policy all', () => {
     const config = parseWebRTCConfig({ ice_servers: [], ice_transport_policy: 'all' })
@@ -25,10 +32,10 @@ describe('parseWebRTCConfig', () => {
 
   it('maps a full payload including credentials', () => {
     const config = parseWebRTCConfig(fullPayload)
-    expect(config.iceServers).toHaveLength(1)
-    expect(config.iceServers[0].urls).toEqual(fullPayload.ice_servers[0].urls)
-    expect(config.iceServers[0].username).toBe('user')
-    expect(config.iceServers[0].credential).toBe('secret')
+    const server = firstServer(config)
+    expect(server.urls).toEqual(['turn:turn.example.com:3478?transport=udp', 'turn:turn.example.com:3478?transport=tcp'])
+    expect(server.username).toBe('user')
+    expect(server.credential).toBe('secret')
   })
 
   it('rejects username without credential and vice versa', () => {
@@ -54,10 +61,13 @@ describe('cloneRTCConfiguration', () => {
   it('produces an isolated deep copy', () => {
     const original = parseWebRTCConfig(fullPayload)
     const clone = cloneRTCConfiguration(original)
-    clone.iceServers[0].urls.push('turn:other:3478')
-    clone.iceServers[0].username = 'changed'
-    expect(original.iceServers[0].urls).toHaveLength(2)
-    expect(original.iceServers[0].username).toBe('user')
+    const cloneServer = firstServer(clone)
+    const originalServer = firstServer(original)
+    const cloneUrls: string[] = Array.isArray(cloneServer.urls) ? cloneServer.urls : []
+    cloneUrls.push('turn:other:3478')
+    cloneServer.username = 'changed'
+    expect(originalServer.urls).toHaveLength(2)
+    expect(originalServer.username).toBe('user')
   })
 })
 
@@ -65,11 +75,11 @@ describe('createWebRTCConfigService', () => {
   it('caches the configuration in memory after a successful load', async () => {
     const fetcher = vi.fn().mockResolvedValue(fullPayload)
     const service = createWebRTCConfigService({ fetcher, sleep: async () => undefined })
-    const first = await service.load()
-    const second = await service.load()
+    const firstLoad = await service.load()
+    const secondLoad = await service.load()
     expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(first.degraded).toBe(false)
-    expect(second.configuration.iceServers[0]).not.toBe(first.configuration.iceServers[0])
+    expect(firstLoad.degraded).toBe(false)
+    expect(firstServer(secondLoad.configuration)).not.toBe(firstServer(firstLoad.configuration))
   })
 
   it('retries transient failures with the configured delays before succeeding', async () => {

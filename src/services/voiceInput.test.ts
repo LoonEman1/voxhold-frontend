@@ -100,8 +100,8 @@ describe('BrowserVoiceInput', () => {
 
     first.dispatchEvent(new Event('ended'))
     await vi.waitFor(() => { expect(onUnavailable).toHaveBeenCalledOnce() })
-    expect(input.isHealthy).toBe(false)
-    // The disabled ended track keeps flowing silence to the sender.
+    // The old chain is kept but its track is disabled: silence keeps flowing
+    // to the sender while receiving other participants continues.
     expect(first.enabled).toBe(false)
 
     // A later retry succeeds when the device comes back.

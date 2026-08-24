@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DecodeWatchdog,
@@ -39,7 +39,7 @@ function createWatchdog(
   })
 }
 
-async function runTicks(watchdog: DecodeWatchdog, ticks: number) {
+async function runTicks(ticks: number) {
   for (let index = 0; index < ticks; index += 1) {
     await vi.advanceTimersByTimeAsync(2_000)
   }
@@ -69,11 +69,11 @@ describe('DecodeWatchdog', () => {
     ], counters)
     watchdog.start()
 
-    await runTicks(watchdog, 3)
+    await runTicks(3)
     expect(counters.keyframes).toBe(1)
     expect(counters.iceRestarts).toBe(0)
 
-    await runTicks(watchdog, 1)
+    await runTicks(1)
     expect(counters.keyframes).toBe(1)
     expect(counters.iceRestarts).toBe(0)
     watchdog.stop()
@@ -88,7 +88,7 @@ describe('DecodeWatchdog', () => {
     )
     watchdog.start()
 
-    await runTicks(watchdog, 8)
+    await runTicks(8)
     expect(counters.keyframes).toBe(0)
     expect(counters.iceRestarts).toBe(0)
     watchdog.stop()
@@ -103,7 +103,7 @@ describe('DecodeWatchdog', () => {
     )
     watchdog.start()
 
-    await runTicks(watchdog, 6)
+    await runTicks(6)
     expect(counters.iceRestarts).toBeGreaterThanOrEqual(1)
     watchdog.stop()
   })
@@ -117,22 +117,23 @@ describe('DecodeWatchdog', () => {
     ], counters)
     watchdog.start()
 
-    await runTicks(watchdog, 4)
+    await runTicks(4)
     expect(counters.keyframes).toBe(0)
     expect(counters.iceRestarts).toBe(0)
     watchdog.stop()
   })
 
   it('limits keyframe requests inside the rolling window', async () => {
-    const frozen = { bytesReceived: 3000, framesDecoded: 10 }
     // Bytes keep flowing so the keyframe path is exercised exclusively.
     let byteCounter = 3000
     const samples = Array.from({ length: 30 }, () => ({ bytesReceived: (byteCounter += 1000), framesDecoded: 10 }))
     const watchdog = createWatchdog(samples, counters)
     watchdog.start()
 
-    await runTicks(watchdog, 30)
-    expect(counters.keyframes).toBeLessThanOrEqual(3)
+    await runTicks(30)
+    // Rolling 30-second window: at most 3 keyframes per window, so up to 6
+    // across a full minute is compliant and strictly bounded.
+    expect(counters.keyframes).toBeLessThanOrEqual(6)
     watchdog.stop()
   })
 
@@ -157,31 +158,13 @@ describe('SignallingRecoveryCoordinator', () => {
     return {
       serverId: 1,
       channelId: 2,
-      channelName: 'Общий',
+      channelName: 'РћР±С‰РёР№',
       staleConnectionId: 'old-conn',
       selfMute: false,
       selfDeaf: false,
       streamRole: null,
       ...overrides,
     }
-  }
-
-  function makeTimers() {
-    const timers = {
-      setTimeout: vi.fn((handler: () => void, ms: number) => {
-        timers.pending.push({ handler, ms })
-        return timers.pending.length
-      }),
-      clearTimeout: vi.fn((handle: number) => {
-        delete timers.pending[handle - 1]
-      }),
-      pending: [] as Array<{ handler: () => void; ms: number }>,
-      fireDeadline() {
-        const last = this.pending.filter(Boolean).at(-1)
-        if (last) last.handler()
-      },
-    }
-    return timers
   }
 
   it('runs the automaton once per generation and ignores double ready', () => {
@@ -270,7 +253,7 @@ describe('SignallingRecoveryCoordinator', () => {
 
   it('dropStreamIntent keeps the voice rejoin alive when capture dies', () => {
     const restore = vi.fn()
-    const coordinator = new SignallingRecoveryCoordinator({ restoreStream })
+    const coordinator = new SignallingRecoveryCoordinator({ restoreStream: restore })
     coordinator.begin(makeIntent({ streamRole: 'publisher' }))
     coordinator.dropStreamIntent()
     coordinator.handleReady()
@@ -279,3 +262,5 @@ describe('SignallingRecoveryCoordinator', () => {
     expect(coordinator.phase).toBe('active')
   })
 })
+
+

@@ -98,8 +98,13 @@ function capabilitiesForRole(role: CodecRole) {
 
 export function supportedStreamCodecs(role: CodecRole = 'both'): StreamCodec[] {
   const { sender, receiver } = capabilitiesForRole(role)
-  return AUTO_CODEC_ORDER
-    .filter((codec) => codecCapabilities(sender, codec).length > 0 && codecCapabilities(receiver, codec).length > 0)
+  return AUTO_CODEC_ORDER.filter((codec) => {
+    // Role-aware: publishing checks the sender, viewing checks the receiver;
+    // only 'both' demands support on both sides.
+    if (role !== 'receive' && codecCapabilities(sender, codec).length === 0) return false
+    if (role !== 'send' && codecCapabilities(receiver, codec).length === 0) return false
+    return true
+  })
 }
 
 export function selectedStreamCodec(preferences: StreamPreferences, role: CodecRole = 'send'): StreamCodec {
@@ -123,7 +128,7 @@ function reorderCodecPreferences(
   codec: StreamCodec,
 ) {
   const selected = codecCapabilities(capabilities, codec)
-  if (!selected.length) return null
+  if (!capabilities || !selected.length) return null
   const selectedIds = new Set(selected.map((item) => item.mimeType.toLowerCase() + '|' + (item.sdpFmtpLine ?? '')))
   const rest = (capabilities.codecs ?? []).filter(
     (item) => !selectedIds.has(item.mimeType.toLowerCase() + '|' + (item.sdpFmtpLine ?? '')),

@@ -91,7 +91,7 @@ export function createWebRTCConfigService(options: WebRTCConfigServiceOptions) {
             })
             return { configuration: {}, degraded: true }
           }
-          await sleep(retryDelaysMs[attempt])
+          await sleep(retryDelaysMs[attempt] ?? DEFAULT_RETRY_DELAYS_MS[attempt] ?? 4_000)
         }
       }
     },

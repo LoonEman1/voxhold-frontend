@@ -54,8 +54,10 @@ export class DecodeWatchdog {
   private bytesStalled = 0
   private framesStalled = 0
   private keyframeTimestamps: number[] = []
-  private lastKeyframeAt = 0
-  private lastIceAt = 0
+  // -Infinity so the very first request is never blocked by a cooldown that
+  // would otherwise compare against the epoch.
+  private lastKeyframeAt = Number.NEGATIVE_INFINITY
+  private lastIceAt = Number.NEGATIVE_INFINITY
   private rewatches = 0
   private generation = 0
 
@@ -72,7 +74,8 @@ export class DecodeWatchdog {
     this.generation += 1
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
-    this.phase = 'idle'
+    // Keep the terminal exhausted phase observable after stopping.
+    if (this.phase !== 'exhausted') this.phase = 'idle'
   }
 
   /** A presented/decoded frame resets every stall sequence. */
@@ -169,7 +172,8 @@ export class DecodeWatchdog {
     this.lastIceAt = now
     this.bytesStalled = 0
     this.framesStalled = 0
-    this.keyframeTimestamps = []
+    // The keyframe budget intentionally survives an ICE recovery so a broken
+    // session cannot loop keyframe -> ice -> keyframe forever.
 
     if (this.phase === 'ice_recovery' || this.phase === 'rewatching') {
       this.triggerFullRewatch()
