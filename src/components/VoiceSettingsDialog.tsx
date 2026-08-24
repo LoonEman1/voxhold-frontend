@@ -143,7 +143,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
         <section className="voice-settings__section">
           <div className="voice-settings__heading"><span><Icon name="volume"/></span><div><h3>Уровни звука</h3><p>Усиление микрофона применяется до отправки, громкость — ко всему голосовому каналу.</p></div></div>
           <VoiceRange label="Громкость микрофона" value={preferences.inputVolume} max={200} onChange={(value) => patch('inputVolume', value)}/>
-          <div className="voice-input-meter" aria-label={`Уровень микрофона ${Math.round((voiceActive ? inputLevel : previewLevel) * 100)}%`}><span style={{ width: `${Math.round((voiceActive ? inputLevel : previewLevel) * 100)}%` }}/><i/><i/><i/></div>
+          <MeterWithGate level={voiceActive ? inputLevel : previewLevel} gateEnabled={preferences.noiseSuppressionMode === 'threshold'} threshold={preferences.noiseGateThreshold}/>
           {previewError && <div className="voice-preview-error" role="alert">{previewError}</div>}
           <VoiceRange label="Громкость собеседников" value={preferences.outputVolume} max={100} onChange={(value) => patch('outputVolume', value)}/>
           <div className="voice-bitrate-setting"><span><b>Качество передачи</b><em>{preferences.bitrateKbps} Кбит/с</em></span><div>{VOICE_BITRATES.map((bitrate) => <button className={preferences.bitrateKbps === bitrate ? 'is-active' : ''} type="button" key={bitrate} onClick={() => patch('bitrateKbps', bitrate)}>{bitrate}</button>)}</div><small>Это максимальный битрейт Opus. При нестабильной сети WebRTC может временно снизить его автоматически.</small></div>
@@ -159,7 +159,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
                 <button className={preferences.noiseSuppressionMode === 'threshold' ? 'is-active' : ''} type="button" onClick={() => patch('noiseSuppressionMode', 'threshold')} aria-pressed={preferences.noiseSuppressionMode === 'threshold'}>С нижней планкой</button>
               </div>
               {preferences.noiseSuppressionMode === 'threshold' && <VoiceRange label="Планка шума" value={preferences.noiseGateThreshold} max={100} onChange={(value) => patch('noiseGateThreshold', value)}/>}
-              {preferences.noiseSuppressionMode === 'threshold' && <small className="voice-noise-hint">Всё тише планки передаётся как тишина. Помолчите и поднимайте ползунок, пока индикатор уровня не опустится ниже неё.</small>}
+              {preferences.noiseSuppressionMode === 'threshold' && <small className="voice-noise-hint">Коралловая линия на индикаторе — планка. Всё левее неё передаётся как тишина: помолчите и поднимайте ползунок, пока уровень в тишине не окажется слева от линии.</small>}
             </div>
             <VoiceToggle title="Эхоподавление" description="Не даёт голосу собеседников вернуться в микрофон." checked={preferences.echoCancellation} onChange={(value) => patch('echoCancellation', value)}/>
             <VoiceToggle title="Автоматическое усиление" description="Выравнивает слишком тихий и слишком громкий голос." checked={preferences.autoGainControl} onChange={(value) => patch('autoGainControl', value)}/>
@@ -188,6 +188,21 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
 
 function VoiceRange({ label, value, max, onChange }: { label: string; value: number; max: number; onChange: (value: number) => void }) {
   return <label className="voice-range"><span><b>{label}</b><em>{value}%</em></span><input type="range" min="0" max={max} step="1" value={value} onChange={(event) => onChange(Number(event.target.value))}/></label>
+}
+
+function MeterWithGate({ level, gateEnabled, threshold }: { level: number; gateEnabled: boolean; threshold: number }) {
+  const percent = Math.round(level * 100)
+  const gated = gateEnabled && percent < threshold
+  return (
+    <div
+      className={`voice-input-meter ${gateEnabled ? 'has-gate' : ''} ${gated ? 'is-gated' : ''}`}
+      aria-label={gateEnabled ? `Уровень микрофона ${percent}%, планка шума ${threshold}%` : `Уровень микрофона ${percent}%`}
+    >
+      <span style={{ width: `${percent}%` }}/>
+      {gateEnabled && <b className="voice-input-meter__gate" style={{ left: `${Math.min(100, threshold)}%` }} title={`Планка шума — ${threshold}%`}/>}
+      <i/><i/><i/>
+    </div>
+  )
 }
 
 function VoiceToggle({ title, description, checked, onChange }: { title: string; description: string; checked: boolean; onChange: (value: boolean) => void }) {

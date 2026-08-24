@@ -129,3 +129,38 @@ export function isEditableKeyboardTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
+
+const USER_VOLUMES_KEY = 'voxhold.voice.userVolumes.v1'
+
+export function clampUserVolume(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(200, Math.max(0, Math.round(value)))
+    : null
+}
+
+export function loadUserVolumes(): Record<number, number> {
+  try {
+    const raw = localStorage.getItem(USER_VOLUMES_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    const volumes: Record<number, number> = {}
+    if (parsed && typeof parsed === 'object') {
+      Object.entries(parsed).forEach(([key, value]) => {
+        const userId = Number(key)
+        const volume = clampUserVolume(value)
+        if (!Number.isInteger(userId) || userId <= 0 || volume === null) return
+        volumes[userId] = volume
+      })
+    }
+    return volumes
+  } catch {
+    return {}
+  }
+}
+
+export function saveUserVolumes(volumes: Record<number, number>) {
+  try {
+    localStorage.setItem(USER_VOLUMES_KEY, JSON.stringify(volumes))
+  } catch {
+    // Volume overrides stay session-only when storage is unavailable.
+  }
+}

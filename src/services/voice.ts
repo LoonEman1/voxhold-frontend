@@ -145,6 +145,8 @@ export class BrowserVoiceSession {
   private readonly trackOwners = new Map<string, string>()
   private analysis: { context: AudioContext; sink: GainNode } | null = null
   private readonly remoteAnalysers = new Map<string, VoiceRemoteAnalyser>()
+  // Per-user loudness multiplier keyed by the server connection id (0..2).
+  private readonly remoteGains = new Map<string, number>()
   private levelTimer: number | null = null
   private preferences: VoicePreferences | null = null
   private pendingRemoteCandidates: VoiceICECandidate[] = []
@@ -235,9 +237,7 @@ export class BrowserVoiceSession {
       const audio = document.createElement('audio')
       audio.autoplay = true
       audio.muted = this.selfDeaf
-      audio.volume = this.preferences?.outputVolume !== undefined
-        ? this.preferences.outputVolume / 100
-        : 1
+      audio.volume = this.remoteAudioVolume(connectionId)
       audio.setAttribute('aria-hidden', 'true')
       audio.className = 'voice-audio-output'
       audio.srcObject = stream
@@ -548,6 +548,22 @@ export class BrowserVoiceSession {
     output.stream.removeTrack(output.track)
   }
 
+  // Element volume is capped at 1, so a >100% user volume only amplifies while
+  // the shared channel volume leaves headroom.
+  private remoteAudioVolume(connectionId: string | undefined) {
+    const gain = connectionId ? this.remoteGains.get(connectionId) ?? 1 : 1
+    const base = (this.preferences?.outputVolume ?? 100) / 100
+    return Math.min(1, Math.max(0, base * gain))
+  }
+
+  setRemoteGain(connectionId: string, gain: number) {
+    const clamped = Math.min(2, Math.max(0, gain))
+    this.remoteGains.set(connectionId, clamped)
+    this.remoteOutputs.forEach((output, trackId) => {
+      if (this.trackOwners.get(trackId) === connectionId) output.audio.volume = this.remoteAudioVolume(connectionId)
+    })
+  }
+
   private async applyOutputDevice(deviceId: string, target?: HTMLAudioElement) {
     if (!BrowserVoiceSession.outputSelectionSupported() || !deviceId) return
     const outputs = target
@@ -581,7 +597,7 @@ export class BrowserVoiceSession {
       this.noiseGateThresholdPercent = null
       this.noiseGateOpen = true
     }
-    this.remoteOutputs.forEach(({ audio }) => { audio.volume = next.outputVolume / 100 })
+    this.remoteOutputs.forEach((output, trackId) => { output.audio.volume = this.remoteAudioVolume(this.trackOwners.get(trackId)) })
     if (this.input?.gain) this.input.gain.gain.value = next.inputVolume / 100
 
     const operation = this.inputQueue.then(async () => {
