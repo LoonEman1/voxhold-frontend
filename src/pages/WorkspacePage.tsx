@@ -33,6 +33,9 @@ import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
+import { BrowserVoiceInput } from '../services/voiceInput'
+import { SignallingRecoveryCoordinator } from '../services/mediaRecovery'
+import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { useTheme } from '../theme/ThemeContext'
@@ -87,6 +90,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [voiceSession, setVoiceSession] = useState<ActiveVoiceSession | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceConnectionStatus>('idle')
   const [voiceError, setVoiceError] = useState('')
+  const [micUnavailable, setMicUnavailable] = useState(false)
+  const [voicePlaybackBlocked, setVoicePlaybackBlocked] = useState(false)
+  const [mediaRecovering, setMediaRecovering] = useState(false)
   const [voicePreferences, setVoicePreferences] = useState(loadVoicePreferences)
   const [voiceDevices, setVoiceDevices] = useState<MediaDeviceInfo[]>([])
   const [voiceDevicesLoading, setVoiceDevicesLoading] = useState(false)
@@ -139,6 +145,59 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const skipNextMessageLoadRef = useRef(false)
   const syncLatestRef = useRef<() => void>(() => undefined)
   const syncPinsRef = useRef<() => void>(() => undefined)
+  const webrtcConfigPromiseRef = useRef<Promise<{ configuration: RTCConfiguration; degraded: boolean }> | null>(null)
+  const webrtcConfigRef = useRef<RTCConfiguration | null>(null)
+  const voiceInputRef = useRef<BrowserVoiceInput | null>(null)
+  const recoveryRef = useRef<SignallingRecoveryCoordinator | null>(null)
+  // Assigned after the recovery callbacks are declared below (TDZ-safe bridge
+  // for the realtime effect that is defined earlier in the component).
+  const recoveryActionsRef = useRef<{
+    offline: () => void
+    ready: () => void
+  }>({ offline: () => undefined, ready: () => undefined })
+  // Unexpected signalling offline keeps the publisher screen capture alive for
+  // a bounded grace period so restoring the stream never needs a new
+  // getDisplayMedia permission gesture.
+  const captureStashRef = useRef<{ stream: MediaStream; serverId: number; channelId: number; hasAudio: boolean; expiresAt: number } | null>(null)
+  const captureStashTimerRef = useRef<number | null>(null)
+
+  const clearCapturedStreamStash = useCallback((stopTracks: boolean) => {
+    if (captureStashTimerRef.current !== null) {
+      window.clearTimeout(captureStashTimerRef.current)
+      captureStashTimerRef.current = null
+    }
+    const stash = captureStashRef.current
+    captureStashRef.current = null
+    if (stash && stopTracks) stash.stream.getTracks().forEach((track) => track.stop())
+  }, [])
+
+  const stashCapturedStream = useCallback((reason: string) => {
+    const role = streamRoleRef.current
+    const session = voiceSessionRef.current
+    const capture = streamCaptureRef.current
+    if (role !== 'publisher' || !capture || !session) return
+    const videoTrack = capture.getVideoTracks()[0]
+    if (!videoTrack || videoTrack.readyState !== 'live') {
+      clearCapturedStreamStash(true)
+      return
+    }
+    clientDiagnostics.record('media', 'stream_capture_stashed', 'warn', { reason })
+    clearCapturedStreamStash(false)
+    captureStashRef.current = {
+      stream: capture,
+      serverId: session.serverId,
+      channelId: session.channelId,
+      hasAudio: capture.getAudioTracks().length > 0,
+      expiresAt: Date.now() + 60_000,
+    }
+    captureStashTimerRef.current = window.setTimeout(() => {
+      clearCapturedStreamStash(true)
+      // A dead capture removes the stream part of a pending recovery, but the
+      // voice rejoin is still allowed.
+      recoveryRef.current?.dropStreamIntent()
+      clientDiagnostics.record('media', 'stream_capture_grace_expired', 'info')
+    }, 60_000)
+  }, [clearCapturedStreamStash])
   activeChannelRef.current = selectedChannelId
   activeServerRef.current = selectedServerId
   serversRef.current = servers
@@ -190,6 +249,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     notify(error instanceof Error ? humanError(error) : fallback, 'error')
   }, [expire, notify])
+
+  // The backend is the single runtime source of ICE configuration. Media start
+  // awaits this promise so peers never get created in an undefined race.
+  const ensureWebRTCConfig = useCallback(async (): Promise<RTCConfiguration> => {
+    if (!token) return {}
+    if (!webrtcConfigPromiseRef.current) {
+      const service = createWebRTCConfigService({ fetcher: () => api.webrtc.config(token) })
+      webrtcConfigPromiseRef.current = service.load().then((state) => {
+        webrtcConfigRef.current = state.configuration
+        if (state.degraded) {
+          notify('TURN недоступен, соединение может не работать в закрытой сети', 'error')
+        }
+        return state
+      })
+    }
+    await webrtcConfigPromiseRef.current
+    return webrtcConfigRef.current ?? {}
+  }, [api, token, notify])
 
   // Speaking detection uses hysteresis: audio above 7% RMS marks a participant
   // as speaking, and they stay marked until it drops below 4%.
@@ -288,6 +365,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => () => {
     pendingReadMarksRef.current.forEach((pending) => window.clearTimeout(pending.timer))
     pendingReadMarksRef.current.clear()
+    // Unmount releases a stashed capture immediately: nobody can consume it.
+    if (captureStashTimerRef.current !== null) window.clearTimeout(captureStashTimerRef.current)
+    captureStashRef.current?.stream.getTracks().forEach((track) => track.stop())
+    captureStashRef.current = null
   }, [])
 
   const trackVoiceRequest = useCallback((requestId: string | null, kind: 'join' | 'state' | 'media' | 'leave') => {
@@ -335,10 +416,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     serverStreamRef.current = null
     p2pStreamPublisherRef.current = null
     p2pStreamViewerRef.current = null
-    if (streamRoleRef.current === 'publisher') {
+    // While a stashed capture is inside its grace period the tracks stay
+    // alive and the ref keeps pointing at them; the stash owner stops the
+    // tracks when it expires or consumes them.
+    if (streamRoleRef.current === 'publisher' && !captureStashRef.current) {
       streamCaptureRef.current?.getTracks().forEach((track) => track.stop())
+      streamCaptureRef.current = null
     }
-    streamCaptureRef.current = null
     streamRoleRef.current = null
     setStreamRole(null)
     setStreamMedia(null)
@@ -347,8 +431,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamExpanded(false)
   }, [])
 
-  const closeVoiceLocally = useCallback(() => {
-    closeStreamLocally()
+  /**
+   * Closes stream/voice peer connections and remote outputs but deliberately
+   * keeps the microphone input and the stashed screen capture alive. This is
+   * the "unexpected signalling offline" path, not a user leave.
+   */
+  const detachMediaPeers = useCallback(() => {
+    serverStreamRef.current?.close()
+    p2pStreamPublisherRef.current?.close()
+    p2pStreamViewerRef.current?.close()
+    serverStreamRef.current = null
+    p2pStreamPublisherRef.current = null
+    p2pStreamViewerRef.current = null
+    streamRoleRef.current = null
+    setStreamRole(null)
+    setStreamMedia(null)
+    setStreamQuality(null)
+    setStreamStatus('idle')
+    setStreamExpanded(false)
+
     const media = voiceMediaRef.current
     voiceMediaRef.current = null
     media?.close()
@@ -357,14 +458,72 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceInputLevelRef.current = 0
     speakingStatesRef.current.clear()
     recomputeSpeakingUsers()
+  }, [recomputeSpeakingUsers])
+
+  const closeVoiceLocally = useCallback(() => {
+    // An explicit close cancels any pending automatic recovery and releases
+    // every captured resource immediately.
+    recoveryRef.current?.cancel('closed locally')
+    setMediaRecovering(false)
+    clearCapturedStreamStash(true)
+    streamCaptureRef.current?.getTracks().forEach((track) => track.stop())
+    streamCaptureRef.current = null
+    detachMediaPeers()
+    voiceInputRef.current?.close()
+    voiceInputRef.current = null
     const connectionId = voiceSessionRef.current?.connectionId
     if (connectionId) removeVoiceParticipant(connectionId)
     voiceSessionRef.current = null
     setVoiceSession(null)
     setVoiceStatus('idle')
-  }, [closeStreamLocally, removeVoiceParticipant, recomputeSpeakingUsers])
+    setMicUnavailable(false)
+  }, [clearCapturedStreamStash, detachMediaPeers, removeVoiceParticipant])
 
   useEffect(() => () => closeVoiceLocally(), [closeVoiceLocally])
+
+  /**
+   * Returns the shared microphone capture, creating or rebuilding it when
+   * needed. The input intentionally outlives individual peer sessions so a
+   * signalling reconnect never asks for permission again.
+   */
+  const ensureVoiceInput = useCallback(async (): Promise<BrowserVoiceInput | null> => {
+    let input = voiceInputRef.current
+    if (!input) {
+      input = new BrowserVoiceInput({
+        onLevel: (level) => {
+          voiceInputLevelRef.current = level
+          setVoiceInputLevel(level)
+          recomputeSpeakingUsers()
+        },
+        onUnavailable: () => {
+          // Sending stops; receiving other participants continues working.
+          const active = voiceSessionRef.current
+          if (active && !active.selfMute) {
+            const updated = { ...active, selfMute: true }
+            voiceSessionRef.current = updated
+            setVoiceSession(updated)
+            input?.setState(false)
+          }
+          setMicUnavailable(true)
+          setVoiceError('Микрофон недоступен. Проверьте подключение устройства и попробуйте снова')
+        },
+        onReplaced: () => {
+          setMicUnavailable(false)
+        },
+      })
+      voiceInputRef.current = input
+    }
+    if (!input.isHealthy) {
+      try {
+        await input.start(voicePreferencesRef.current)
+      } catch (error) {
+        setVoiceError(voiceErrorMessage(error))
+        closeVoiceLocally()
+        return null
+      }
+    }
+    return input
+  }, [recomputeSpeakingUsers, closeVoiceLocally])
 
   const refreshVoiceDevices = useCallback(async (requestPermission = false) => {
     setVoiceDevicesLoading(true)
@@ -525,14 +684,21 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setConnection(state)
         if (state === 'offline') {
           setOnlineByServer({})
-          if (voiceSessionRef.current) {
-            setVoiceError('Realtime-соединение потеряно. Подключитесь к голосовому каналу снова')
-            closeVoiceLocally()
-          }
+          recoveryActionsRef.current.offline()
         }
       },
-      onUnauthorized: expire,
-      onReady: () => { syncLatestRef.current(); syncPinsRef.current() },
+      onUnauthorized: () => {
+        // Auth expiry must never trigger an automatic rejoin.
+        recoveryRef.current?.cancel('unauthorized')
+        setMediaRecovering(false)
+        expire()
+      },
+      onReady: () => {
+        syncLatestRef.current(); syncPinsRef.current()
+        // Allow the next media start to fetch fresh runtime ICE values.
+        webrtcConfigPromiseRef.current = null
+        recoveryActionsRef.current.ready()
+      },
       onSubscribed: () => { syncLatestRef.current(); syncPinsRef.current() },
       onMessage: (message) => {
         recordLastMessage(message.channel_id, message.id)
@@ -700,9 +866,18 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         voiceSessionRef.current = joined
         setVoiceSession(joined)
         setVoiceStatus('signaling')
+        // Confirm the automatic rejoin with the new server-side connection id;
+        // stale ids from the dead generation are ignored by the coordinator.
+        recoveryRef.current?.markVoiceJoined(
+          event.participant.connection_id,
+          !!streamCaptureRef.current
+            && streamCaptureRef.current.getVideoTracks().every((track) => track.readyState === 'live'),
+        )
       },
       onVoiceLeft: (event) => {
         removeVoiceParticipant(event.connection_id)
+        // Teardown events of the old connection must not cancel the new intent.
+        if (recoveryRef.current?.staleConnectionId() === event.connection_id) return
         const active = voiceSessionRef.current
         if (active?.connectionId === event.connection_id || (!active?.connectionId && active?.serverId === event.server_id && active.channelId === event.channel_id)) closeVoiceLocally()
       },
@@ -719,6 +894,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onVoiceWebRTCOffer: (offer) => { void voiceMediaRef.current?.acceptOffer(offer.sdp) },
       onVoiceICECandidate: (candidate) => { void voiceMediaRef.current?.addICECandidate(candidate) },
       onVoiceWebRTCClosed: (event) => {
+        // Old-generation teardown during recovery is ignored, except when the
+        // server explicitly says the session moved to another connection.
+        const stale = recoveryRef.current?.staleConnectionId()
+        if (stale && event.reason !== 'voice session moved to another connection') {
+          clientDiagnostics.record('webrtc', 'voice_closed_ignored_stale_generation', 'debug', {
+            reason: event.reason,
+          })
+          return
+        }
         setVoiceError(voiceCloseMessage(event.reason))
         closeVoiceLocally()
       },
@@ -735,19 +919,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onStreamUpdated: upsertStream,
       onStreamStopped: (event) => {
+        // During recovery a stream.stopped belongs to the dead generation.
+        if (recoveryRef.current?.staleConnectionId()) return
         removeStream(event.channel_id)
         if (voiceSessionRef.current?.channelId === event.channel_id && streamRoleRef.current) {
           if (event.reason && event.reason !== 'stream stopped by user') setStreamError(event.reason)
           closeStreamLocally()
         }
       },
-      onStreamLeft: () => closeStreamLocally(),
+      onStreamLeft: () => {
+        if (recoveryRef.current?.staleConnectionId()) return
+        closeStreamLocally()
+      },
       onStreamWatching: (event) => upsertStream(event.stream),
       onStreamViewerJoined: (viewer) => { void p2pStreamPublisherRef.current?.addViewer(viewer.connection_id) },
       onStreamViewerLeft: (viewer) => p2pStreamPublisherRef.current?.removeViewer(viewer.connection_id),
       onStreamWebRTCOffer: (offer) => { void serverStreamRef.current?.acceptOffer(offer.sdp) },
       onStreamICECandidate: (candidate) => { void serverStreamRef.current?.addICECandidate(candidate) },
       onStreamWebRTCClosed: (event) => {
+        if (recoveryRef.current?.staleConnectionId()) return
         setStreamError(streamCloseMessage(event.reason))
         closeStreamLocally()
       },
@@ -835,6 +1025,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceSessionRef.current = pending
     setVoiceSession(pending)
 
+    // Media start waits for the runtime ICE configuration (or a fixed
+    // host-only fallback) before any peer is created.
+    const iceConfiguration = await ensureWebRTCConfig()
+    if (voiceSessionRef.current !== pending) return
+
+    const input = await ensureVoiceInput()
+    if (!input) return
+    if (voiceSessionRef.current !== pending) return
+
     let media: BrowserVoiceSession
     const fail = (error: unknown) => {
       if (voiceMediaRef.current !== media) return
@@ -844,6 +1043,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       closeVoiceLocally()
     }
     media = new BrowserVoiceSession({
+      input,
+      iceConfiguration,
       onAnswer: (sdp) => trackVoiceRequest(realtimeRef.current?.answerVoice(sdp) ?? null, 'media'),
       onICECandidate: (candidate) => trackVoiceRequest(realtimeRef.current?.sendVoiceICECandidate(candidate) ?? null, 'media'),
       onConnectionStateChange: (state) => {
@@ -862,6 +1063,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         recomputeSpeakingUsers()
       },
       onRemoteLevels: applyRemoteLevels,
+      onPlaybackBlocked: () => setVoicePlaybackBlocked(true),
     })
     voiceMediaRef.current = media
 
@@ -933,8 +1135,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamStatus('requesting')
     try {
       const preferences = streamPreferencesRef.current
-      const codec = selectedStreamCodec(preferences)
-      const capture = await captureScreen(preferences)
+      const codec = selectedStreamCodec(preferences, 'send')
+      const iceConfiguration = await ensureWebRTCConfig()
+      // Reuse a capture kept alive during the signalling-loss grace period:
+      // restoring the stream must not require a new getDisplayMedia gesture.
+      const stash = captureStashRef.current
+      let capture: MediaStream
+      const stashLive = stash
+        && stash.channelId === channel.id
+        && Date.now() < stash.expiresAt
+        && stash.stream.getVideoTracks().every((track) => track.readyState === 'live')
+      if (stash && !stashLive) clearCapturedStreamStash(true)
+      if (stashLive && stash) {
+        clearCapturedStreamStash(false)
+        capture = stash.stream
+        streamCaptureRef.current = capture
+        clientDiagnostics.record('media', 'stream_capture_reused', 'info')
+      } else {
+        capture = await captureScreen(preferences)
+      }
       if (streamRoleRef.current) {
         capture.getTracks().forEach((track) => track.stop())
         return
@@ -947,6 +1166,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
       const ended = () => {
         if (streamCaptureRef.current !== capture) return
+        // The browser button stops the share: no grace period applies.
+        clearCapturedStreamStash(true)
         trackStreamRequest(realtimeRef.current?.stopStream() ?? null, 'leave')
         closeStreamLocally()
       }
@@ -965,6 +1186,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           localStream: capture,
           preferences,
           codec,
+          iceConfiguration,
           onAnswer: (sdp) => trackStreamRequest(realtimeRef.current?.answerStream(sdp) ?? null, 'media'),
           onICECandidate: (candidate) => trackStreamRequest(realtimeRef.current?.sendStreamICECandidate(candidate) ?? null, 'media'),
           onConnectionStateChange: connectionState,
@@ -976,6 +1198,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           localStream: capture,
           preferences,
           codec,
+          iceConfiguration,
           onOffer: (target, sdp) => trackStreamRequest(realtimeRef.current?.sendStreamP2POffer(target, sdp) ?? null, 'media'),
           onICECandidate: (target, candidate) => trackStreamRequest(realtimeRef.current?.sendStreamP2PICECandidate(target, candidate) ?? null, 'media'),
           onConnectionStateChange: connectionState,
@@ -1000,7 +1223,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
   }
 
-  const watchStream = () => {
+  const watchStream = async () => {
     const activeVoice = voiceSessionRef.current
     const client = realtimeRef.current
     const channel = selectedChannel
@@ -1013,7 +1236,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     const activeStream = streams[channel.id]
     if (!activeStream || streamRoleRef.current) return
-    if (!supportedStreamCodecs().includes(activeStream.codec)) {
+    if (!supportedStreamCodecs('receive').includes(activeStream.codec)) {
       setStreamError(`Кодек ${activeStream.codec.toUpperCase()} не поддерживается этим браузером`)
       return
     }
@@ -1022,6 +1245,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     streamRoleRef.current = 'viewer'
     setStreamRole('viewer')
     setStreamStatus('signaling')
+    const iceConfiguration = await ensureWebRTCConfig()
+    if (streamRoleRef.current !== 'viewer') return
     const connectionState = (state: RTCPeerConnectionState) => {
       if (streamRoleRef.current !== 'viewer') return
       if (state === 'connected') setStreamStatus('connected')
@@ -1033,8 +1258,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       serverStreamRef.current = new BrowserServerStreamSession({
         preferences: streamPreferencesRef.current,
         codec: activeStream.codec,
+        iceConfiguration,
         onAnswer: (sdp) => trackStreamRequest(realtimeRef.current?.answerStream(sdp) ?? null, 'media'),
         onICECandidate: (candidate) => trackStreamRequest(realtimeRef.current?.sendStreamICECandidate(candidate) ?? null, 'media'),
+        onRequestRecovery: (action) => {
+          trackStreamRequest(
+            realtimeRef.current?.requestStreamRecovery(selectedServerId, channel.id, action) ?? null,
+            'media',
+          )
+        },
+        onRequestRewatch: () => {
+          const client = realtimeRef.current
+          serverStreamRef.current?.close()
+          serverStreamRef.current = null
+          trackStreamRequest(client?.leaveStream() ?? null, 'leave')
+          watchStream()
+        },
         onRemoteStream: remoteStream,
         onConnectionStateChange: connectionState,
         onQualityStats: setStreamQuality,
@@ -1042,6 +1281,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       })
     } else {
       p2pStreamViewerRef.current = new BrowserP2PStreamViewer({
+        iceConfiguration,
         onAnswer: (target, sdp) => trackStreamRequest(realtimeRef.current?.sendStreamP2PAnswer(target, sdp) ?? null, 'media'),
         onICECandidate: (target, candidate) => trackStreamRequest(realtimeRef.current?.sendStreamP2PICECandidate(target, candidate) ?? null, 'media'),
         onRestartRequest: (target) => trackStreamRequest(realtimeRef.current?.requestStreamP2PRestart(target) ?? null, 'media'),
@@ -1056,9 +1296,157 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
   }
 
+  const finishFailedRecovery = useCallback((message: string) => {
+    setMediaRecovering(false)
+    setVoiceError(message)
+    clearCapturedStreamStash(true)
+    streamCaptureRef.current?.getTracks().forEach((track) => track.stop())
+    streamCaptureRef.current = null
+    detachMediaPeers()
+    voiceInputRef.current?.close()
+    voiceInputRef.current = null
+    voiceSessionRef.current = null
+    setVoiceSession(null)
+    setVoiceStatus('idle')
+  }, [clearCapturedStreamStash, detachMediaPeers])
+
+  /** Recreates the voice session on the new connection with the same mic. */
+  const resumeAfterReconnect = useCallback(async (generation: number) => {
+    const coordinator = recoveryRef.current
+    if (!coordinator || coordinator.generation !== generation) return
+    const intent = coordinator.intent
+    const client = realtimeRef.current
+    if (!intent || !client) {
+      coordinator.fail('realtime client unavailable')
+      finishFailedRecovery('Realtime-соединение недоступно. Подключитесь к голосовому каналу заново')
+      return
+    }
+
+    let input = voiceInputRef.current
+    if ((!input || !input.isHealthy) && input) await input.retry().catch(() => undefined)
+    if (!input || !input.isHealthy) {
+      coordinator.fail('microphone lost during disconnect')
+      finishFailedRecovery('Не удалось восстановить микрофон после обрыва. Подключитесь к голосовому каналу заново')
+      return
+    }
+
+    const pending: ActiveVoiceSession = {
+      serverId: intent.serverId,
+      channelId: intent.channelId,
+      channelName: intent.channelName,
+      connectionId: null,
+      selfMute: intent.selfMute,
+      selfDeaf: intent.selfDeaf,
+    }
+    voiceSessionRef.current = pending
+    setVoiceSession(pending)
+    setVoiceStatus('signaling')
+
+    try {
+      const iceConfiguration = await ensureWebRTCConfig()
+      if (recoveryRef.current !== coordinator || coordinator.generation !== generation) return
+      const media = new BrowserVoiceSession({
+        input,
+        iceConfiguration,
+        onAnswer: (sdp) => trackVoiceRequest(realtimeRef.current?.answerVoice(sdp) ?? null, 'media'),
+        onICECandidate: (candidate) => trackVoiceRequest(realtimeRef.current?.sendVoiceICECandidate(candidate) ?? null, 'media'),
+        onConnectionStateChange: (state) => {
+          if (voiceMediaRef.current !== media) return
+          if (state === 'connected') {
+            setVoiceError('')
+            setVoiceStatus('connected')
+          } else if (state === 'failed' || state === 'disconnected') {
+            setVoiceStatus('signaling')
+          }
+        },
+        onError: () => undefined,
+        onRemoteLevels: applyRemoteLevels,
+        onPlaybackBlocked: () => setVoicePlaybackBlocked(true),
+      })
+      voiceMediaRef.current = media
+      await media.start(pending.selfMute, pending.selfDeaf, voicePreferencesRef.current)
+      if (recoveryRef.current !== coordinator || coordinator.generation !== generation) return
+
+      // Sending the request is not success: the rejoin completes when the
+      // server confirms it via voice.joined -> markVoiceJoined.
+      const requestId = client.joinVoice(pending.serverId, pending.channelId, pending.selfMute, pending.selfDeaf)
+      if (!trackVoiceRequest(requestId, 'join')) throw new Error('Realtime-соединение недоступно')
+    } catch {
+      coordinator.fail('voice rejoin failed')
+      finishFailedRecovery('Не удалось восстановить голосовой канал после обрыва. Подключитесь заново')
+    }
+  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels])
+
+  /**
+   * Unexpected WebSocket loss: close peers only, keep the microphone and the
+   * screen capture alive for a bounded grace period, then wait for `ready`.
+   */
+  const beginSignallingRecovery = useCallback(() => {
+    const active = voiceSessionRef.current
+    if (!active) return
+    recoveryRef.current?.cancel('superseded by newer disconnect')
+    stashCapturedStream('signalling_offline')
+    detachMediaPeers()
+
+    const coordinator = new SignallingRecoveryCoordinator(
+      {
+        beginVoiceRejoin: (generation) => { void resumeAfterReconnect(generation) },
+        restoreStream: (_generation, intent) => {
+          try {
+            if (intent.streamRole === 'viewer') void watchStream()
+            else if (intent.streamRole === 'publisher' && streamCaptureRef.current) void startStream()
+          } finally {
+            recoveryRef.current?.markStreamRestored()
+          }
+        },
+        finished: (phase) => {
+          setMediaRecovering(false)
+          if (phase === 'expired') {
+            finishFailedRecovery('')
+            // Shown after cleanup so the reason is not overwritten.
+            setVoiceError('Не удалось восстановить соединение за минуту. Подключитесь к голосовому каналу заново')
+          }
+        },
+      },
+      undefined,
+      60_000,
+    )
+    coordinator.begin({
+      serverId: active.serverId,
+      channelId: active.channelId,
+      channelName: active.channelName,
+      staleConnectionId: active.connectionId,
+      selfMute: active.selfMute,
+      selfDeaf: active.selfDeaf,
+      streamRole: streamRoleRef.current,
+    })
+    recoveryRef.current = coordinator
+    setMediaRecovering(true)
+    setVoiceError('')
+    clientDiagnostics.record('media', 'media_recovery_started', 'warn', {
+      stream_role: streamRoleRef.current ?? null,
+    })
+  }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, watchStream, startStream, finishFailedRecovery])
+
+  recoveryActionsRef.current.offline = beginSignallingRecovery
+  recoveryActionsRef.current.ready = () => { recoveryRef.current?.handleReady() }
+
+  const retryMicrophone = async () => {
+    const input = voiceInputRef.current
+    if (!input) return
+    await input.retry()
+    if (input.isHealthy) {
+      setMicUnavailable(false)
+      setVoiceError('')
+    }
+  }
+
+
   const leaveStream = () => {
     const role = streamRoleRef.current
     if (!role) return
+    // An explicit stop releases the stashed capture immediately.
+    clearCapturedStreamStash(true)
     const channelId = voiceSessionRef.current?.channelId
     trackStreamRequest(
       role === 'publisher'
@@ -1557,7 +1945,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           </div>
         </header>
 
-        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={() => voiceSession && updateLocalVoiceState(!voiceSession.selfMute, voiceSession.selfDeaf)} onToggleDeaf={() => voiceSession && updateLocalVoiceState(voiceSession.selfMute, !voiceSession.selfDeaf)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={watchStream} onLeaveStream={leaveStream} onExpandStream={() => setStreamExpanded(true)}/> : <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/> : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
+        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={() => voiceSession && updateLocalVoiceState(!voiceSession.selfMute, voiceSession.selfDeaf)} onToggleDeaf={() => voiceSession && updateLocalVoiceState(voiceSession.selfMute, !voiceSession.selfDeaf)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={watchStream} onLeaveStream={leaveStream} onExpandStream={() => setStreamExpanded(true)}/> : <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/> : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
         {selectedServer && token && <MessageSearchPanel open={messagePanel === 'search'} api={api} token={token} serverId={selectedServer.id} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage}/>} 
         {selectedChannel?.kind === 'text' && <PinnedMessagesPanel open={messagePanel === 'pins'} pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/>} 
         {messagePanel && <button className="message-panel-scrim" aria-label="Закрыть панель" onClick={() => setMessagePanel(null)}/>} 

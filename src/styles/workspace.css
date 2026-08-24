@@ -306,6 +306,24 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
   background: rgba(0, 0, 0, .65);
   font-size: .72rem;
 }
+.stream-audio-blocked-overlay,
+.stream-expanded-player .stream-audio-blocked-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .8rem;
+  flex-wrap: wrap;
+  padding: .7rem 1rem;
+  color: white;
+  font-size: .78rem;
+  text-align: center;
+  background: rgba(0, 0, 0, .72);
+  backdrop-filter: blur(6px);
+}
+.stream-expanded-player .stream-audio-blocked-overlay { inset: auto 0 3.5rem 0; border-radius: 12px; }
 .stream-volume { display: grid; align-items: center; grid-template-columns: auto auto minmax(100px, 1fr) 45px; gap: .7rem; margin: 0 0 1rem; color: var(--muted); font-size: .75rem; }
 .stream-volume > svg { color: var(--lime); }
 .stream-volume input { width: 100%; accent-color: var(--lime); }

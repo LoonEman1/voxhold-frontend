@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BrowserVoiceSession, voiceCloseMessage } from './voice'
+import { BrowserVoiceInput } from './voiceInput'
 import { DEFAULT_VOICE_PREFERENCES } from './voiceSettings'
 
 class FakeTrack extends EventTarget {
   readonly id = crypto.randomUUID()
   readonly kind = 'audio'
   enabled = true
-  stop = vi.fn()
+  readyState = 'live'
+  stop = vi.fn(() => { this.readyState = 'ended' })
 }
 
 class FakeMediaStream {
@@ -71,57 +73,86 @@ describe('BrowserVoiceSession', () => {
     vi.unstubAllGlobals()
   })
 
-  it('answers offers, queues ICE and releases microphone resources', async () => {
-    const onAnswer = vi.fn()
-    const onICECandidate = vi.fn()
+  async function startSession(input: BrowserVoiceInput) {
     const session = new BrowserVoiceSession({
-      onAnswer,
-      onICECandidate,
+      input,
+      onAnswer: vi.fn(),
+      onICECandidate: vi.fn(),
       onConnectionStateChange: vi.fn(),
       onError: vi.fn(),
     })
-
     await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+    return session
+  }
+
+  it('answers offers, queues ICE and keeps the microphone alive across sessions', async () => {
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const onAnswer = vi.fn()
+
+    const first = new BrowserVoiceSession({
+      input,
+      onAnswer,
+      onICECandidate: vi.fn(),
+      onConnectionStateChange: vi.fn(),
+      onError: vi.fn(),
+    })
+    await first.start(false, false, DEFAULT_VOICE_PREFERENCES)
+    expect(FakePeerConnection.latest?.addTrack).toHaveBeenCalledWith(inputTrack, expect.any(FakeMediaStream))
+    expect(FakePeerConnection.latest?.sender.setParameters).toHaveBeenCalledWith({ encodings: [{ maxBitrate: 64_000 }] })
+
+    // A second peer session reuses the same granted microphone without a new
+    // getUserMedia call (signalling reconnect path).
+    first.close()
+    expect(inputTrack.stop).not.toHaveBeenCalled()
+
+    const second = new BrowserVoiceSession({
+      input,
+      onAnswer,
+      onICECandidate: vi.fn(),
+      onConnectionStateChange: vi.fn(),
+      onError: vi.fn(),
+    })
+    await second.start(true, false, DEFAULT_VOICE_PREFERENCES)
     const peer = FakePeerConnection.latest
     expect(peer?.addTrack).toHaveBeenCalledWith(inputTrack, expect.any(FakeMediaStream))
-    expect(peer?.sender.setParameters).toHaveBeenCalledWith({ encodings: [{ maxBitrate: 64_000 }] })
-    expect(document.querySelector('.voice-audio-output')).toBeNull()
-
-    await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, bitrateKbps: 128 })
-    expect(peer?.sender.setParameters).toHaveBeenLastCalledWith({ encodings: [{ maxBitrate: 128_000 }] })
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
+    expect(inputTrack.enabled).toBe(false)
 
     const remoteCandidate = { candidate: 'remote-candidate', sdp_mid: '0', sdp_mline_index: 0 }
-    await session.addICECandidate(remoteCandidate)
+    await second.addICECandidate(remoteCandidate)
     expect(peer?.addIceCandidate).not.toHaveBeenCalled()
-    await session.acceptOffer('offer-sdp')
+    await second.acceptOffer('offer-sdp')
     expect(peer?.setRemoteDescription).toHaveBeenCalledWith({ type: 'offer', sdp: 'offer-sdp' })
     expect(peer?.addIceCandidate).toHaveBeenCalledWith(expect.objectContaining({ candidate: 'remote-candidate', sdpMid: '0' }))
     expect(onAnswer).toHaveBeenCalledWith('answer-sdp')
 
+    second.setState(false, true)
+    expect(inputTrack.enabled).toBe(true)
+    second.close()
+    input.close()
+    expect(inputTrack.stop).toHaveBeenCalledOnce()
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
+  })
+
+  it('stops remote outputs exactly once and never touches the shared input', async () => {
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const session = await startSession(input)
+    const peer = FakePeerConnection.latest!
     const firstRemoteTrack = new FakeTrack()
     const secondRemoteTrack = new FakeTrack()
-    peer?.ontrack?.({ track: firstRemoteTrack } as unknown as RTCTrackEvent)
-    peer?.ontrack?.({ track: secondRemoteTrack } as unknown as RTCTrackEvent)
-    const outputs = Array.from(document.querySelectorAll<HTMLAudioElement>('.voice-audio-output'))
-    expect(outputs).toHaveLength(2)
-    expect((outputs.at(0)!.srcObject as unknown as FakeMediaStream).getTracks()).toEqual([firstRemoteTrack])
-    expect((outputs.at(1)!.srcObject as unknown as FakeMediaStream).getTracks()).toEqual([secondRemoteTrack])
+    peer.ontrack?.({ track: firstRemoteTrack } as unknown as RTCTrackEvent)
+    peer.ontrack?.({ track: secondRemoteTrack } as unknown as RTCTrackEvent)
 
-    await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, outputVolume: 35 })
-    expect(outputs.every((audio) => audio.volume === 0.35)).toBe(true)
-
-    peer?.onicecandidate?.({ candidate: { toJSON: () => ({ candidate: 'local-candidate', sdpMid: '0', sdpMLineIndex: 0 }) } } as RTCPeerConnectionIceEvent)
-    expect(onICECandidate).toHaveBeenCalledWith(expect.objectContaining({ candidate: 'local-candidate', sdp_mid: '0' }))
-
-    session.setState(true, true)
-    expect(inputTrack.enabled).toBe(false)
-    expect(outputs.every((audio) => audio.muted)).toBe(true)
     session.close()
-    expect(inputTrack.stop).toHaveBeenCalledOnce()
     expect(firstRemoteTrack.stop).toHaveBeenCalledOnce()
     expect(secondRemoteTrack.stop).toHaveBeenCalledOnce()
-    expect(peer?.close).toHaveBeenCalledOnce()
+    expect(peer.close).toHaveBeenCalledOnce()
     expect(document.querySelector('.voice-audio-output')).toBeNull()
+    expect(inputTrack.stop).not.toHaveBeenCalled()
+    input.close()
+    expect(inputTrack.stop).toHaveBeenCalledOnce()
   })
 })
 

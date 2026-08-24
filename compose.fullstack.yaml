@@ -58,9 +58,6 @@ services:
       context: .
       args:
         VITE_API_BASE_URL: ""
-        VITE_WEBRTC_ICE_SERVERS: ${WEBRTC_ICE_SERVERS:-}
-        VITE_WEBRTC_ICE_USERNAME: ${WEBRTC_ICE_USERNAME:-}
-        VITE_WEBRTC_ICE_CREDENTIAL: ${WEBRTC_ICE_CREDENTIAL:-}
     environment:
       BACKEND_UPSTREAM: backend:8080
     ports:

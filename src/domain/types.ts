@@ -314,6 +314,17 @@ export interface ApiErrorPayload {
   error?: string
 }
 
+export interface WebRTCIceServerDTO {
+  urls: string[]
+  username?: string
+  credential?: string
+}
+
+export interface WebRTCConfigPayload {
+  ice_servers: WebRTCIceServerDTO[]
+  ice_transport_policy: string
+}
+
 export interface StoredClientDiagnosticEvent {
   id: number
   created_at: number

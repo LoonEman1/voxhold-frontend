@@ -21,6 +21,14 @@ interface VoicePanelProps {
   selfMute: boolean
   selfDeaf: boolean
   error: string
+  /** Automatic reconnection after a short signalling loss is in progress. */
+  recovering?: boolean
+  /** Microphone reacquire failed; receiving others still works. */
+  micUnavailable?: boolean
+  onRetryMic?: () => void
+  /** Browser blocked audible playback; an explicit user action can fix it. */
+  playbackBlocked?: boolean
+  onEnablePlayback?: () => void
   onJoin: () => Promise<void>
   onLeave: () => void
   onToggleMute: () => void
@@ -46,10 +54,15 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream }: VoicePanelProps) {
+export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream }: VoicePanelProps) {
   const activeHere = activeChannel?.id === channel.id
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
   const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
+  const statusText = recovering
+    ? 'Восстанавливаем соединение…'
+    : micUnavailable
+      ? 'Микрофон недоступен'
+      : statusLabel[connectionStatus]
 
   return (
     <section className="chat-panel voice-room voice-room--active">
@@ -58,8 +71,10 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
         <div className="voice-room__intro">
           <span className="eyebrow">ГОЛОСОВАЯ КОМНАТА</span>
           <h2>{channel.name}</h2>
-          <p>{activeHere ? statusLabel[connectionStatus] : activeChannel ? `Сейчас вы подключены к «${activeChannel.name}»` : 'Подключитесь, чтобы общаться с участниками в реальном времени.'}</p>
+          <p>{activeHere ? statusText : activeChannel ? `Сейчас вы подключены к «${activeChannel.name}»` : 'Подключитесь, чтобы общаться с участниками в реальном времени.'}</p>
           {error && <div className="voice-error" role="alert">{error}</div>}
+          {micUnavailable && onRetryMic && <button className="button button--ghost" type="button" onClick={onRetryMic}><Icon name="mic"/>Повторить</button>}
+          {playbackBlocked && onEnablePlayback && <button className="button button--primary" type="button" onClick={onEnablePlayback}><Icon name="volume"/>Включить звук</button>}
           {!activeHere ? <button className="button button--primary button--large" onClick={() => void onJoin()} disabled={!realtimeOnline}><Icon name="mic"/>{activeChannel ? 'Перейти в канал' : 'Подключиться'}</button> : <div className="voice-controls">
             <button className={`voice-control ${selfMute ? 'is-disabled' : ''}`} onClick={onToggleMute} disabled={connecting} title={selfMute ? 'Включить микрофон' : 'Выключить микрофон'}><span><Icon name="mic"/></span><small>{selfMute ? 'Микрофон выкл.' : 'Микрофон'}</small></button>
             <button className={`voice-control ${selfDeaf ? 'is-disabled' : ''}`} onClick={onToggleDeaf} disabled={connecting} title={selfDeaf ? 'Включить звук' : 'Выключить звук'}><span><Icon name="headphones"/></span><small>{selfDeaf ? 'Звук выключен' : 'Звук'}</small></button>
