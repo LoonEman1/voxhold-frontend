@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { BrowserVoiceSession, voiceErrorMessage } from '../services/voice'
+import { BrowserVoiceSession, inputConstraints, voiceErrorMessage } from '../services/voice'
 import {
   DEFAULT_VOICE_PREFERENCES,
   VOICE_BITRATES,
@@ -55,13 +55,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
     const start = async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            ...(preferences.inputDeviceId ? { deviceId: { exact: preferences.inputDeviceId } } : {}),
-            autoGainControl: preferences.autoGainControl,
-            echoCancellation: preferences.echoCancellation,
-            noiseSuppression: preferences.noiseSuppression,
-            channelCount: 1,
-          },
+          audio: inputConstraints(preferences),
           video: false,
         })
         if (stopped) {
@@ -112,7 +106,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
       void context?.close().catch(() => undefined)
       setPreviewLevel(0)
     }
-  }, [open, voiceActive, preferences.inputDeviceId, preferences.autoGainControl, preferences.echoCancellation, preferences.noiseSuppression, onRefreshDevices])
+  }, [open, voiceActive, preferences.inputDeviceId, preferences.autoGainControl, preferences.echoCancellation, preferences.noiseSuppression, preferences.noiseSuppressionMode, onRefreshDevices])
 
   const patch = <K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]) => {
     onChange({ ...preferences, [key]: value })
@@ -158,7 +152,15 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
         <section className="voice-settings__section">
           <div className="voice-settings__heading"><span><Icon name="sparkles"/></span><div><h3>Обработка микрофона</h3><p>Настройки передаются браузеру при захвате выбранного устройства.</p></div></div>
           <div className="voice-toggle-list">
-            <VoiceToggle title="Шумоподавление" description="Убирает постоянный шум вентилятора, клавиатуры и комнаты." checked={preferences.noiseSuppression} onChange={(value) => patch('noiseSuppression', value)}/>
+            <div className="voice-noise-setting">
+              <span><b>Шумоподавление</b><small>Убирает постоянный шум вентилятора, клавиатуры и комнаты.</small></span>
+              <div className="voice-noise-modes" role="radiogroup" aria-label="Режим шумоподавления">
+                <button className={preferences.noiseSuppressionMode === 'auto' ? 'is-active' : ''} type="button" onClick={() => patch('noiseSuppressionMode', 'auto')} aria-pressed={preferences.noiseSuppressionMode === 'auto'}>Автоматически</button>
+                <button className={preferences.noiseSuppressionMode === 'threshold' ? 'is-active' : ''} type="button" onClick={() => patch('noiseSuppressionMode', 'threshold')} aria-pressed={preferences.noiseSuppressionMode === 'threshold'}>С нижней планкой</button>
+              </div>
+              {preferences.noiseSuppressionMode === 'threshold' && <VoiceRange label="Планка шума" value={preferences.noiseGateThreshold} max={100} onChange={(value) => patch('noiseGateThreshold', value)}/>}
+              {preferences.noiseSuppressionMode === 'threshold' && <small className="voice-noise-hint">Всё тише планки передаётся как тишина. Помолчите и поднимайте ползунок, пока индикатор уровня не опустится ниже неё.</small>}
+            </div>
             <VoiceToggle title="Эхоподавление" description="Не даёт голосу собеседников вернуться в микрофон." checked={preferences.echoCancellation} onChange={(value) => patch('echoCancellation', value)}/>
             <VoiceToggle title="Автоматическое усиление" description="Выравнивает слишком тихий и слишком громкий голос." checked={preferences.autoGainControl} onChange={(value) => patch('autoGainControl', value)}/>
           </div>

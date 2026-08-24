@@ -38,6 +38,21 @@ describe('voice preferences', () => {
       muteShortcut: DEFAULT_VOICE_PREFERENCES.muteShortcut,
     })
   })
+
+  it('validates noise suppression mode and gate threshold', () => {
+    expect(normalizeVoicePreferences({ noiseSuppressionMode: 'threshold', noiseGateThreshold: 250 })).toMatchObject({
+      noiseSuppressionMode: 'threshold',
+      noiseGateThreshold: 100,
+    })
+    expect(normalizeVoicePreferences({ noiseSuppressionMode: 'bogus', noiseGateThreshold: -5 })).toMatchObject({
+      noiseSuppressionMode: 'auto',
+      noiseGateThreshold: 0,
+    })
+    expect(normalizeVoicePreferences(null)).toMatchObject({
+      noiseSuppressionMode: DEFAULT_VOICE_PREFERENCES.noiseSuppressionMode,
+      noiseGateThreshold: DEFAULT_VOICE_PREFERENCES.noiseGateThreshold,
+    })
+  })
 })
 
 describe('voice shortcuts', () => {
