@@ -17,6 +17,8 @@ import type {
   StreamICECandidate,
   StreamMode,
   StreamCodec,
+  StreamRendition,
+  StreamWatchCapabilities,
   StreamP2PICECandidate,
   StreamP2PSession,
   StreamSnapshot,
@@ -179,12 +181,30 @@ export class RealtimeClient {
     return this.send('voice.ice_candidate', candidate)
   }
 
-  startStream(serverId: number, channelId: number, mode: StreamMode, codec: StreamCodec, hasAudio: boolean) {
-    return this.send('stream.start', { server_id: serverId, channel_id: channelId, mode, codec, has_audio: hasAudio })
+  startStream(
+    serverId: number,
+    channelId: number,
+    mode: StreamMode,
+    codec: StreamCodec,
+    hasAudio: boolean,
+    renditions?: StreamRendition[],
+  ) {
+    return this.send('stream.start', {
+      server_id: serverId,
+      channel_id: channelId,
+      mode,
+      codec,
+      has_audio: hasAudio,
+      ...(renditions?.length ? { renditions } : {}),
+    })
   }
 
-  watchStream(serverId: number, channelId: number) {
-    return this.send('stream.watch', { server_id: serverId, channel_id: channelId })
+  watchStream(serverId: number, channelId: number, capabilities?: StreamWatchCapabilities) {
+    return this.send('stream.watch', {
+      server_id: serverId,
+      channel_id: channelId,
+      ...(capabilities ?? {}),
+    })
   }
 
   stopStream() {

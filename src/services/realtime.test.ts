@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Channel, ChannelRead, Message, ServerMember, VoiceParticipant } from '../domain/types'
+import type { Channel, ChannelRead, Message, ServerMember, StreamRendition, VoiceParticipant } from '../domain/types'
 import { RealtimeClient } from './realtime'
 
 type FakeEvent = { data?: string; code?: number }
@@ -146,7 +146,7 @@ describe('RealtimeClient', () => {
     const socket = FakeWebSocket.latest
     expect(socket?.url).toBe('ws://localhost:3000/api/v1/ws')
     socket?.open()
-    socket?.serverEvent('ready', { user_id: 1, protocol_version: 5 })
+    socket?.serverEvent('ready', { user_id: 1, protocol_version: 6 })
 
     const message: Message = { id: 9, channel_id: 7, author: { user_id: 1, username: 'niko' }, content: 'обновлено', created_at: 10, edited_at: 11 }
     socket?.serverEvent('message.created', message)
@@ -227,6 +227,16 @@ describe('RealtimeClient', () => {
     socket?.serverEvent('voice.ice_candidate', iceCandidate)
     socket?.serverEvent('voice.webrtc_closed', { reason: 'closed by server' })
 
+    const renditions: StreamRendition[] = [{
+      id: 'sdr',
+      codec: 'vp9',
+      profile: '0',
+      dynamic_range: 'sdr',
+      bit_depth: 8,
+      color_primaries: 'bt709',
+      transfer: 'bt709',
+      matrix: 'bt709',
+    }]
     const stream = {
       server_id: 3,
       channel_id: 8,
@@ -236,6 +246,7 @@ describe('RealtimeClient', () => {
       codec: 'vp9',
       has_audio: true,
       viewer_count: 0,
+      renditions,
     }
     socket?.serverEvent('stream.snapshot', { streams: [stream] })
     socket?.serverEvent('stream.started', stream)
@@ -290,8 +301,11 @@ describe('RealtimeClient', () => {
     client.answerVoice('answer-sdp')
     client.sendVoiceICECandidate(iceCandidate)
     client.leaveVoice()
-    client.startStream(3, 8, 'server', 'vp9', true)
-    client.watchStream(3, 8)
+    client.startStream(3, 8, 'server', 'vp9', true, renditions)
+    client.watchStream(3, 8, {
+      supported_dynamic_ranges: ['sdr', 'hdr10'],
+      codec_profiles: [{ codec: 'av1', profile: 'main10' }],
+    })
     client.answerStream('stream-answer')
     client.sendStreamICECandidate(iceCandidate)
     client.requestStreamP2PRestart('publisher')
@@ -309,6 +323,12 @@ describe('RealtimeClient', () => {
       'stream.p2p_restart',
       'stream.stop',
     ])
+    const sentEvents = socket?.sent.map((payload) => JSON.parse(payload)) ?? []
+    expect(sentEvents.find((event) => event.type === 'stream.start')?.data.renditions).toEqual(renditions)
+    expect(sentEvents.find((event) => event.type === 'stream.watch')?.data).toMatchObject({
+      supported_dynamic_ranges: ['sdr', 'hdr10'],
+      codec_profiles: [{ codec: 'av1', profile: 'main10' }],
+    })
 
     client.close()
   })

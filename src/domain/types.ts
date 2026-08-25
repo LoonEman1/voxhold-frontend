@@ -223,6 +223,29 @@ export interface VoiceWebRTCClosed {
 
 export type StreamMode = 'server' | 'p2p'
 export type StreamCodec = 'vp8' | 'vp9' | 'h264' | 'av1'
+export type StreamDynamicRange = 'sdr' | 'hdr10' | 'hlg'
+export type StreamColorPrimaries = 'bt709' | 'bt2020'
+export type StreamTransfer = 'bt709' | 'pq' | 'hlg'
+export type StreamMatrix = 'bt709' | 'bt2020-ncl'
+
+export interface StreamCodecProfile {
+  codec: StreamCodec
+  profile: string
+}
+
+export interface StreamRendition extends StreamCodecProfile {
+  id: string
+  dynamic_range: StreamDynamicRange
+  bit_depth: 8 | 10
+  color_primaries: StreamColorPrimaries
+  transfer: StreamTransfer
+  matrix: StreamMatrix
+}
+
+export interface StreamWatchCapabilities {
+  supported_dynamic_ranges: StreamDynamicRange[]
+  codec_profiles: StreamCodecProfile[]
+}
 
 export interface ActiveStream {
   server_id: EntityId
@@ -233,6 +256,8 @@ export interface ActiveStream {
   codec: StreamCodec
   has_audio: boolean
   viewer_count: number
+  /** Optional while connecting to a protocol v5 backend. */
+  renditions?: StreamRendition[]
 }
 
 export interface StreamSnapshot {
@@ -242,6 +267,8 @@ export interface StreamSnapshot {
 export interface StreamWatching {
   stream: ActiveStream
   viewer_connection_id: string
+  /** Missing on a protocol v5 backend; clients must then treat playback as SDR. */
+  selected_rendition_id?: string
 }
 
 export interface StreamStopped {
