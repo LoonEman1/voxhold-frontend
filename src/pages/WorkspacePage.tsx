@@ -22,7 +22,7 @@ import {
   ProfileDialog,
   ServerSettingsDialog,
 } from '../components/WorkspaceDialogs'
-import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, VoiceParticipant } from '../domain/types'
+import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
@@ -30,6 +30,8 @@ import { roleMeta } from '../lib/roles'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
+import { capturedHDRProbe } from '../services/hdrCapabilities'
+import { createHDRPublishPipeline, type HDRPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { BrowserVoiceInput } from '../services/voiceInput'
@@ -126,6 +128,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const streamRoleRef = useRef<'publisher' | 'viewer' | null>(streamRole)
   const streamPreferencesRef = useRef(streamPreferences)
   const streamCaptureRef = useRef<MediaStream | null>(null)
+  const hdrPipelineRef = useRef<HDRPublishPipeline | null>(null)
   const serverStreamRef = useRef<BrowserServerStreamSession | null>(null)
   const p2pStreamPublisherRef = useRef<BrowserP2PStreamPublisher | null>(null)
   const p2pStreamViewerRef = useRef<BrowserP2PStreamViewer | null>(null)
@@ -409,6 +412,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [])
 
   const closeStreamLocally = useCallback(() => {
+    hdrPipelineRef.current?.close()
+    hdrPipelineRef.current = null
     serverStreamRef.current?.close()
     p2pStreamPublisherRef.current?.close()
     p2pStreamViewerRef.current?.close()
@@ -436,6 +441,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * the "unexpected signalling offline" path, not a user leave.
    */
   const detachMediaPeers = useCallback(() => {
+    hdrPipelineRef.current?.close()
+    hdrPipelineRef.current = null
     serverStreamRef.current?.close()
     p2pStreamPublisherRef.current?.close()
     p2pStreamViewerRef.current?.close()
@@ -1161,8 +1168,28 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       streamCaptureRef.current = capture
       streamRoleRef.current = 'publisher'
       setStreamRole('publisher')
-      setStreamMedia(capture)
       setStreamStatus('signaling')
+
+      let publishStream = capture
+      let renditions: StreamRendition[] | undefined
+      if (preferences.mode === 'server' && preferences.dynamicRange === 'hdr') {
+        const probe = capturedHDRProbe(capture)
+        if (!probe?.supported) {
+          throw new Error(probe?.reason || 'HDR-источник не прошёл проверку 10-bit BT.2020 PQ/HLG')
+        }
+        const pipeline = await createHDRPublishPipeline(capture, codec, probe, (error) => {
+          clientDiagnostics.record('media', 'hdr_pipeline_failed', 'error', { reason: error.message })
+          failStream(error)
+        })
+        if (streamRoleRef.current !== 'publisher') {
+          pipeline.close()
+          return
+        }
+        hdrPipelineRef.current = pipeline
+        publishStream = pipeline.stream
+        renditions = pipeline.renditions
+      }
+      setStreamMedia(publishStream)
 
       const ended = () => {
         if (streamCaptureRef.current !== capture) return
@@ -1183,7 +1210,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       }
       if (preferences.mode === 'server') {
         serverStreamRef.current = new BrowserServerStreamSession({
-          localStream: capture,
+          localStream: publishStream,
+          renditions,
           preferences,
           codec,
           iceConfiguration,
@@ -1213,6 +1241,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         preferences.mode,
         codec,
         capture.getAudioTracks().length > 0,
+        renditions,
       )
       if (!trackStreamRequest(requestId, 'start')) throw new Error('Realtime-соединение недоступно')
       if (preferences.includeAudio && capture.getAudioTracks().length === 0) {

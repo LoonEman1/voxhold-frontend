@@ -97,10 +97,12 @@ function processingCapabilities(): HDRProcessingCapabilities {
   const scope = globalThis as typeof globalThis & {
     MediaStreamTrackProcessor?: TrackProcessorConstructor
     VideoTrackGenerator?: unknown
+    MediaStreamTrackGenerator?: unknown
   }
   return {
     trackProcessor: typeof scope.MediaStreamTrackProcessor === 'function',
-    trackGenerator: typeof scope.VideoTrackGenerator === 'function',
+    trackGenerator: typeof scope.VideoTrackGenerator === 'function'
+      || typeof scope.MediaStreamTrackGenerator === 'function',
     webGPU: typeof navigator !== 'undefined' && !!(navigator as Navigator & { gpu?: unknown }).gpu,
   }
 }
