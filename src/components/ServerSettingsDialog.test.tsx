@@ -64,4 +64,46 @@ describe('ServerSettingsDialog CORS settings', () => {
 
     expect(view.queryByLabelText('Разрешённые origin')).toBeNull()
   })
+
+  it('renders safely when the CORS origins payload is null', () => {
+    const view = render(
+      <ServerSettingsDialog
+        open
+        onClose={() => undefined}
+        server={owner}
+        corsOrigins={null}
+        corsOriginsLoading={false}
+        onRename={async () => undefined}
+        onDeleteAccount={async () => undefined}
+        onDownloadDiagnostics={async () => undefined}
+        onSaveCorsOrigins={async () => []}
+      />,
+    )
+
+    const input = view.getByLabelText('Разрешённые origin') as HTMLTextAreaElement
+    expect(input.value).toBe('')
+  })
+
+  it('keeps the CORS textarea usable when saving resolves null', async () => {
+    const view = render(
+      <ServerSettingsDialog
+        open
+        onClose={() => undefined}
+        server={owner}
+        corsOrigins={['https://first.example.com']}
+        corsOriginsLoading={false}
+        onRename={async () => undefined}
+        onDeleteAccount={async () => undefined}
+        onDownloadDiagnostics={async () => undefined}
+        onSaveCorsOrigins={async () => null as unknown as string[]}
+      />,
+    )
+
+    fireEvent.click(view.getByRole('button', { name: 'Сохранить CORS' }))
+
+    await waitFor(() => {
+      const input = view.getByLabelText('Разрешённые origin') as HTMLTextAreaElement
+      expect(input.value).toBe('')
+    })
+  })
 })
