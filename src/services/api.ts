@@ -23,6 +23,7 @@ import type {
   WebRTCConfigPayload,
 } from '../domain/types'
 import type { Transport, TransportRequest } from '../platform/transport'
+import { notifyUnauthorized } from './authEvents'
 
 export class ApiError extends Error {
   constructor(
@@ -45,6 +46,11 @@ async function unwrap<T>(transport: Transport, request: TransportRequest): Promi
 
   if (response.status < 200 || response.status >= 300) {
     const payload = response.data as ApiErrorPayload | null
+    if (response.status === 401) {
+      // Single source of truth for session loss: AuthProvider listens and
+      // expires the stored session; call sites no longer duplicate this.
+      notifyUnauthorized()
+    }
     throw new ApiError(payload?.error || 'Сервер вернул ошибку', response.status)
   }
 

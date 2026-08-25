@@ -39,6 +39,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint
+        run: npm run lint
+        # Non-blocking while the hook-dependency warning baseline is cleaned
+        # up; flip to blocking once warnings reach zero.
+        continue-on-error: true
+
       - name: Test
         run: npm test
 

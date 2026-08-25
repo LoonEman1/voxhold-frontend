@@ -28,7 +28,6 @@ import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import type { VoxholdApi } from '../services/api'
-import { ApiError } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
@@ -243,12 +242,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const pinnedMessageIds = useMemo(() => new Set(pinnedMessages.map((pin) => pin.message.id)), [pinnedMessages])
 
   const handleError = useCallback((error: unknown, fallback = 'Не удалось выполнить действие') => {
-    if (error instanceof ApiError && error.status === 401) {
-      expire()
-      return
-    }
+    // 401 handled centrally: api.unwrap() notifies AuthProvider, which
+    // expires the session (see authEvents).
     notify(error instanceof Error ? humanError(error) : fallback, 'error')
-  }, [expire, notify])
+  }, [notify])
 
   // The backend is the single runtime source of ICE configuration. Media start
   // awaits this promise so peers never get created in an undefined race.
@@ -355,8 +352,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       pendingReadMarksRef.current.delete(channelId)
       void api.reads.mark(token, queued.serverId, channelId, queued.messageId)
         .then(applyChannelRead)
-        .catch((error: unknown) => {
-          if (error instanceof ApiError && error.status === 401) expire()
+        .catch(() => {
+          // 401 is handled centrally via authEvents.
         })
     }, 220)
     pendingReadMarksRef.current.set(channelId, { serverId, messageId: target, timer })
@@ -1034,15 +1031,16 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!input) return
     if (voiceSessionRef.current !== pending) return
 
-    let media: BrowserVoiceSession
-    const fail = (error: unknown) => {
+    // Function declaration (not arrow) so it can close over `media`
+    // before initialization; only invoked after construction.
+    function fail(error: unknown) {
       if (voiceMediaRef.current !== media) return
       const activeClient = realtimeRef.current
       if (voiceSessionRef.current?.connectionId) trackVoiceRequest(activeClient?.leaveVoice() ?? null, 'leave')
       setVoiceError(voiceErrorMessage(error))
       closeVoiceLocally()
     }
-    media = new BrowserVoiceSession({
+    const media = new BrowserVoiceSession({
       input,
       iceConfiguration,
       onAnswer: (sdp) => trackVoiceRequest(realtimeRef.current?.answerVoice(sdp) ?? null, 'media'),
@@ -1322,7 +1320,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       return
     }
 
-    let input = voiceInputRef.current
+    const input = voiceInputRef.current
     if ((!input || !input.isHealthy) && input) await input.retry().catch(() => undefined)
     if (!input || !input.isHealthy) {
       coordinator.fail('microphone lost during disconnect')
@@ -1643,7 +1641,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setViewedProfile(await api.profile.byUser(token, userId))
     } catch (error) {
       setViewedProfileError(humanError(error))
-      if (error instanceof ApiError && error.status === 401) expire()
     } finally {
       setViewedProfileLoading(false)
     }
@@ -1795,7 +1792,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       if (hasNewerRef.current) await returnToLatest()
       else setMessages((current) => current.some((item) => item.id === created.id) ? current : [...current, created])
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) expire()
       throw new Error(humanError(error))
     }
   }
@@ -1807,7 +1803,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setMessages((current) => current.map((message) => message.id === updated.id ? updated : message))
       setPinnedMessages((current) => current.map((pin) => pin.message.id === updated.id ? { ...pin, message: updated } : pin))
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) expire()
       throw new Error(humanError(error))
     }
   }
@@ -1819,7 +1814,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setMessages((current) => current.filter((message) => message.id !== messageId))
       setPinnedMessages((current) => current.filter((pin) => pin.message.id !== messageId))
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) expire()
       throw new Error(humanError(error))
     }
   }
@@ -1835,7 +1829,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setPinnedMessages((current) => upsertPinnedMessage(current, pin))
       }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) expire()
       throw new Error(humanError(error))
     }
   }

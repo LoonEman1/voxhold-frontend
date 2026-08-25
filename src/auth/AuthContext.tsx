@@ -11,12 +11,13 @@ import {
 import type { AuthPayload, User } from '../domain/types'
 import type { SessionStorageAdapter } from '../platform/transport'
 import type { VoxholdApi } from '../services/api'
+import { onUnauthorized } from '../services/authEvents'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 const STORAGE_KEY = 'voxhold.session.v1'
 const REFRESH_MARGIN_SECONDS = 5 * 60
 
-interface PersistedAuth extends AuthPayload {}
+type PersistedAuth = AuthPayload
 
 interface AuthContextValue {
   user: User | null
@@ -59,6 +60,15 @@ export function AuthProvider({
   )
 
   const expire = useCallback(() => persist(null), [persist])
+
+  // Any API 401 anywhere in the app expires the local session exactly here.
+  useEffect(
+    () =>
+      onUnauthorized(() => {
+        if (authRef.current) persist(null)
+      }),
+    [persist],
+  )
 
   useEffect(() => {
     const current = authRef.current
