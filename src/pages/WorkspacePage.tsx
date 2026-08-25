@@ -22,7 +22,7 @@ import {
   ProfileDialog,
   ServerSettingsDialog,
 } from '../components/WorkspaceDialogs'
-import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, StreamRendition, VoiceParticipant } from '../domain/types'
+import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
@@ -30,7 +30,7 @@ import { roleMeta } from '../lib/roles'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
-import { capturedHDRProbe } from '../services/hdrCapabilities'
+import { capturedHDRProbe, detectHDRCapabilities, streamWatchCapabilities } from '../services/hdrCapabilities'
 import { createHDRPublishPipeline, type HDRPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
@@ -132,6 +132,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const serverStreamRef = useRef<BrowserServerStreamSession | null>(null)
   const p2pStreamPublisherRef = useRef<BrowserP2PStreamPublisher | null>(null)
   const p2pStreamViewerRef = useRef<BrowserP2PStreamViewer | null>(null)
+  const streamDynamicRangeRef = useRef<StreamDynamicRange>('sdr')
+  const streamRewatchCountRef = useRef(0)
+  const pendingStreamRewatchRef = useRef<{ forceSDR: boolean } | null>(null)
+  const streamWatchActionRef = useRef<(forceSDR: boolean, rewatch: boolean) => void>(() => undefined)
   const serversRef = useRef<Server[]>(servers)
   const channelsRef = useRef<Channel[]>(channels)
   const channelReadsRef = useRef(channelReads)
@@ -431,6 +435,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamRole(null)
     setStreamMedia(null)
     setStreamQuality(null)
+    streamDynamicRangeRef.current = 'sdr'
     setStreamStatus('idle')
     setStreamExpanded(false)
   }, [])
@@ -935,15 +940,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onStreamLeft: () => {
         if (recoveryRef.current?.staleConnectionId()) return
+        const pendingRewatch = pendingStreamRewatchRef.current
+        pendingStreamRewatchRef.current = null
         closeStreamLocally()
+        if (pendingRewatch) {
+          queueMicrotask(() => streamWatchActionRef.current(pendingRewatch.forceSDR, true))
+        }
       },
-      onStreamWatching: (event) => upsertStream(event.stream),
+      onStreamWatching: (event) => {
+        upsertStream(event.stream)
+        const selected = event.stream.renditions?.find((value) => value.id === event.selected_rendition_id)
+        streamDynamicRangeRef.current = selected?.dynamic_range ?? 'sdr'
+      },
       onStreamViewerJoined: (viewer) => { void p2pStreamPublisherRef.current?.addViewer(viewer.connection_id) },
       onStreamViewerLeft: (viewer) => p2pStreamPublisherRef.current?.removeViewer(viewer.connection_id),
       onStreamWebRTCOffer: (offer) => { void serverStreamRef.current?.acceptOffer(offer.sdp) },
       onStreamICECandidate: (candidate) => { void serverStreamRef.current?.addICECandidate(candidate) },
       onStreamWebRTCClosed: (event) => {
         if (recoveryRef.current?.staleConnectionId()) return
+        if (pendingStreamRewatchRef.current) return
         setStreamError(streamCloseMessage(event.reason))
         closeStreamLocally()
       },
@@ -964,6 +979,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         if (!event.request_id) return
         const streamKind = streamRequestIdsRef.current.get(event.request_id)
         streamRequestIdsRef.current.delete(event.request_id)
+        if (streamKind === 'leave' && pendingStreamRewatchRef.current) {
+          pendingStreamRewatchRef.current = null
+          setStreamError(streamRealtimeError(event.message))
+          closeStreamLocally()
+          return
+        }
         if (streamKind && streamKind !== 'leave') {
           setStreamError(streamRealtimeError(event.message))
           closeStreamLocally()
@@ -1252,7 +1273,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
   }
 
-  const watchStream = async () => {
+  const watchStream = async (forceSDR = false, rewatch = false) => {
     const activeVoice = voiceSessionRef.current
     const client = realtimeRef.current
     const channel = selectedChannel
@@ -1270,6 +1291,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       return
     }
 
+    if (!rewatch) streamRewatchCountRef.current = 0
     setStreamError('')
     streamRoleRef.current = 'viewer'
     setStreamRole('viewer')
@@ -1283,6 +1305,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       else if (state === 'failed') setStreamStatus('signaling')
     }
     const remoteStream = (media: MediaStream) => setStreamMedia(media)
+    const reportQuality = (stats: StreamQualityStats) => setStreamQuality({
+      ...stats,
+      dynamicRange: streamDynamicRangeRef.current,
+    })
+    const watchCapabilities = activeStream.mode === 'server'
+      ? streamWatchCapabilities(await detectHDRCapabilities(), forceSDR)
+      : undefined
+    if (streamRoleRef.current !== 'viewer') return
     if (activeStream.mode === 'server') {
       serverStreamRef.current = new BrowserServerStreamSession({
         preferences: streamPreferencesRef.current,
@@ -1298,14 +1328,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         },
         onRequestRewatch: () => {
           const client = realtimeRef.current
+          if (streamRewatchCountRef.current >= 1) {
+            failStream(new Error('HDR/SDR decoder recovery exhausted'))
+            return
+          }
+          streamRewatchCountRef.current += 1
+          pendingStreamRewatchRef.current = {
+            forceSDR: streamDynamicRangeRef.current !== 'sdr',
+          }
           serverStreamRef.current?.close()
           serverStreamRef.current = null
-          trackStreamRequest(client?.leaveStream() ?? null, 'leave')
-          watchStream()
+          if (!trackStreamRequest(client?.leaveStream() ?? null, 'leave')) {
+            pendingStreamRewatchRef.current = null
+            failStream(new Error('Realtime-соединение недоступно для SDR fallback'))
+          }
         },
         onRemoteStream: remoteStream,
         onConnectionStateChange: connectionState,
-        onQualityStats: setStreamQuality,
+        onQualityStats: reportQuality,
         onError: failStream,
       })
     } else {
@@ -1316,13 +1356,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         onRestartRequest: (target) => trackStreamRequest(realtimeRef.current?.requestStreamP2PRestart(target) ?? null, 'media'),
         onRemoteStream: remoteStream,
         onConnectionStateChange: connectionState,
-        onQualityStats: setStreamQuality,
+        onQualityStats: reportQuality,
         onError: failStream,
       })
     }
-    if (!trackStreamRequest(client.watchStream(selectedServerId, channel.id), 'watch')) {
+    if (!trackStreamRequest(client.watchStream(selectedServerId, channel.id, watchCapabilities), 'watch')) {
       failStream(new Error('Realtime-соединение недоступно'))
     }
+  }
+
+  streamWatchActionRef.current = (forceSDR, rewatch) => {
+    void watchStream(forceSDR, rewatch)
   }
 
   const finishFailedRecovery = useCallback((message: string) => {
@@ -1476,6 +1520,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!role) return
     // An explicit stop releases the stashed capture immediately.
     clearCapturedStreamStash(true)
+    pendingStreamRewatchRef.current = null
     const channelId = voiceSessionRef.current?.channelId
     trackStreamRequest(
       role === 'publisher'

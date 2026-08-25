@@ -1,4 +1,4 @@
-import type { StreamCodecProfile, StreamDynamicRange } from '../domain/types'
+import type { StreamCodecProfile, StreamDynamicRange, StreamWatchCapabilities } from '../domain/types'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 export interface HDROutputCapabilities {
@@ -196,12 +196,13 @@ async function probeCodec(config: typeof HDR_CODEC_CONFIGS[number]): Promise<HDR
     await decoder.flush()
     const frame = decoded[0]
     if (!codecFailed && frame) {
-      result.roundTrip = classifyHDRFrame({
+      const classification = classifyHDRFrame({
         format: frame.format,
         primaries: frame.colorSpace.primaries,
         transfer: frame.colorSpace.transfer,
         matrix: frame.colorSpace.matrix,
-      }).valid
+      })
+      result.roundTrip = classification.valid && probeHDRFrameRender(frame)
     }
   } catch {
     result.roundTrip = false
@@ -212,6 +213,19 @@ async function probeCodec(config: typeof HDR_CODEC_CONFIGS[number]): Promise<HDR
     if (decoder && decoder.state !== 'closed') decoder.close()
   }
   return result
+}
+
+function probeHDRFrameRender(frame: VideoFrame): boolean {
+  if (typeof OffscreenCanvas === 'undefined') return false
+  try {
+    const canvas = new OffscreenCanvas(Math.max(1, frame.displayWidth), Math.max(1, frame.displayHeight))
+    const context = canvas.getContext('2d')
+    if (!context) return false
+    context.drawImage(frame, 0, 0, canvas.width, canvas.height)
+    return context.getImageData(0, 0, 1, 1).data.length === 4
+  } catch {
+    return false
+  }
 }
 
 export function detectHDRCapabilities(): Promise<HDRCapabilities> {
@@ -229,7 +243,7 @@ export function detectHDRCapabilities(): Promise<HDRCapabilities> {
     const outputReady = output.dynamicRange === 'high' && output.gamut !== 'srgb'
     const processingReady = processing.trackProcessor && processing.trackGenerator && processing.webGPU
     const canPublishHDR = outputReady && processingReady && codecProfiles.length > 0
-    const canViewHDR = outputReady && codecs.some((codec) => codec.decoder)
+    const canViewHDR = outputReady && codecProfiles.length > 0
     const reason = !outputReady
       ? 'HDR-вывод или широкий цветовой охват не обнаружен'
       : !processingReady
@@ -250,6 +264,19 @@ export function detectHDRCapabilities(): Promise<HDRCapabilities> {
     return result
   })()
   return cachedCapabilities
+}
+
+export function streamWatchCapabilities(
+  capabilities: HDRCapabilities,
+  forceSDR = false,
+): StreamWatchCapabilities {
+  if (forceSDR || !capabilities.canViewHDR) {
+    return { supported_dynamic_ranges: ['sdr'], codec_profiles: [] }
+  }
+  return {
+    supported_dynamic_ranges: ['sdr', 'hdr10', 'hlg'],
+    codec_profiles: capabilities.codecProfiles.map((profile) => ({ ...profile })),
+  }
 }
 
 export async function probeCapturedHDRTrack(

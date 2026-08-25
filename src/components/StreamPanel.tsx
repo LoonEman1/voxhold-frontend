@@ -53,11 +53,12 @@ export function StreamPanel({ stream, currentUserId, voiceActive, status, error,
     onPreferencesChange({ ...preferences, playbackVolume: Math.max(0, Math.min(100, value)) })
   }
   const liveLabel = isPublisher ? 'Ваш предпросмотр' : playbackState === 'playing' ? 'В эфире' : 'Подключение…'
+  const rangeLabel = quality?.dynamicRange === 'hdr10' ? 'HDR10' : quality?.dynamicRange === 'hlg' ? 'HLG' : quality?.dynamicRange === 'sdr' ? 'SDR' : ''
 
   return <section className="stream-panel">
     <header>
       <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА</span><h3>{stream ? `В эфире · ${stream.viewer_count} зр.` : 'Подключение трансляции…'}</h3></div>
-      <div className="stream-badges"><span className="stream-mode">{stream?.codec?.toUpperCase() ?? preferences.codec.toUpperCase()}</span><span className="stream-mode">{stream?.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span>{media && <button className="stream-expand-button" type="button" onClick={onExpand} title="Открыть трансляцию на весь экран"><Icon name="maximize" size={16}/><span>На весь экран</span></button>}</div>
+      <div className="stream-badges"><span className="stream-mode">{stream?.codec?.toUpperCase() ?? preferences.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream?.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span>{media && <button className="stream-expand-button" type="button" onClick={onExpand} title="Открыть трансляцию на весь экран"><Icon name="maximize" size={16}/><span>На весь экран</span></button>}</div>
     </header>
 
     {media && <div className="stream-video">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyHDRFrame, detectHDROutputCapabilities } from './hdrCapabilities'
+import { classifyHDRFrame, detectHDROutputCapabilities, streamWatchCapabilities, type HDRCapabilities } from './hdrCapabilities'
 
 describe('HDR capability detection', () => {
   it('keeps output dynamic range and gamut as independent facts', () => {
@@ -23,5 +23,25 @@ describe('HDR capability detection', () => {
       .toBe(false)
     expect(classifyHDRFrame({ format: 'I010', primaries: 'bt709', transfer: 'smpte-st-2084', matrix: 'bt709' }).valid)
       .toBe(false)
+  })
+
+  it('advertises HDR profiles only after the full viewer gate', () => {
+    const capabilities: HDRCapabilities = {
+      output: { dynamicRange: 'high', gamut: 'rec2020' },
+      processing: { trackProcessor: true, trackGenerator: true, webGPU: true },
+      codecs: [],
+      codecProfiles: [{ codec: 'vp9', profile: '2' }],
+      canPublishHDR: true,
+      canViewHDR: true,
+      reason: '',
+    }
+    expect(streamWatchCapabilities(capabilities)).toEqual({
+      supported_dynamic_ranges: ['sdr', 'hdr10', 'hlg'],
+      codec_profiles: [{ codec: 'vp9', profile: '2' }],
+    })
+    expect(streamWatchCapabilities(capabilities, true)).toEqual({
+      supported_dynamic_ranges: ['sdr'],
+      codec_profiles: [],
+    })
   })
 })

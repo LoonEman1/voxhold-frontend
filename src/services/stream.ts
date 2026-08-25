@@ -1,4 +1,4 @@
-import type { StreamCodec, StreamICECandidate, StreamRendition } from '../domain/types'
+import type { StreamCodec, StreamDynamicRange, StreamICECandidate, StreamRendition } from '../domain/types'
 import { normalizeStreamPreferences, selectedStreamResolution, type StreamPreferences } from './streamSettings'
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
@@ -17,6 +17,7 @@ export interface StreamQualityStats {
   height: number
   packetsLost: number
   qualityLimitationReason: 'none' | 'cpu' | 'bandwidth' | 'other' | ''
+  dynamicRange?: StreamDynamicRange
 }
 
 interface MediaCallbacks {
