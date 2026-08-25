@@ -25,6 +25,10 @@ export interface InstanceMetadata {
   created_at: number
 }
 
+export interface CorsOriginsPayload {
+  origins: string[]
+}
+
 export type ServerRole = 'owner' | 'admin' | 'member'
 
 export interface Server {

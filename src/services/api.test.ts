@@ -53,6 +53,26 @@ describe('Voxhold API client', () => {
     })
   })
 
+  it('reads and replaces the runtime CORS allowlist', async () => {
+    const payload = { origins: ['https://client.example.com'] }
+    const { api, request } = mockTransport({ status: 200, data: payload })
+
+    await expect(api.corsOrigins.get('session')).resolves.toEqual(payload)
+    await expect(api.corsOrigins.replace('session', payload.origins)).resolves.toEqual(payload)
+
+    expect(request).toHaveBeenNthCalledWith(1, {
+      path: '/api/v1/instance/cors-origins',
+      signal: undefined,
+      token: 'session',
+    })
+    expect(request).toHaveBeenNthCalledWith(2, {
+      path: '/api/v1/instance/cors-origins',
+      method: 'PUT',
+      body: payload,
+      token: 'session',
+    })
+  })
+
   it('sends the invite token during registration', async () => {
     const payload = {
       user: { id: 8, username: 'mira', created_at: 1 },

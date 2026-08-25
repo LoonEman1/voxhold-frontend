@@ -9,6 +9,7 @@ import type {
   InstanceMetadata,
   InviteLinkPreview,
   CreatedInviteLink,
+  CorsOriginsPayload,
   Message,
   MessageContext,
   MessagePage,
@@ -67,6 +68,19 @@ export function createApi(transport: Transport) {
     instance: {
       get: (signal?: AbortSignal) =>
         unwrap<InstanceMetadata>(transport, { path: '/api/v1/instance', signal }),
+    },
+    corsOrigins: {
+      get: (token: string, signal?: AbortSignal) =>
+        authorized(token, {
+          path: '/api/v1/instance/cors-origins',
+          signal,
+        }) as Promise<CorsOriginsPayload>,
+      replace: (token: string, origins: string[]) =>
+        authorized(token, {
+          path: '/api/v1/instance/cors-origins',
+          method: 'PUT',
+          body: { origins },
+        }) as Promise<CorsOriginsPayload>,
     },
     auth: {
       login: (username: string, password: string) =>
