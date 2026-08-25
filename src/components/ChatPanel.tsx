@@ -38,6 +38,7 @@ function sameDay(left: number, right: number) {
 }
 
 export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+	const channelId = channel?.id ?? null
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
@@ -83,16 +84,16 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
   useLayoutEffect(() => {
     const container = scrollRef.current
     if (!container) return
-    if (!channel) {
+    if (channelId === null) {
       previousChannel.current = null
       pendingChannelScroll.current = null
       previousMessageCount.current = 0
       return
     }
-    const channelChanged = previousChannel.current !== channel.id
+    const channelChanged = previousChannel.current !== channelId
     if (channelChanged) {
-      previousChannel.current = channel.id
-      pendingChannelScroll.current = channel.id
+      previousChannel.current = channelId
+      pendingChannelScroll.current = channelId
       previousMessageCount.current = 0
       previousFocus.current = null
     }
@@ -108,7 +109,7 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
         return
       }
     }
-    if (pendingChannelScroll.current === channel.id) {
+    if (pendingChannelScroll.current === channelId) {
       container.scrollTop = container.scrollHeight
       pendingChannelScroll.current = null
       previousMessageCount.current = messages.length
@@ -119,7 +120,7 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
       container.scrollTop = container.scrollHeight
     }
     previousMessageCount.current = messages.length
-  }, [channel, focusedMessageId, loading, messages])
+  }, [channelId, focusedMessageId, loading, messages])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -201,12 +202,12 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
     setActionError(null)
     setReceiptMessageId(null)
     previousFocus.current = null
-    if (!channel) {
+    if (channelId === null) {
       previousChannel.current = null
       pendingChannelScroll.current = null
       previousMessageCount.current = 0
     }
-  }, [channel?.id])
+  }, [channelId])
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault()

@@ -1,10 +1,11 @@
-import type { StreamCodec, StreamICECandidate } from '../domain/types'
+import type { StreamCodec, StreamDynamicRange, StreamICECandidate, StreamRendition } from '../domain/types'
 import { normalizeStreamPreferences, selectedStreamResolution, type StreamPreferences } from './streamSettings'
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
 import { DecodeWatchdog, sampleInboundVideoStats } from './mediaRecovery'
+import { detectHDRCapabilities, probeCapturedHDRTrack, rememberHDRCaptureProbe } from './hdrCapabilities'
 
 export type StreamConnectionState = RTCPeerConnectionState
 
@@ -16,6 +17,7 @@ export interface StreamQualityStats {
   height: number
   packetsLost: number
   qualityLimitationReason: 'none' | 'cpu' | 'bandwidth' | 'other' | ''
+  dynamicRange?: StreamDynamicRange
 }
 
 interface MediaCallbacks {
@@ -74,14 +76,15 @@ function isSupportedH264Fmtp(fmtpLine: string | undefined | null): boolean {
 function codecCapabilities(
   capabilities: RTCRtpCapabilities | null | undefined,
   codec: StreamCodec,
+  profile?: string,
 ) {
   return (capabilities?.codecs ?? []).filter((candidate) => {
     if (candidate.mimeType.toLowerCase() !== STREAM_CODEC_MIME[codec]) return false
     const format = candidate.sdpFmtpLine ?? ''
     if (codec === 'vp9') {
       const parsed = format === '' ? new Map<string, string>() : parseFmtp(format)
-      const profile = parsed.get('profile-id')
-      return profile === undefined || profile === '0'
+      const candidateProfile = parsed.get('profile-id') ?? '0'
+      return candidateProfile === (profile || '0')
     }
     if (codec === 'h264') return isSupportedH264Fmtp(format)
     return true
@@ -126,8 +129,9 @@ export function selectedStreamCodec(preferences: StreamPreferences, role: CodecR
 function reorderCodecPreferences(
   capabilities: RTCRtpCapabilities | null | undefined,
   codec: StreamCodec,
+  profile?: string,
 ) {
-  const selected = codecCapabilities(capabilities, codec)
+  const selected = codecCapabilities(capabilities, codec, profile)
   if (!capabilities || !selected.length) return null
   const selectedIds = new Set(selected.map((item) => item.mimeType.toLowerCase() + '|' + (item.sdpFmtpLine ?? '')))
   const rest = (capabilities.codecs ?? []).filter(
@@ -136,12 +140,12 @@ function reorderCodecPreferences(
   return [...selected, ...rest]
 }
 
-function preferCodec(transceiver: RTCRtpTransceiver, codec: StreamCodec) {
+function preferCodec(transceiver: RTCRtpTransceiver, codec: StreamCodec, profile?: string) {
   if (!transceiver.setCodecPreferences || typeof RTCRtpReceiver.getCapabilities !== 'function') {
     clientDiagnostics.record('webrtc', 'stream_codec_preferences_unavailable', 'warn', { codec })
     return
   }
-  const reordered = reorderCodecPreferences(RTCRtpReceiver.getCapabilities('video'), codec)
+  const reordered = reorderCodecPreferences(RTCRtpReceiver.getCapabilities('video'), codec, profile)
   if (!reordered) {
     clientDiagnostics.record('webrtc', 'stream_codec_unavailable', 'warn', { codec })
     return
@@ -437,11 +441,24 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
     height: settings.height ?? null,
     frame_rate: settings.frameRate ?? null,
   })
+  if (preferences.dynamicRange === 'hdr' && preferences.mode === 'server') {
+    const capabilities = await detectHDRCapabilities()
+    const probe = await probeCapturedHDRTrack(video, capabilities)
+    rememberHDRCaptureProbe(media, probe)
+    clientDiagnostics.record('media', 'hdr_capture_probe', probe.supported ? 'info' : 'warn', {
+      source_range: probe.sourceRange,
+      bit_depth: probe.bitDepth,
+      codec_profile: probe.codecProfile ? `${probe.codecProfile.codec}:${probe.codecProfile.profile}` : '',
+      reason: probe.reason,
+    })
+  }
   return media
 }
 
 interface ServerSessionOptions extends MediaCallbacks {
   localStream?: MediaStream
+  /** Publisher video tracks and rendition metadata use the same stable order. */
+  renditions?: StreamRendition[]
   preferences: StreamPreferences
   codec: StreamCodec
   iceConfiguration?: RTCConfiguration
@@ -519,15 +536,27 @@ export class BrowserServerStreamSession {
         }
       }
       if (this.options.localStream && !this.tracksAdded) {
-        // The backend offer is already restricted to the announced codec
-        // family plus its RTX pair; the client must not re-filter codecs.
-        for (const track of this.options.localStream.getTracks()) {
-          const transceiver = this.peer.getTransceivers().find((item) => item.receiver.track.kind === track.kind && !item.sender.track)
+        const videoTracks = this.options.localStream.getVideoTracks()
+        const audioTracks = this.options.localStream.getAudioTracks()
+        for (const [index, track] of videoTracks.entries()) {
+          const rendition = this.options.renditions?.[index]
+          const transceiver = this.peer.getTransceivers().find((item) => item.receiver.track.kind === 'video' && !item.sender.track)
+          if (transceiver) {
+            transceiver.direction = 'sendonly'
+            await transceiver.sender.replaceTrack(track)
+            preferCodec(transceiver, rendition?.codec ?? this.options.codec, rendition?.profile)
+          } else {
+            const created = this.peer.addTransceiver(track, { direction: 'sendonly', streams: [this.options.localStream] })
+            preferCodec(created, rendition?.codec ?? this.options.codec, rendition?.profile)
+          }
+        }
+        for (const track of audioTracks) {
+          const transceiver = this.peer.getTransceivers().find((item) => item.receiver.track.kind === 'audio' && !item.sender.track)
           if (transceiver) {
             transceiver.direction = 'sendonly'
             await transceiver.sender.replaceTrack(track)
           } else {
-            this.peer.addTransceiver(track, { direction: 'sendonly', streams: [this.options.localStream!] })
+            this.peer.addTransceiver(track, { direction: 'sendonly', streams: [this.options.localStream] })
           }
         }
         this.tracksAdded = true

@@ -36,6 +36,13 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
     preferences.deafenShortcut,
     preferences.pushToTalkShortcut,
   ]).size < 3
+	const previewInputDeviceId = preferences.inputDeviceId
+	const previewAutoGainControl = preferences.autoGainControl
+	const previewEchoCancellation = preferences.echoCancellation
+	const previewNoiseSuppression = preferences.noiseSuppression
+	const previewNoiseSuppressionMode = preferences.noiseSuppressionMode
+	const previewInputVolumeRef = useRef(preferences.inputVolume)
+	previewInputVolumeRef.current = preferences.inputVolume
 
   useEffect(() => {
     if (previewGainRef.current) previewGainRef.current.gain.value = preferences.inputVolume / 100
@@ -55,7 +62,14 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
     const start = async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: inputConstraints(preferences),
+          audio: inputConstraints({
+				...DEFAULT_VOICE_PREFERENCES,
+				inputDeviceId: previewInputDeviceId,
+				autoGainControl: previewAutoGainControl,
+				echoCancellation: previewEchoCancellation,
+				noiseSuppression: previewNoiseSuppression,
+				noiseSuppressionMode: previewNoiseSuppressionMode,
+			}),
           video: false,
         })
         if (stopped) {
@@ -67,7 +81,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
         const gain = context.createGain()
         const analyser = context.createAnalyser()
         const silent = context.createGain()
-        gain.gain.value = preferences.inputVolume / 100
+        gain.gain.value = previewInputVolumeRef.current / 100
         silent.gain.value = 0
         analyser.fftSize = 256
         analyser.smoothingTimeConstant = .72
@@ -106,7 +120,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
       void context?.close().catch(() => undefined)
       setPreviewLevel(0)
     }
-  }, [open, voiceActive, preferences.inputDeviceId, preferences.autoGainControl, preferences.echoCancellation, preferences.noiseSuppression, preferences.noiseSuppressionMode, onRefreshDevices])
+  }, [open, voiceActive, previewInputDeviceId, previewAutoGainControl, previewEchoCancellation, previewNoiseSuppression, previewNoiseSuppressionMode, onRefreshDevices])
 
   const patch = <K extends keyof VoicePreferences>(key: K, value: VoicePreferences[K]) => {
     onChange({ ...preferences, [key]: value })

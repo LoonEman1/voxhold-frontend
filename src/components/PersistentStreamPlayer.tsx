@@ -98,6 +98,7 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
       : status === 'connected' ? 'Ожидание первого кадра…' : 'Подключение…'
   const leaveLabel = isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'
   const audioBlockedOverlay = !isPublisher && playbackState === 'audio_blocked'
+  const rangeLabel = quality?.dynamicRange === 'hdr10' ? 'HDR10' : quality?.dynamicRange === 'hlg' ? 'HLG' : quality?.dynamicRange === 'sdr' ? 'SDR' : ''
 
   if (mode === 'mini') {
     return <aside className="stream-mini-player" aria-label={`Трансляция в канале ${channelName}`}>
@@ -119,7 +120,7 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     <header>
       <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА</span><h2>{channelName}</h2></div>
       <div className="stream-expanded-player__meta">
-        {stream && <><span className="stream-mode">{stream.codec.toUpperCase()}</span><span className="stream-mode">{stream.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></>}
+        {stream && <><span className="stream-mode">{stream.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></>}
         <button type="button" onClick={() => void enterCinemaMode()} title="Открыть настоящий полноэкранный режим без интерфейса"><Icon name="maximize"/><span>Полный экран</span></button>
         <button type="button" onClick={onCollapse} title="Свернуть трансляцию"><Icon name="minimize"/><span>Свернуть</span></button>
       </div>

@@ -22,7 +22,7 @@ import {
   ProfileDialog,
   ServerSettingsDialog,
 } from '../components/WorkspaceDialogs'
-import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, VoiceParticipant } from '../domain/types'
+import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
@@ -30,6 +30,8 @@ import { roleMeta } from '../lib/roles'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
+import { capturedHDRProbe, detectHDRCapabilities, streamWatchCapabilities } from '../services/hdrCapabilities'
+import { createHDRPublishPipeline, type HDRPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { BrowserVoiceInput } from '../services/voiceInput'
@@ -126,9 +128,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const streamRoleRef = useRef<'publisher' | 'viewer' | null>(streamRole)
   const streamPreferencesRef = useRef(streamPreferences)
   const streamCaptureRef = useRef<MediaStream | null>(null)
+  const hdrPipelineRef = useRef<HDRPublishPipeline | null>(null)
   const serverStreamRef = useRef<BrowserServerStreamSession | null>(null)
   const p2pStreamPublisherRef = useRef<BrowserP2PStreamPublisher | null>(null)
   const p2pStreamViewerRef = useRef<BrowserP2PStreamViewer | null>(null)
+  const streamDynamicRangeRef = useRef<StreamDynamicRange>('sdr')
+  const streamRewatchCountRef = useRef(0)
+  const pendingStreamRewatchRef = useRef<{ forceSDR: boolean } | null>(null)
+  const streamWatchActionRef = useRef<(forceSDR: boolean, rewatch: boolean) => void>(() => undefined)
+	const streamStartActionRef = useRef<() => void>(() => undefined)
   const serversRef = useRef<Server[]>(servers)
   const channelsRef = useRef<Channel[]>(channels)
   const channelReadsRef = useRef(channelReads)
@@ -359,7 +367,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         })
     }, 220)
     pendingReadMarksRef.current.set(channelId, { serverId, messageId: target, timer })
-  }, [api, token, user?.id, expire, applyChannelRead])
+  }, [api, token, user?.id, applyChannelRead])
 
   useEffect(() => () => {
     pendingReadMarksRef.current.forEach((pending) => window.clearTimeout(pending.timer))
@@ -409,6 +417,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [])
 
   const closeStreamLocally = useCallback(() => {
+    hdrPipelineRef.current?.close()
+    hdrPipelineRef.current = null
     serverStreamRef.current?.close()
     p2pStreamPublisherRef.current?.close()
     p2pStreamViewerRef.current?.close()
@@ -426,6 +436,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamRole(null)
     setStreamMedia(null)
     setStreamQuality(null)
+    streamDynamicRangeRef.current = 'sdr'
     setStreamStatus('idle')
     setStreamExpanded(false)
   }, [])
@@ -436,6 +447,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * the "unexpected signalling offline" path, not a user leave.
    */
   const detachMediaPeers = useCallback(() => {
+    hdrPipelineRef.current?.close()
+    hdrPipelineRef.current = null
     serverStreamRef.current?.close()
     p2pStreamPublisherRef.current?.close()
     p2pStreamViewerRef.current?.close()
@@ -928,15 +941,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onStreamLeft: () => {
         if (recoveryRef.current?.staleConnectionId()) return
+        const pendingRewatch = pendingStreamRewatchRef.current
+        pendingStreamRewatchRef.current = null
         closeStreamLocally()
+        if (pendingRewatch) {
+          queueMicrotask(() => streamWatchActionRef.current(pendingRewatch.forceSDR, true))
+        }
       },
-      onStreamWatching: (event) => upsertStream(event.stream),
+      onStreamWatching: (event) => {
+        upsertStream(event.stream)
+        const selected = event.stream.renditions?.find((value) => value.id === event.selected_rendition_id)
+        streamDynamicRangeRef.current = selected?.dynamic_range ?? 'sdr'
+      },
       onStreamViewerJoined: (viewer) => { void p2pStreamPublisherRef.current?.addViewer(viewer.connection_id) },
       onStreamViewerLeft: (viewer) => p2pStreamPublisherRef.current?.removeViewer(viewer.connection_id),
       onStreamWebRTCOffer: (offer) => { void serverStreamRef.current?.acceptOffer(offer.sdp) },
       onStreamICECandidate: (candidate) => { void serverStreamRef.current?.addICECandidate(candidate) },
       onStreamWebRTCClosed: (event) => {
         if (recoveryRef.current?.staleConnectionId()) return
+        if (pendingStreamRewatchRef.current) return
         setStreamError(streamCloseMessage(event.reason))
         closeStreamLocally()
       },
@@ -957,6 +980,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         if (!event.request_id) return
         const streamKind = streamRequestIdsRef.current.get(event.request_id)
         streamRequestIdsRef.current.delete(event.request_id)
+        if (streamKind === 'leave' && pendingStreamRewatchRef.current) {
+          pendingStreamRewatchRef.current = null
+          setStreamError(streamRealtimeError(event.message))
+          closeStreamLocally()
+          return
+        }
         if (streamKind && streamKind !== 'leave') {
           setStreamError(streamRealtimeError(event.message))
           closeStreamLocally()
@@ -1161,8 +1190,28 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       streamCaptureRef.current = capture
       streamRoleRef.current = 'publisher'
       setStreamRole('publisher')
-      setStreamMedia(capture)
       setStreamStatus('signaling')
+
+      let publishStream = capture
+      let renditions: StreamRendition[] | undefined
+      if (preferences.mode === 'server' && preferences.dynamicRange === 'hdr') {
+        const probe = capturedHDRProbe(capture)
+        if (!probe?.supported) {
+          throw new Error(probe?.reason || 'HDR-источник не прошёл проверку 10-bit BT.2020 PQ/HLG')
+        }
+        const pipeline = await createHDRPublishPipeline(capture, codec, probe, (error) => {
+          clientDiagnostics.record('media', 'hdr_pipeline_failed', 'error', { reason: error.message })
+          failStream(error)
+        })
+        if (streamRoleRef.current !== 'publisher') {
+          pipeline.close()
+          return
+        }
+        hdrPipelineRef.current = pipeline
+        publishStream = pipeline.stream
+        renditions = pipeline.renditions
+      }
+      setStreamMedia(publishStream)
 
       const ended = () => {
         if (streamCaptureRef.current !== capture) return
@@ -1183,7 +1232,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       }
       if (preferences.mode === 'server') {
         serverStreamRef.current = new BrowserServerStreamSession({
-          localStream: capture,
+          localStream: publishStream,
+          renditions,
           preferences,
           codec,
           iceConfiguration,
@@ -1213,6 +1263,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         preferences.mode,
         codec,
         capture.getAudioTracks().length > 0,
+        renditions,
       )
       if (!trackStreamRequest(requestId, 'start')) throw new Error('Realtime-соединение недоступно')
       if (preferences.includeAudio && capture.getAudioTracks().length === 0) {
@@ -1223,7 +1274,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
   }
 
-  const watchStream = async () => {
+  const watchStream = async (forceSDR = false, rewatch = false) => {
     const activeVoice = voiceSessionRef.current
     const client = realtimeRef.current
     const channel = selectedChannel
@@ -1241,6 +1292,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       return
     }
 
+    if (!rewatch) streamRewatchCountRef.current = 0
     setStreamError('')
     streamRoleRef.current = 'viewer'
     setStreamRole('viewer')
@@ -1254,6 +1306,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       else if (state === 'failed') setStreamStatus('signaling')
     }
     const remoteStream = (media: MediaStream) => setStreamMedia(media)
+    const reportQuality = (stats: StreamQualityStats) => setStreamQuality({
+      ...stats,
+      dynamicRange: streamDynamicRangeRef.current,
+    })
+    const watchCapabilities = activeStream.mode === 'server'
+      ? streamWatchCapabilities(await detectHDRCapabilities(), forceSDR)
+      : undefined
+    if (streamRoleRef.current !== 'viewer') return
     if (activeStream.mode === 'server') {
       serverStreamRef.current = new BrowserServerStreamSession({
         preferences: streamPreferencesRef.current,
@@ -1269,14 +1329,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         },
         onRequestRewatch: () => {
           const client = realtimeRef.current
+          if (streamRewatchCountRef.current >= 1) {
+            failStream(new Error('HDR/SDR decoder recovery exhausted'))
+            return
+          }
+          streamRewatchCountRef.current += 1
+          pendingStreamRewatchRef.current = {
+            forceSDR: streamDynamicRangeRef.current !== 'sdr',
+          }
           serverStreamRef.current?.close()
           serverStreamRef.current = null
-          trackStreamRequest(client?.leaveStream() ?? null, 'leave')
-          watchStream()
+          if (!trackStreamRequest(client?.leaveStream() ?? null, 'leave')) {
+            pendingStreamRewatchRef.current = null
+            failStream(new Error('Realtime-соединение недоступно для SDR fallback'))
+          }
         },
         onRemoteStream: remoteStream,
         onConnectionStateChange: connectionState,
-        onQualityStats: setStreamQuality,
+        onQualityStats: reportQuality,
         onError: failStream,
       })
     } else {
@@ -1287,14 +1357,21 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         onRestartRequest: (target) => trackStreamRequest(realtimeRef.current?.requestStreamP2PRestart(target) ?? null, 'media'),
         onRemoteStream: remoteStream,
         onConnectionStateChange: connectionState,
-        onQualityStats: setStreamQuality,
+        onQualityStats: reportQuality,
         onError: failStream,
       })
     }
-    if (!trackStreamRequest(client.watchStream(selectedServerId, channel.id), 'watch')) {
+    if (!trackStreamRequest(client.watchStream(selectedServerId, channel.id, watchCapabilities), 'watch')) {
       failStream(new Error('Realtime-соединение недоступно'))
     }
   }
+
+  streamWatchActionRef.current = (forceSDR, rewatch) => {
+    void watchStream(forceSDR, rewatch)
+  }
+	streamStartActionRef.current = () => {
+		void startStream()
+	}
 
   const finishFailedRecovery = useCallback((message: string) => {
     setMediaRecovering(false)
@@ -1375,7 +1452,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       coordinator.fail('voice rejoin failed')
       finishFailedRecovery('Не удалось восстановить голосовой канал после обрыва. Подключитесь заново')
     }
-  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels])
+  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels, trackVoiceRequest])
 
   /**
    * Unexpected WebSocket loss: close peers only, keep the microphone and the
@@ -1393,8 +1470,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         beginVoiceRejoin: (generation) => { void resumeAfterReconnect(generation) },
         restoreStream: (_generation, intent) => {
           try {
-            if (intent.streamRole === 'viewer') void watchStream()
-            else if (intent.streamRole === 'publisher' && streamCaptureRef.current) void startStream()
+			if (intent.streamRole === 'viewer') streamWatchActionRef.current(false, false)
+			else if (intent.streamRole === 'publisher' && streamCaptureRef.current) streamStartActionRef.current()
           } finally {
             recoveryRef.current?.markStreamRestored()
           }
@@ -1426,7 +1503,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     clientDiagnostics.record('media', 'media_recovery_started', 'warn', {
       stream_role: streamRoleRef.current ?? null,
     })
-  }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, watchStream, startStream, finishFailedRecovery])
+  }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, finishFailedRecovery])
 
   recoveryActionsRef.current.offline = beginSignallingRecovery
   recoveryActionsRef.current.ready = () => { recoveryRef.current?.handleReady() }
@@ -1447,6 +1524,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!role) return
     // An explicit stop releases the stashed capture immediately.
     clearCapturedStreamStash(true)
+    pendingStreamRewatchRef.current = null
     const channelId = voiceSessionRef.current?.channelId
     trackStreamRequest(
       role === 'publisher'
@@ -1459,7 +1537,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     closeStreamLocally()
   }
 
-  const updateLocalVoiceState = (selfMute: boolean, selfDeaf: boolean) => {
+  const updateLocalVoiceState = useCallback((selfMute: boolean, selfDeaf: boolean) => {
     const active = voiceSessionRef.current
     if (!active) return
     const updated = { ...active, selfMute, selfDeaf }
@@ -1471,7 +1549,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setVoiceError('Realtime-соединение недоступно')
       closeVoiceLocally()
     }
-  }
+  }, [closeVoiceLocally, trackVoiceRequest])
 
   const updateVoicePreferences = (next: VoicePreferences) => {
     const previous = voicePreferencesRef.current
@@ -1537,7 +1615,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       window.removeEventListener('keyup', releasePushToTalk)
       window.removeEventListener('blur', cancelPushToTalk)
     }
-  }, [])
+  }, [updateLocalVoiceState])
 
   const openActiveVoiceChannel = () => {
     const active = voiceSessionRef.current

@@ -14,6 +14,7 @@ describe('stream preferences', () => {
     saveStreamPreferences({
       mode: 'p2p',
       codec: 'av1',
+      dynamicRange: 'hdr',
       resolution: '1440p',
       frameRate: 60,
       videoBitrateKbps: 12000,
@@ -24,6 +25,7 @@ describe('stream preferences', () => {
     expect(loadStreamPreferences()).toEqual({
       mode: 'p2p',
       codec: 'av1',
+      dynamicRange: 'hdr',
       resolution: '1440p',
       frameRate: 60,
       videoBitrateKbps: 12000,
