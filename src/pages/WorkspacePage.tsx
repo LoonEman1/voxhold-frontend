@@ -136,6 +136,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const streamRewatchCountRef = useRef(0)
   const pendingStreamRewatchRef = useRef<{ forceSDR: boolean } | null>(null)
   const streamWatchActionRef = useRef<(forceSDR: boolean, rewatch: boolean) => void>(() => undefined)
+	const streamStartActionRef = useRef<() => void>(() => undefined)
   const serversRef = useRef<Server[]>(servers)
   const channelsRef = useRef<Channel[]>(channels)
   const channelReadsRef = useRef(channelReads)
@@ -366,7 +367,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         })
     }, 220)
     pendingReadMarksRef.current.set(channelId, { serverId, messageId: target, timer })
-  }, [api, token, user?.id, expire, applyChannelRead])
+  }, [api, token, user?.id, applyChannelRead])
 
   useEffect(() => () => {
     pendingReadMarksRef.current.forEach((pending) => window.clearTimeout(pending.timer))
@@ -1368,6 +1369,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   streamWatchActionRef.current = (forceSDR, rewatch) => {
     void watchStream(forceSDR, rewatch)
   }
+	streamStartActionRef.current = () => {
+		void startStream()
+	}
 
   const finishFailedRecovery = useCallback((message: string) => {
     setMediaRecovering(false)
@@ -1448,7 +1452,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       coordinator.fail('voice rejoin failed')
       finishFailedRecovery('Не удалось восстановить голосовой канал после обрыва. Подключитесь заново')
     }
-  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels])
+  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels, trackVoiceRequest])
 
   /**
    * Unexpected WebSocket loss: close peers only, keep the microphone and the
@@ -1466,8 +1470,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         beginVoiceRejoin: (generation) => { void resumeAfterReconnect(generation) },
         restoreStream: (_generation, intent) => {
           try {
-            if (intent.streamRole === 'viewer') void watchStream()
-            else if (intent.streamRole === 'publisher' && streamCaptureRef.current) void startStream()
+			if (intent.streamRole === 'viewer') streamWatchActionRef.current(false, false)
+			else if (intent.streamRole === 'publisher' && streamCaptureRef.current) streamStartActionRef.current()
           } finally {
             recoveryRef.current?.markStreamRestored()
           }
@@ -1499,7 +1503,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     clientDiagnostics.record('media', 'media_recovery_started', 'warn', {
       stream_role: streamRoleRef.current ?? null,
     })
-  }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, watchStream, startStream, finishFailedRecovery])
+  }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, finishFailedRecovery])
 
   recoveryActionsRef.current.offline = beginSignallingRecovery
   recoveryActionsRef.current.ready = () => { recoveryRef.current?.handleReady() }
@@ -1533,7 +1537,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     closeStreamLocally()
   }
 
-  const updateLocalVoiceState = (selfMute: boolean, selfDeaf: boolean) => {
+  const updateLocalVoiceState = useCallback((selfMute: boolean, selfDeaf: boolean) => {
     const active = voiceSessionRef.current
     if (!active) return
     const updated = { ...active, selfMute, selfDeaf }
@@ -1545,7 +1549,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setVoiceError('Realtime-соединение недоступно')
       closeVoiceLocally()
     }
-  }
+  }, [closeVoiceLocally, trackVoiceRequest])
 
   const updateVoicePreferences = (next: VoicePreferences) => {
     const previous = voicePreferencesRef.current
@@ -1611,7 +1615,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       window.removeEventListener('keyup', releasePushToTalk)
       window.removeEventListener('blur', cancelPushToTalk)
     }
-  }, [])
+  }, [updateLocalVoiceState])
 
   const openActiveVoiceChannel = () => {
     const active = voiceSessionRef.current

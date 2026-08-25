@@ -41,9 +41,6 @@ jobs:
 
       - name: Lint
         run: npm run lint
-        # Non-blocking while the hook-dependency warning baseline is cleaned
-        # up; flip to blocking once warnings reach zero.
-        continue-on-error: true
 
       - name: Test
         run: npm test
@@ -77,6 +74,51 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+
+  browser-smoke:
+    name: WebRTC browser smoke
+    if: >-
+      vars.VOXHOLD_E2E_BASE_URL != '' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: test
+    runs-on: ubuntu-latest
+
+    env:
+      VOXHOLD_E2E_BASE_URL: ${{ vars.VOXHOLD_E2E_BASE_URL }}
+      VOXHOLD_E2E_VOICE_CHANNEL: ${{ vars.VOXHOLD_E2E_VOICE_CHANNEL }}
+      VOXHOLD_E2E_PUBLISHER_USERNAME: ${{ secrets.VOXHOLD_E2E_PUBLISHER_USERNAME }}
+      VOXHOLD_E2E_PUBLISHER_PASSWORD: ${{ secrets.VOXHOLD_E2E_PUBLISHER_PASSWORD }}
+      VOXHOLD_E2E_VIEWER_USERNAME: ${{ secrets.VOXHOLD_E2E_VIEWER_USERNAME }}
+      VOXHOLD_E2E_VIEWER_PASSWORD: ${{ secrets.VOXHOLD_E2E_VIEWER_PASSWORD }}
+      VOXHOLD_E2E_RUN_TURN: ${{ vars.VOXHOLD_E2E_RUN_TURN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Test server stream and ICE recovery
+        run: npm run test:e2e:stream
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-browser-smoke-${{ github.run_id }}
+          path: node_modules/.cache/playwright-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   publish:
     name: Publish Docker image
