@@ -271,7 +271,7 @@ export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemo
 
 interface ServerSettingsDialogProps extends AsyncDialogProps {
   server: Server | null
-  corsOrigins: string[]
+  corsOrigins: string[] | null
   corsOriginsLoading: boolean
   onRename(name: string): Promise<void>
   onDeleteAccount(): Promise<void>
@@ -300,7 +300,7 @@ export function ServerSettingsDialog({
   useEffect(() => {
     if (open) {
       setName(server?.name ?? '')
-      setCorsValue(corsOrigins.join('\n'))
+      setCorsValue((corsOrigins ?? []).join('\n'))
       setError('')
       setConfirming(false)
     }
@@ -326,7 +326,7 @@ export function ServerSettingsDialog({
     setCorsPending(true); setError('')
     try {
       const saved = await onSaveCorsOrigins(origins)
-      setCorsValue(saved.join('\n'))
+      setCorsValue((saved ?? []).join('\n'))
     } catch (caught) {
       setError(humanError(caught))
     } finally {

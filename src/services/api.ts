@@ -70,17 +70,19 @@ export function createApi(transport: Transport) {
         unwrap<InstanceMetadata>(transport, { path: '/api/v1/instance', signal }),
     },
     corsOrigins: {
-      get: (token: string, signal?: AbortSignal) =>
-        authorized(token, {
+      get: async (token: string, signal?: AbortSignal): Promise<CorsOriginsPayload> => ({
+        origins: ((await authorized(token, {
           path: '/api/v1/instance/cors-origins',
           signal,
-        }) as Promise<CorsOriginsPayload>,
-      replace: (token: string, origins: string[]) =>
-        authorized(token, {
+        })) as CorsOriginsPayload).origins ?? [],
+      }),
+      replace: async (token: string, origins: string[]): Promise<CorsOriginsPayload> => ({
+        origins: ((await authorized(token, {
           path: '/api/v1/instance/cors-origins',
           method: 'PUT',
           body: { origins },
-        }) as Promise<CorsOriginsPayload>,
+        })) as CorsOriginsPayload).origins ?? [],
+      }),
     },
     auth: {
       login: (username: string, password: string) =>

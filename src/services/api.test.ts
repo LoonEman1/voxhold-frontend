@@ -73,6 +73,15 @@ describe('Voxhold API client', () => {
     })
   })
 
+  it('normalizes a null CORS origins payload into an empty list', async () => {
+    const { api } = mockTransport({ status: 200, data: { origins: null } })
+    const { api: replaceApi } = mockTransport({ status: 200, data: { origins: null } })
+
+    await expect(api.corsOrigins.get('session')).resolves.toEqual({ origins: [] })
+    await expect(replaceApi.corsOrigins.replace('session', ['https://client.example.com']))
+      .resolves.toEqual({ origins: [] })
+  })
+
   it('sends the invite token during registration', async () => {
     const payload = {
       user: { id: 8, username: 'mira', created_at: 1 },
