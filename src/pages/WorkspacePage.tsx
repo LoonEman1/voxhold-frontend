@@ -61,6 +61,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const notify = useToast()
   const workspaceLayout = useWorkspaceLayout()
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
+  const [corsOrigins, setCorsOrigins] = useState<string[]>([])
+  const [corsOriginsLoading, setCorsOriginsLoading] = useState(false)
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
@@ -1583,6 +1585,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setDialog('channelSettings')
   }
 
+  const openServerSettings = () => {
+    setDialog('settings')
+    if (!token || selectedServer?.role !== 'owner') return
+
+    setCorsOriginsLoading(true)
+    void api.corsOrigins.get(token)
+      .then((payload) => setCorsOrigins(payload.origins))
+      .catch((error: unknown) => handleError(error, 'Не удалось загрузить CORS-настройки'))
+      .finally(() => setCorsOriginsLoading(false))
+  }
+
+  const saveCorsOrigins = async (origins: string[]) => {
+    if (!token || selectedServer?.role !== 'owner') throw new Error('Настройки доступны только владельцу')
+    const payload = await api.corsOrigins.replace(token, origins)
+    setCorsOrigins(payload.origins)
+    notify('CORS-настройки сохранены', 'success')
+    return payload.origins
+  }
+
   const downloadClientDiagnostics = async () => {
     if (!token) return
     await clientDiagnostics.flush()
@@ -1908,7 +1929,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     <main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()}>
       <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
-          <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={() => setDialog('settings')} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
+          <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={openServerSettings} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
           <div className="channel-scroll">
             <ChannelGroup title="Текстовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
               {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onContextMenu={(event) => openChannelMenu(event, channel)}/>)}
@@ -1979,7 +2000,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
       {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)}/>}
       {confirmRequest && <ConfirmDialog open title={confirmRequest.title} description={confirmRequest.description} confirmLabel={confirmRequest.confirmLabel} onClose={() => setConfirmRequest(null)} onConfirm={confirmRequest.action}/>}
-      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics}/>
+      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} corsOrigins={corsOrigins} corsOriginsLoading={corsOriginsLoading} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics} onSaveCorsOrigins={saveCorsOrigins}/>
     </main>
   )
 }

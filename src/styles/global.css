@@ -109,6 +109,7 @@ input::placeholder, textarea::placeholder { color: #66665f; }
 .auth-form { display: flex; flex-direction: column; gap: 17px; }
 .auth-form label, .dialog-form label { display: flex; flex-direction: column; gap: 8px; }
 .auth-form label > span, .dialog-form label > span { color: #c9c7bf; font-size: 12px; font-weight: 700; }
+.field-hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .auth-form .button { width: 100%; margin-top: 4px; }
 .auth-terms { margin: 20px 18px 0; color: #5e5e57; font-size: 10px; line-height: 1.55; text-align: center; }
 .form-error { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border: 1px solid rgba(255,113,107,.2); border-radius: 8px; color: #ffaaa6; background: rgba(255,113,107,.07); font-size: 12px; }
