@@ -5,6 +5,7 @@ import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
 import { DecodeWatchdog, sampleInboundVideoStats } from './mediaRecovery'
+import { detectHDRCapabilities, probeCapturedHDRTrack, rememberHDRCaptureProbe } from './hdrCapabilities'
 
 export type StreamConnectionState = RTCPeerConnectionState
 
@@ -437,6 +438,17 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
     height: settings.height ?? null,
     frame_rate: settings.frameRate ?? null,
   })
+  if (preferences.dynamicRange === 'hdr' && preferences.mode === 'server') {
+    const capabilities = await detectHDRCapabilities()
+    const probe = await probeCapturedHDRTrack(video, capabilities)
+    rememberHDRCaptureProbe(media, probe)
+    clientDiagnostics.record('media', 'hdr_capture_probe', probe.supported ? 'info' : 'warn', {
+      source_range: probe.sourceRange,
+      bit_depth: probe.bitDepth,
+      codec_profile: probe.codecProfile ? `${probe.codecProfile.codec}:${probe.codecProfile.profile}` : '',
+      reason: probe.reason,
+    })
+  }
   return media
 }
 
