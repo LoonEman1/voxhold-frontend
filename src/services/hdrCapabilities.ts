@@ -10,6 +10,7 @@ export interface HDRProcessingCapabilities {
   trackProcessor: boolean
   trackGenerator: boolean
   webGPU: boolean
+  canvasCapture: boolean
 }
 
 export interface HDRCodecProbe {
@@ -104,6 +105,8 @@ function processingCapabilities(): HDRProcessingCapabilities {
     trackGenerator: typeof scope.VideoTrackGenerator === 'function'
       || typeof scope.MediaStreamTrackGenerator === 'function',
     webGPU: typeof navigator !== 'undefined' && !!(navigator as Navigator & { gpu?: unknown }).gpu,
+    canvasCapture: typeof HTMLCanvasElement !== 'undefined'
+      && typeof HTMLCanvasElement.prototype.captureStream === 'function',
   }
 }
 
@@ -241,13 +244,17 @@ export function detectHDRCapabilities(): Promise<HDRCapabilities> {
       .filter((codec) => codec.roundTrip)
       .map(({ codec, profile }) => ({ codec, profile }))
     const outputReady = output.dynamicRange === 'high' && output.gamut !== 'srgb'
-    const processingReady = processing.trackProcessor && processing.trackGenerator && processing.webGPU
+    // The HDR master uses the original capture track. Only frame inspection
+    // and a color-managed CanvasCaptureMediaStreamTrack are required to build
+    // the mandatory SDR rendition; WebGPU/TrackGenerator are diagnostics and
+    // no longer unnecessarily block otherwise compatible browsers.
+    const processingReady = processing.trackProcessor && processing.canvasCapture
     const canPublishHDR = outputReady && processingReady && codecProfiles.length > 0
     const canViewHDR = outputReady && codecProfiles.length > 0
     const reason = !outputReady
       ? 'HDR-вывод или широкий цветовой охват не обнаружен'
       : !processingReady
-        ? 'Браузер не поддерживает безопасную обработку HDR-кадров через WebGPU'
+        ? 'Браузер не поддерживает проверку HDR-кадров или SDR canvas capture'
         : codecProfiles.length === 0
           ? '10-bit AV1/VP9 не прошёл локальную encode/decode проверку'
           : ''
@@ -258,6 +265,7 @@ export function detectHDRCapabilities(): Promise<HDRCapabilities> {
       track_processor: processing.trackProcessor,
       track_generator: processing.trackGenerator,
       webgpu: processing.webGPU,
+      canvas_capture: processing.canvasCapture,
       codec_profiles: codecProfiles.map((value) => `${value.codec}:${value.profile}`),
       reason,
     })
