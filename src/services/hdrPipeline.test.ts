@@ -84,6 +84,70 @@ describe('publisher color pipelines', () => {
     ])
   })
 
+  it('uses capture-driven frames instead of visibility-throttled video callbacks', async () => {
+    const inputFrame = {
+      timestamp: 1_000,
+      duration: 33_333,
+      close: vi.fn(),
+    }
+    const playbackTrack = { kind: 'video', stop: vi.fn() }
+    const outputTrack = { kind: 'video', contentHint: '', stop: vi.fn() }
+    const audioTrack = { kind: 'audio', stop: vi.fn() }
+    const source = {
+      kind: 'video',
+      clone: vi.fn(() => playbackTrack),
+      getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+    }
+    const capture = new FakeMediaStream([source, audioTrack]) as unknown as MediaStream
+    const readable = new ReadableStream<VideoFrame>({
+      start(controller) {
+        controller.enqueue(inputFrame as unknown as VideoFrame)
+      },
+    })
+    class FakeProcessor {
+      readable = readable
+    }
+    class FakeGenerator {
+      track = outputTrack
+      writable = new WritableStream<VideoFrame>()
+    }
+    class FakeVideoFrame {
+      timestamp: number
+      duration: number | null
+      close = vi.fn()
+      constructor(_source: CanvasImageSource, init: VideoFrameInit) {
+        this.timestamp = init.timestamp ?? 0
+        this.duration = init.duration ?? null
+      }
+    }
+    const nativeCreateElement = document.createElement.bind(document)
+    const canvas = nativeCreateElement('canvas')
+    const drawImage = vi.fn()
+    canvas.getContext = vi.fn(() => ({ drawImage })) as unknown as typeof canvas.getContext
+    const createdElements: string[] = []
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      createdElements.push(tagName)
+      if (tagName === 'canvas') return canvas
+      return nativeCreateElement(tagName)
+    })
+    vi.stubGlobal('OffscreenCanvas', undefined)
+    vi.stubGlobal('MediaStreamTrackProcessor', FakeProcessor)
+    vi.stubGlobal('VideoTrackGenerator', FakeGenerator)
+    vi.stubGlobal('VideoFrame', FakeVideoFrame)
+    vi.stubGlobal('MediaStream', FakeMediaStream)
+
+    const pipeline = await createSDRPublishPipeline(capture, 'h264')
+    await vi.waitFor(() => expect(drawImage).toHaveBeenCalledWith(inputFrame, 0, 0, 1280, 720))
+    await vi.waitFor(() => expect(inputFrame.close).toHaveBeenCalledOnce())
+
+    expect(createdElements).not.toContain('video')
+    expect(pipeline.stream.getVideoTracks()).toEqual([outputTrack])
+    expect(pipeline.stream.getAudioTracks()).toEqual([audioTrack])
+    pipeline.close()
+    expect(playbackTrack.stop).toHaveBeenCalledOnce()
+    expect(outputTrack.stop).toHaveBeenCalledOnce()
+  })
+
   it('renders the captured screen into an sRGB canvas track and preserves audio', async () => {
     const mocks = installCanvasCaptureMocks()
     const pipeline = await createSDRPublishPipeline(mocks.capture, 'h264')
