@@ -19,6 +19,31 @@ type CanvasWithCapture = HTMLCanvasElement & {
   captureStream?: (frameRate?: number) => MediaStream
 }
 
+interface TrackProcessorLike {
+  readable: ReadableStream<VideoFrame>
+}
+
+interface TrackGeneratorLike {
+  writable: WritableStream<VideoFrame>
+  track?: MediaStreamTrack
+}
+
+type TrackProcessorConstructor = new (options: { track: MediaStreamTrack }) => TrackProcessorLike
+type TrackGeneratorConstructor = new (options?: { kind: 'video' }) => TrackGeneratorLike
+type Canvas2DTarget = HTMLCanvasElement | OffscreenCanvas
+
+function frameTransformConstructors() {
+  const scope = globalThis as typeof globalThis & {
+    MediaStreamTrackProcessor?: TrackProcessorConstructor
+    VideoTrackGenerator?: TrackGeneratorConstructor
+    MediaStreamTrackGenerator?: TrackGeneratorConstructor
+  }
+  return {
+    Processor: scope.MediaStreamTrackProcessor,
+    Generator: scope.VideoTrackGenerator ?? scope.MediaStreamTrackGenerator,
+  }
+}
+
 function sdrProfile(codec: StreamCodec) {
   if (codec === 'vp9') return '0'
   if (codec === 'h264') return 'baseline'
@@ -86,9 +111,15 @@ function waitForRenderableVideo(video: HTMLVideoElement, timeoutMs = 5_000) {
   })
 }
 
-function createSRGBContext(canvas: HTMLCanvasElement) {
+function createSRGBContext(canvas: Canvas2DTarget) {
+  const target = canvas as Canvas2DTarget & {
+    getContext: (
+      contextId: '2d',
+      options?: CanvasRenderingContext2DSettings,
+    ) => CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
+  }
   try {
-    const context = canvas.getContext('2d', {
+    const context = target.getContext('2d', {
       alpha: false,
       colorSpace: 'srgb',
       desynchronized: true,
@@ -98,7 +129,81 @@ function createSRGBContext(canvas: HTMLCanvasElement) {
     // Older engines reject newer context attributes. Their default 2D canvas
     // is still 8-bit sRGB, which is the compatibility path we need here.
   }
-  return canvas.getContext('2d', { alpha: false })
+  return target.getContext('2d', { alpha: false })
+}
+
+function createFrameCanvas(width: number, height: number): Canvas2DTarget | null {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height)
+  if (typeof document === 'undefined') return null
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  return canvas
+}
+
+function createFrameDrivenSDRPipeline(
+  capture: MediaStream,
+  codec: StreamCodec,
+  onFailure?: (error: Error) => void,
+): StreamPublishPipeline | null {
+  const { Processor, Generator } = frameTransformConstructors()
+  if (!Processor || !Generator || typeof VideoFrame === 'undefined') return null
+  const source = capture.getVideoTracks()[0]
+  if (!source) throw new Error('Источник экрана не предоставил видеодорожку')
+  const settings = source.getSettings()
+  const width = Math.max(1, settings.width ?? 1920)
+  const height = Math.max(1, settings.height ?? 1080)
+  const canvas = createFrameCanvas(width, height)
+  if (!canvas) return null
+  const context = createSRGBContext(canvas)
+  if (!context) return null
+
+  const processorTrack = source.clone()
+  const processor = new Processor({ track: processorTrack })
+  const generator = new Generator({ kind: 'video' })
+  const sdrTrack = generator.track ?? generator as unknown as MediaStreamTrack
+  sdrTrack.contentHint = 'detail'
+  const reader = processor.readable.getReader()
+  const writer = generator.writable.getWriter()
+  let closed = false
+
+  const pump = async () => {
+    while (!closed) {
+      const sample = await reader.read()
+      if (sample.done || !sample.value) break
+      const input = sample.value
+      let output: VideoFrame | null = null
+      try {
+        context.drawImage(input, 0, 0, width, height)
+        output = new VideoFrame(canvas, {
+          timestamp: input.timestamp,
+          duration: input.duration ?? undefined,
+          alpha: 'discard',
+        })
+        await writer.write(output)
+      } finally {
+        output?.close()
+        input.close()
+      }
+    }
+    if (!closed) await writer.close()
+  }
+  void pump().catch((value: unknown) => {
+    if (!closed) onFailure?.(value instanceof Error ? value : new Error('SDR frame pipeline stopped'))
+  })
+
+  return {
+    stream: new MediaStream([sdrTrack, ...capture.getAudioTracks()]),
+    renditions: buildSDRStreamRenditions(codec),
+    close: () => {
+      if (closed) return
+      closed = true
+      void reader.cancel().catch(() => undefined)
+      void writer.abort(new Error('SDR pipeline closed')).catch(() => undefined)
+      processorTrack.stop()
+      sdrTrack.stop()
+    },
+  }
 }
 
 /**
@@ -112,6 +217,12 @@ export async function createSDRPublishPipeline(
   codec: StreamCodec,
   onFailure?: (error: Error) => void,
 ): Promise<StreamPublishPipeline> {
+  // A frame-driven transform is independent of page visibility. Unlike
+  // requestVideoFrameCallback/requestAnimationFrame, it continues to receive
+  // the active getDisplayMedia track while the publisher opens another tab.
+  const frameDriven = createFrameDrivenSDRPipeline(capture, codec, onFailure)
+  if (frameDriven) return frameDriven
+
   if (typeof document === 'undefined') throw new Error('SDR-преобразование доступно только в браузере')
   const source = capture.getVideoTracks()[0]
   if (!source) throw new Error('Источник экрана не предоставил видеодорожку')
