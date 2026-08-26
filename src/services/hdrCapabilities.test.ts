@@ -28,7 +28,7 @@ describe('HDR capability detection', () => {
   it('advertises HDR profiles only after the full viewer gate', () => {
     const capabilities: HDRCapabilities = {
       output: { dynamicRange: 'high', gamut: 'rec2020' },
-      processing: { trackProcessor: true, trackGenerator: true, webGPU: true },
+      processing: { trackProcessor: true, trackGenerator: true, webGPU: true, canvasCapture: true },
       codecs: [],
       codecProfiles: [{ codec: 'vp9', profile: '2' }],
       canPublishHDR: true,

@@ -31,7 +31,7 @@ import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
 import { capturedHDRProbe, detectHDRCapabilities, streamWatchCapabilities } from '../services/hdrCapabilities'
-import { createHDRPublishPipeline, type HDRPublishPipeline } from '../services/hdrPipeline'
+import { createHDRPublishPipeline, createSDRPublishPipeline, type StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { BrowserVoiceInput } from '../services/voiceInput'
@@ -128,7 +128,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const streamRoleRef = useRef<'publisher' | 'viewer' | null>(streamRole)
   const streamPreferencesRef = useRef(streamPreferences)
   const streamCaptureRef = useRef<MediaStream | null>(null)
-  const hdrPipelineRef = useRef<HDRPublishPipeline | null>(null)
+  const streamPipelineRef = useRef<StreamPublishPipeline | null>(null)
   const serverStreamRef = useRef<BrowserServerStreamSession | null>(null)
   const p2pStreamPublisherRef = useRef<BrowserP2PStreamPublisher | null>(null)
   const p2pStreamViewerRef = useRef<BrowserP2PStreamViewer | null>(null)
@@ -417,8 +417,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [])
 
   const closeStreamLocally = useCallback(() => {
-    hdrPipelineRef.current?.close()
-    hdrPipelineRef.current = null
+    streamPipelineRef.current?.close()
+    streamPipelineRef.current = null
     serverStreamRef.current?.close()
     p2pStreamPublisherRef.current?.close()
     p2pStreamViewerRef.current?.close()
@@ -447,8 +447,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * the "unexpected signalling offline" path, not a user leave.
    */
   const detachMediaPeers = useCallback(() => {
-    hdrPipelineRef.current?.close()
-    hdrPipelineRef.current = null
+    streamPipelineRef.current?.close()
+    streamPipelineRef.current = null
     serverStreamRef.current?.close()
     p2pStreamPublisherRef.current?.close()
     p2pStreamViewerRef.current?.close()
@@ -1207,9 +1207,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           pipeline.close()
           return
         }
-        hdrPipelineRef.current = pipeline
+        streamPipelineRef.current = pipeline
         publishStream = pipeline.stream
         renditions = pipeline.renditions
+      } else {
+        // Auto/SDR must transform the pixels into an 8-bit sRGB surface before
+        // WebRTC encoding. Passing a Windows HDR capture straight to H.264 and
+        // merely declaring BT.709 produces the blown-out image seen by viewers.
+        const pipeline = await createSDRPublishPipeline(capture, codec, (error) => {
+          clientDiagnostics.record('media', 'sdr_pipeline_failed', 'error', { reason: error.message })
+          failStream(error)
+        })
+        if (streamRoleRef.current !== 'publisher') {
+          pipeline.close()
+          return
+        }
+        streamPipelineRef.current = pipeline
+        publishStream = pipeline.stream
+        if (preferences.mode === 'server') renditions = pipeline.renditions
       }
       setStreamMedia(publishStream)
 
@@ -1245,7 +1260,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         })
       } else {
         p2pStreamPublisherRef.current = new BrowserP2PStreamPublisher({
-          localStream: capture,
+          localStream: publishStream,
           preferences,
           codec,
           iceConfiguration,

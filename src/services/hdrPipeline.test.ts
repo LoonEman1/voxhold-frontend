@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildHDRStreamRenditions, createHDRPublishPipeline, hlgToRelativeLinear, pqToRelativeLinear, toneMapRelativeToSDR } from './hdrPipeline'
+import {
+  buildHDRStreamRenditions,
+  buildSDRStreamRenditions,
+  createHDRPublishPipeline,
+  createSDRPublishPipeline,
+} from './hdrPipeline'
 
 const HDR_PROBE = {
   supported: true,
@@ -13,11 +18,65 @@ const HDR_PROBE = {
   reason: '',
 }
 
+class FakeMediaStream {
+  constructor(readonly tracks: Array<{ kind: string; stop?: () => void }> = []) {}
+  getTracks() { return [...this.tracks] }
+  getVideoTracks() { return this.tracks.filter((track) => track.kind === 'video') }
+  getAudioTracks() { return this.tracks.filter((track) => track.kind === 'audio') }
+}
+
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
-describe('HDR publisher pipeline', () => {
+function installCanvasCaptureMocks() {
+  const playbackTrack = { kind: 'video', stop: vi.fn() }
+  const outputTrack = { kind: 'video', contentHint: '', stop: vi.fn() }
+  const audioTrack = { kind: 'audio', stop: vi.fn() }
+  const source = {
+    kind: 'video',
+    clone: vi.fn(() => playbackTrack),
+    getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+  }
+  const capture = new FakeMediaStream([source, audioTrack]) as unknown as MediaStream
+  const drawImage = vi.fn()
+  const nativeCreateElement = document.createElement.bind(document)
+  const video = nativeCreateElement('video')
+  Object.defineProperty(video, 'readyState', { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA })
+  Object.defineProperty(video, 'srcObject', { configurable: true, writable: true, value: null })
+  video.play = vi.fn(async () => undefined)
+  video.pause = vi.fn()
+  video.requestVideoFrameCallback = vi.fn(() => 17)
+  video.cancelVideoFrameCallback = vi.fn()
+  const canvas = nativeCreateElement('canvas')
+  canvas.getContext = vi.fn(() => ({ drawImage })) as unknown as typeof canvas.getContext
+  canvas.captureStream = vi.fn(() => new FakeMediaStream([outputTrack]) as unknown as MediaStream)
+  vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+    if (tagName === 'video') return video
+    if (tagName === 'canvas') return canvas
+    return nativeCreateElement(tagName)
+  })
+  vi.stubGlobal('MediaStream', FakeMediaStream)
+  return { capture, source, playbackTrack, outputTrack, audioTrack, drawImage, video }
+}
+
+describe('publisher color pipelines', () => {
+  it('declares a real BT.709 rendition for every SDR codec', () => {
+    expect(buildSDRStreamRenditions('h264')).toEqual([
+      {
+        id: 'sdr',
+        codec: 'h264',
+        profile: 'baseline',
+        dynamic_range: 'sdr',
+        bit_depth: 8,
+        color_primaries: 'bt709',
+        transfer: 'bt709',
+        matrix: 'bt709',
+      },
+    ])
+  })
+
   it('builds an SDR fallback before the HDR master rendition', () => {
     expect(buildHDRStreamRenditions('h264', HDR_PROBE)).toEqual([
       expect.objectContaining({ id: 'sdr', codec: 'h264', profile: 'baseline', dynamic_range: 'sdr', bit_depth: 8 }),
@@ -25,69 +84,50 @@ describe('HDR publisher pipeline', () => {
     ])
   })
 
-  it('keeps transfer and tone-map functions finite and monotonic', () => {
-    const pq = [0, 0.25, 0.5, 0.75, 1].map(pqToRelativeLinear)
-    const hlg = [0, 0.25, 0.5, 0.75, 1].map(hlgToRelativeLinear)
-    const mapped = [0, 0.1, 1, 10, 100].map(toneMapRelativeToSDR)
-    for (const values of [pq, hlg, mapped]) {
-      expect(values.every(Number.isFinite)).toBe(true)
-      expect(values).toEqual([...values].sort((left, right) => left - right))
-    }
-    expect(mapped[0]).toBe(0)
-    expect(mapped.at(-1)).toBeLessThanOrEqual(1)
+  it('renders the captured screen into an sRGB canvas track and preserves audio', async () => {
+    const mocks = installCanvasCaptureMocks()
+    const pipeline = await createSDRPublishPipeline(mocks.capture, 'h264')
+
+    expect(mocks.source.clone).toHaveBeenCalledOnce()
+    expect(mocks.drawImage).toHaveBeenCalled()
+    expect(pipeline.stream.getVideoTracks()).toEqual([mocks.outputTrack])
+    expect(pipeline.stream.getAudioTracks()).toEqual([mocks.audioTrack])
+    expect(mocks.outputTrack.contentHint).toBe('detail')
+
+    pipeline.close()
+    expect(mocks.playbackTrack.stop).toHaveBeenCalledOnce()
+    expect(mocks.outputTrack.stop).toHaveBeenCalledOnce()
+    expect(mocks.video.cancelVideoFrameCallback).toHaveBeenCalledWith(17)
+    expect(mocks.video.pause).toHaveBeenCalled()
   })
 
-  it('keeps at most one frame in the worker and fails closed on device loss', async () => {
-    const inputFrames = [{ close: vi.fn() }, { close: vi.fn() }]
+  it('fails closed when a browser cannot produce a canvas capture track', async () => {
+    const playbackTrack = { kind: 'video', stop: vi.fn() }
     const source = {
       kind: 'video',
-      contentHint: '',
-      clone: () => ({ stop: vi.fn() }),
-      getSettings: () => ({ width: 64, height: 64 }),
+      clone: () => playbackTrack,
+      getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
     }
-    const sdrTrack = { kind: 'video', contentHint: '', stop: vi.fn() }
-    const processorStream = new ReadableStream<VideoFrame>({
-      start(controller) {
-        for (const frame of inputFrames) controller.enqueue(frame as unknown as VideoFrame)
-      },
-    })
-    class FakeProcessor {
-      readable = processorStream
-    }
-    class FakeGenerator {
-      track = sdrTrack
-      writable = new WritableStream<VideoFrame>()
-    }
-    class FakeMediaStream {
-      constructor(readonly tracks: unknown[]) {}
-      getVideoTracks() { return this.tracks.filter((track) => (track as { kind: string }).kind === 'video') }
-      getAudioTracks() { return [] }
-    }
-    class FakeWorker {
-      static latest: FakeWorker | null = null
-      onmessage: ((event: MessageEvent) => void) | null = null
-      onerror: (() => void) | null = null
-      frameMessages: Array<{ frame: VideoFrame }> = []
-      constructor() { FakeWorker.latest = this }
-      postMessage(message: { type: string; frame?: VideoFrame }) {
-        if (message.type === 'init') queueMicrotask(() => this.onmessage?.({ data: { type: 'ready' } } as MessageEvent))
-        if (message.type === 'frame' && message.frame) this.frameMessages.push({ frame: message.frame })
-      }
-      terminate() {}
-    }
-    vi.stubGlobal('MediaStreamTrackProcessor', FakeProcessor)
-    vi.stubGlobal('VideoTrackGenerator', FakeGenerator)
-    vi.stubGlobal('MediaStream', FakeMediaStream)
-    vi.stubGlobal('Worker', FakeWorker)
-    const onFailure = vi.fn()
     const capture = new FakeMediaStream([source]) as unknown as MediaStream
-    const pipeline = await createHDRPublishPipeline(capture, 'h264', HDR_PROBE, onFailure)
-    await vi.waitFor(() => expect(FakeWorker.latest?.frameMessages).toHaveLength(1))
-    const firstOutput = { close: vi.fn() } as unknown as VideoFrame
-    FakeWorker.latest?.onmessage?.({ data: { type: 'frame', frame: firstOutput } } as MessageEvent)
-    await vi.waitFor(() => expect(FakeWorker.latest?.frameMessages).toHaveLength(2))
-    FakeWorker.latest?.onmessage?.({ data: { type: 'error', reason: 'WebGPU device was lost' } } as MessageEvent)
-    expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ message: 'WebGPU device was lost' }))
+    const nativeCreateElement = document.createElement.bind(document)
+    const canvas = nativeCreateElement('canvas')
+    canvas.getContext = vi.fn(() => ({ drawImage: vi.fn() })) as unknown as typeof canvas.getContext
+    Object.defineProperty(canvas, 'captureStream', { configurable: true, value: undefined })
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => (
+      tagName === 'canvas' ? canvas : nativeCreateElement(tagName)
+    ))
+
+    await expect(createSDRPublishPipeline(capture, 'h264'))
+      .rejects.toThrow('Браузер не поддерживает безопасное HDR → SDR преобразование экрана')
+    expect(playbackTrack.stop).toHaveBeenCalledOnce()
+  })
+
+  it('publishes the normalized SDR track alongside the untouched HDR master', async () => {
+    const mocks = installCanvasCaptureMocks()
+    const pipeline = await createHDRPublishPipeline(mocks.capture, 'h264', HDR_PROBE)
+
+    expect(pipeline.stream.getVideoTracks()).toEqual([mocks.outputTrack, mocks.source])
+    expect(pipeline.renditions.map((item) => item.id)).toEqual(['sdr', 'hdr'])
     pipeline.close()
   })
 })
