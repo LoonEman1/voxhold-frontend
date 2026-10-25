@@ -121,6 +121,57 @@ describe('stream remote media', () => {
     expect(peer?.close).toHaveBeenCalledOnce()
   })
 
+  it('gives viewer receivers a jitter buffer target', () => {
+    const session = new BrowserServerStreamSession({
+      preferences: DEFAULT_STREAM_PREFERENCES,
+      codec: 'vp8',
+      onConnectionStateChange: vi.fn(),
+      onError: vi.fn(),
+      onAnswer: vi.fn(),
+      onICECandidate: vi.fn(),
+    })
+    const receiver = { jitterBufferTarget: null as number | null }
+    const video = new FakeTrack('screen-video', 'video')
+    FakePeerConnection.latest?.ontrack?.({
+      track: video,
+      receiver,
+      streams: [new FakeMediaStream([video])],
+    } as unknown as RTCTrackEvent)
+
+    expect(receiver.jitterBufferTarget).toBe(120)
+    session.close()
+  })
+
+  it('tunes the publisher remote offer and applies sender limits', async () => {
+    const video = new FakeTrack('screen-video', 'video')
+    const session = new BrowserServerStreamSession({
+      localStream: new FakeMediaStream([video]) as unknown as MediaStream,
+      preferences: { ...DEFAULT_STREAM_PREFERENCES, content: 'motion' },
+      codec: 'vp8',
+      onConnectionStateChange: vi.fn(),
+      onError: vi.fn(),
+      onAnswer: vi.fn(),
+      onICECandidate: vi.fn(),
+    })
+    const peer = FakePeerConnection.latest
+    const line = fakeTransceiver('video')
+    let applied: RTCRtpSendParameters | null = null
+    Object.assign(line.sender, {
+      getParameters: () => ({ encodings: [{}] }) as unknown as RTCRtpSendParameters,
+      setParameters: vi.fn(async (parameters: RTCRtpSendParameters) => { applied = parameters }),
+    })
+    peer?.transceivers.push(line)
+
+    await session.acceptOffer('v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\n')
+
+    expect(peer?.setRemoteDescription.mock.calls[0]?.[0]?.sdp).toContain('a=fmtp:96 x-google-start-bitrate=2400')
+    expect(applied).toMatchObject({
+      degradationPreference: 'balanced',
+      encodings: [{ maxBitrate: 6_000_000, maxFramerate: 30, priority: 'high', networkPriority: 'high' }],
+    })
+    session.close()
+  })
+
   it('maps SDR and HDR tracks to separate video m-lines with exact profiles', async () => {
     const sdr = new FakeTrack('sdr-video', 'video')
     const hdr = new FakeTrack('hdr-video', 'video')

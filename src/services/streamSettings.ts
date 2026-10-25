@@ -15,11 +15,17 @@ export type StreamVideoBitrate = typeof STREAM_VIDEO_BITRATES[number]
 export type StreamAudioBitrate = typeof STREAM_AUDIO_BITRATES[number]
 export type StreamCodecPreference = 'auto' | StreamCodec
 export type StreamDynamicRangePreference = 'auto' | 'sdr' | 'hdr'
+/**
+ * detail: text and interfaces keep full resolution, frame rate drops first.
+ * motion: games and video keep smooth motion, resolution adapts instead.
+ */
+export type StreamContent = 'detail' | 'motion'
 
 export interface StreamPreferences {
   mode: StreamMode
   codec: StreamCodecPreference
   dynamicRange: StreamDynamicRangePreference
+  content: StreamContent
   resolution: StreamResolution
   frameRate: StreamFrameRate
   videoBitrateKbps: StreamVideoBitrate
@@ -32,6 +38,7 @@ export const DEFAULT_STREAM_PREFERENCES: StreamPreferences = {
   mode: 'server',
   codec: 'auto',
   dynamicRange: 'auto',
+  content: 'detail',
   resolution: '1080p',
   frameRate: 30,
   videoBitrateKbps: 6000,
@@ -52,6 +59,7 @@ export function normalizeStreamPreferences(value: unknown): StreamPreferences {
     dynamicRange: source.dynamicRange === 'sdr' || source.dynamicRange === 'hdr'
       ? source.dynamicRange
       : 'auto',
+    content: source.content === 'motion' ? 'motion' : 'detail',
     resolution: STREAM_RESOLUTIONS.some((item) => item.id === source.resolution)
       ? source.resolution as StreamResolution
       : DEFAULT_STREAM_PREFERENCES.resolution,

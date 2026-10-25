@@ -6,6 +6,14 @@ import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
 import { DecodeWatchdog, sampleInboundVideoStats } from './mediaRecovery'
 import { detectHDRCapabilities, probeCapturedHDRTrack, rememberHDRCaptureProbe } from './hdrCapabilities'
+import { tunePublisherRemoteDescription } from './sdpTuning'
+
+/**
+ * Viewers trade a little latency for smooth playback: without a target the
+ * jitter buffer runs as small as possible and every network hiccup becomes a
+ * visible stutter. Audio and video get the same target to stay in sync.
+ */
+const STREAM_JITTER_BUFFER_TARGET_MS = 120
 
 export type StreamConnectionState = RTCPeerConnectionState
 
@@ -160,7 +168,7 @@ function preferCodec(transceiver: RTCRtpTransceiver, codec: StreamCodec, profile
   }
 }
 
-async function applySenderLimits(sender: RTCRtpSender, preferences: StreamPreferences) {
+async function configureSender(sender: RTCRtpSender, preferences: StreamPreferences, withPriority: boolean) {
   const track = sender.track
   if (!track) return
   const parameters = sender.getParameters()
@@ -170,13 +178,28 @@ async function applySenderLimits(sender: RTCRtpSender, preferences: StreamPrefer
   if (track.kind === 'video') {
     encoding.maxBitrate = preferences.videoBitrateKbps * 1000
     encoding.maxFramerate = preferences.frameRate
-    // Screen sharing benefits more from readable text and stable detail than
-    // from preserving every frame when bandwidth briefly becomes constrained.
-    parameters.degradationPreference = 'maintain-resolution'
+    // Text stays readable when frame rate drops first; games and video stay
+    // smooth when the encoder may lower resolution and frame rate together.
+    parameters.degradationPreference = preferences.content === 'motion' ? 'balanced' : 'maintain-resolution'
   } else if (track.kind === 'audio') {
     encoding.maxBitrate = preferences.audioBitrateKbps * 1000
   }
+  if (withPriority) {
+    // The stream is the only media of its connection: favour it in the
+    // browser's bitrate allocation and mark its packets for DSCP queuing.
+    encoding.priority = 'high'
+    encoding.networkPriority = 'high'
+  }
   await sender.setParameters(parameters)
+}
+
+async function applySenderLimits(sender: RTCRtpSender, preferences: StreamPreferences) {
+  try {
+    await configureSender(sender, preferences, true)
+  } catch {
+    // An engine that rejects priorities must still receive the bitrate caps.
+    await configureSender(sender, preferences, false)
+  }
 }
 
 interface VideoRTPStats extends RTCStats {
@@ -360,6 +383,14 @@ function wirePeer(
 ) {
   const remote = new MediaStream()
   peer.ontrack = (event) => {
+    const receiver = event.receiver as (RTCRtpReceiver & { jitterBufferTarget?: number | null }) | undefined
+    if (receiver && 'jitterBufferTarget' in receiver) {
+      try {
+        receiver.jitterBufferTarget = STREAM_JITTER_BUFFER_TARGET_MS
+      } catch {
+        // Optional playout hint; playback works without it.
+      }
+    }
     if (!remote.getTracks().some((track) => track.id === event.track.id)) {
       remote.addTrack(event.track)
       clientDiagnostics.record('media', 'stream_remote_track_added', 'info', {
@@ -420,20 +451,32 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
   if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Браузер не поддерживает трансляцию экрана')
   const preferences = normalizeStreamPreferences(value)
   const resolution = selectedStreamResolution(preferences)
-  const media = await navigator.mediaDevices.getDisplayMedia({
+  const options: DisplayMediaStreamOptions & Record<string, unknown> = {
     video: {
       width: { ideal: resolution.width, max: resolution.width },
       height: { ideal: resolution.height, max: resolution.height },
       frameRate: { ideal: preferences.frameRate, max: preferences.frameRate },
     },
-    audio: preferences.includeAudio,
-  })
+    // Voice processing is tuned for microphones: on system audio it pumps
+    // music and cuts game sound, so the captured mix is sent untouched.
+    audio: preferences.includeAudio
+      ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      : false,
+    // Chromium hints (ignored elsewhere): never offer the Voxhold tab itself,
+    // which would mirror the stream endlessly, and allow switching the shared
+    // tab without restarting the stream.
+    selfBrowserSurface: 'exclude',
+    surfaceSwitching: 'include',
+    systemAudio: preferences.includeAudio ? 'include' : 'exclude',
+  }
+  const media = await navigator.mediaDevices.getDisplayMedia(options)
   const video = media.getVideoTracks()[0]
   if (!video) {
     media.getTracks().forEach((track) => track.stop())
     throw new Error('Источник экрана не предоставил видеодорожку')
   }
-  video.contentHint = 'detail'
+  video.contentHint = preferences.content === 'motion' ? 'motion' : 'detail'
+  media.getAudioTracks().forEach((track) => { track.contentHint = 'music' })
   const settings = video.getSettings()
   clientDiagnostics.record('media', 'stream_capture_ready', 'info', {
     has_audio: media.getAudioTracks().length > 0,
@@ -528,7 +571,10 @@ export class BrowserServerStreamSession {
         sdp_bytes: sdp.length,
         pending_ice_count: this.pendingCandidates.length,
       })
-      await this.peer.setRemoteDescription({ type: 'offer', sdp })
+      await this.peer.setRemoteDescription({
+        type: 'offer',
+        sdp: this.options.localStream ? tunePublisherRemoteDescription(sdp, this.options.preferences) : sdp,
+      })
       const pending = this.pendingCandidates.splice(0)
       for (const candidate of pending) {
         if (remoteDescriptionAcceptsCandidate(this.peer, candidate)) {
@@ -698,7 +744,10 @@ export class BrowserP2PStreamPublisher {
     if (!state || this.closed) return
     const operation = state.operation.then(async () => {
       if (this.closed || this.peers.get(connectionId) !== state) return
-      await state.peer.setRemoteDescription({ type: 'answer', sdp })
+      await state.peer.setRemoteDescription({
+        type: 'answer',
+        sdp: tunePublisherRemoteDescription(sdp, this.options.preferences),
+      })
       clientDiagnostics.record('webrtc', 'stream_answer_received', 'debug', {
         transport: 'p2p',
         role: 'publisher',
