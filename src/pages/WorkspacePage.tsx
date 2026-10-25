@@ -35,7 +35,7 @@ import { createHDRPublishPipeline, createSDRPublishPipeline, type StreamPublishP
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { BrowserVoiceInput } from '../services/voiceInput'
-import { SignallingRecoveryCoordinator } from '../services/mediaRecovery'
+import { RetryBudget, SignallingRecoveryCoordinator } from '../services/mediaRecovery'
 import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
@@ -164,7 +164,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const recoveryActionsRef = useRef<{
     offline: () => void
     ready: () => void
-  }>({ offline: () => undefined, ready: () => undefined })
+    voiceClosed: () => void
+  }>({ offline: () => undefined, ready: () => undefined, voiceClosed: () => undefined })
+  // Server-side media closures are retried automatically, but only a few
+  // times: a server that keeps closing the session must not cause a loop.
+  const voiceRejoinBudgetRef = useRef(new RetryBudget(3, 5 * 60_000))
+  const streamRewatchBudgetRef = useRef(new RetryBudget(2, 2 * 60_000))
   // Unexpected signalling offline keeps the publisher screen capture alive for
   // a bounded grace period so restoring the stream never needs a new
   // getDisplayMedia permission gesture.
@@ -919,6 +924,18 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           })
           return
         }
+        const replaced = event.reason === 'voice session moved to another connection'
+        const rejoin = !replaced && !!voiceSessionRef.current && voiceRejoinBudgetRef.current.take()
+        clientDiagnostics.record('webrtc', 'voice_closed_by_server', 'warn', {
+          reason: event.reason,
+          action: rejoin ? 'rejoin' : 'leave',
+        })
+        if (rejoin) {
+          // The signalling connection is healthy: rejoin with the same
+          // microphone instead of dropping the user out of the channel.
+          recoveryActionsRef.current.voiceClosed()
+          return
+        }
         setVoiceError(voiceCloseMessage(event.reason))
         closeVoiceLocally()
       },
@@ -964,8 +981,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onStreamWebRTCClosed: (event) => {
         if (recoveryRef.current?.staleConnectionId()) return
         if (pendingStreamRewatchRef.current) return
-        setStreamError(streamCloseMessage(event.reason))
+        // A viewer whose media session failed (recovery exhausted, rendition
+        // restarted) simply watches again; the publisher's limits are final.
+        const rewatch = streamRoleRef.current === 'viewer'
+          && !STREAM_FINAL_CLOSE_REASONS.has(event.reason)
+          && streamRewatchBudgetRef.current.take()
+        clientDiagnostics.record('webrtc', 'stream_closed_by_server', 'warn', {
+          reason: event.reason,
+          role: streamRoleRef.current,
+          action: rewatch ? 'rewatch' : 'close',
+        })
         closeStreamLocally()
+        if (rewatch) {
+          window.setTimeout(() => streamWatchActionRef.current(false, false), 1_000)
+          return
+        }
+        setStreamError(streamCloseMessage(event.reason))
       },
       onStreamP2POffer: (event) => { void p2pStreamViewerRef.current?.acceptOffer(event.from_connection_id, event.sdp) },
       onStreamP2PAnswer: (event) => { void p2pStreamPublisherRef.current?.acceptAnswer(event.from_connection_id, event.sdp) },
@@ -1493,12 +1524,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   /**
    * Unexpected WebSocket loss: close peers only, keep the microphone and the
    * screen capture alive for a bounded grace period, then wait for `ready`.
+   * `voice_closed`: the server ended the media session while signalling is
+   * still up, so the same connection rejoins at once.
    */
-  const beginSignallingRecovery = useCallback(() => {
+  const beginSignallingRecovery = useCallback((cause: 'signalling' | 'voice_closed' = 'signalling') => {
     const active = voiceSessionRef.current
     if (!active) return
+    // Read before detachMediaPeers() resets it: the intent decides whether
+    // the stream is restored after the voice rejoin.
+    const streamRole = streamRoleRef.current
     recoveryRef.current?.cancel('superseded by newer disconnect')
-    stashCapturedStream('signalling_offline')
+    stashCapturedStream(cause === 'signalling' ? 'signalling_offline' : 'voice_closed_by_server')
     detachMediaPeers()
 
     const coordinator = new SignallingRecoveryCoordinator(
@@ -1528,20 +1564,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       serverId: active.serverId,
       channelId: active.channelId,
       channelName: active.channelName,
-      staleConnectionId: active.connectionId,
+      // An in-place rejoin keeps the WebSocket connection id, so the new
+      // voice.joined must not be mistaken for the dead generation.
+      staleConnectionId: cause === 'signalling' ? active.connectionId : null,
       selfMute: active.selfMute,
       selfDeaf: active.selfDeaf,
-      streamRole: streamRoleRef.current,
+      streamRole,
     })
     recoveryRef.current = coordinator
     setMediaRecovering(true)
     setVoiceError('')
     clientDiagnostics.record('media', 'media_recovery_started', 'warn', {
-      stream_role: streamRoleRef.current ?? null,
+      cause,
+      stream_role: streamRole ?? null,
     })
+    if (cause === 'voice_closed') coordinator.handleReady()
   }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, finishFailedRecovery])
 
-  recoveryActionsRef.current.offline = beginSignallingRecovery
+  recoveryActionsRef.current.offline = () => beginSignallingRecovery('signalling')
+  recoveryActionsRef.current.voiceClosed = () => beginSignallingRecovery('voice_closed')
   recoveryActionsRef.current.ready = () => { recoveryRef.current?.handleReady() }
 
   const retryMicrophone = async () => {
@@ -2171,6 +2212,14 @@ function streamRealtimeError(message: string) {
   }
   return translations[message] ?? message
 }
+
+/** Server reasons that a new watch attempt cannot fix. */
+const STREAM_FINAL_CLOSE_REASONS = new Set([
+  'stream video bitrate limit exceeded',
+  'stream audio bitrate limit exceeded',
+  'duplicate stream media track',
+  'too many pending ICE candidates',
+])
 
 function streamCloseMessage(reason: string) {
   const translations: Record<string, string> = {
