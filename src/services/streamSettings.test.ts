@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  applyStreamPreset,
+  matchingStreamPreset,
   DEFAULT_STREAM_PREFERENCES,
   loadStreamPreferences,
   normalizeStreamPreferences,
@@ -35,6 +37,16 @@ describe('stream preferences', () => {
       audioBitrateKbps: 320,
       playbackVolume: 37,
     })
+  })
+
+  it('applies content presets without touching resolution or transport', () => {
+    const base = { ...DEFAULT_STREAM_PREFERENCES, resolution: '1440p' as const, mode: 'p2p' as const }
+    const games = applyStreamPreset(base, 'games')
+
+    expect(games).toMatchObject({ content: 'motion', frameRate: 60, videoBitrateKbps: 12000, resolution: '1440p', mode: 'p2p' })
+    expect(matchingStreamPreset(games)).toBe('games')
+    expect(matchingStreamPreset(DEFAULT_STREAM_PREFERENCES)).toBe('desktop')
+    expect(matchingStreamPreset({ ...games, videoBitrateKbps: 4500 })).toBeNull()
   })
 
   it('rejects values outside client presets', () => {

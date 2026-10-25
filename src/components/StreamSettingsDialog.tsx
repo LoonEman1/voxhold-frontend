@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import {
+  applyStreamPreset,
+  matchingStreamPreset,
   STREAM_AUDIO_BITRATES,
   STREAM_FRAME_RATES,
+  STREAM_PRESETS,
   STREAM_RESOLUTIONS,
   STREAM_VIDEO_BITRATES,
   type StreamPreferences,
@@ -38,8 +41,16 @@ export function StreamSettingsDialog({ open, busy, preferences, onChange, onClos
   const patch = <K extends keyof StreamPreferences>(key: K, value: StreamPreferences[K]) => {
     onChange({ ...preferences, [key]: value })
   }
+  const activePreset = matchingStreamPreset(preferences)
+  const heavy = preferences.frameRate >= 90 || preferences.resolution === '2160p'
 
   return <Modal open={open} title="Поделиться экраном" eyebrow="ТРАНСЛЯЦИЯ ЭКРАНА" size="medium" onClose={onClose}>
+    <div className="stream-presets" role="group" aria-label="Быстрые настройки">
+      {STREAM_PRESETS.map((preset) => <button key={preset.id} type="button" className={activePreset === preset.id ? 'is-active' : ''} aria-pressed={activePreset === preset.id} onClick={() => onChange(applyStreamPreset(preferences, preset.id))}>
+        <b>{preset.label}</b><small>{preset.hint}</small>
+      </button>)}
+      <span className={`stream-presets__custom ${activePreset ? '' : 'is-active'}`} title="Любое поле ниже можно настроить вручную"><b>Своё</b><small>настройки ниже</small></span>
+    </div>
     <div className="stream-settings-grid">
       <label><span>Передача</span><select value={preferences.mode} onChange={(event) => patch('mode', event.target.value as StreamPreferences['mode'])}><option value="server">Через сервер (стабильнее)</option><option value="p2p">Напрямую P2P</option></select></label>
       <label><span>Видеокодек</span><select value={preferences.codec} onChange={(event) => patch('codec', event.target.value as StreamPreferences['codec'])}><option value="auto">Автоматически{automaticCodec ? ` (${automaticCodec})` : ''}</option><option value="vp9" disabled={!supportedCodecs.includes('vp9')}>VP9{!supportedCodecs.includes('vp9') ? ' — недоступен' : ''}</option><option value="h264" disabled={!supportedCodecs.includes('h264')}>H.264{!supportedCodecs.includes('h264') ? ' — недоступен' : ''}</option><option value="av1" disabled={!supportedCodecs.includes('av1')}>AV1{!supportedCodecs.includes('av1') ? ' — недоступен' : ''}</option><option value="vp8" disabled={!supportedCodecs.includes('vp8')}>VP8{!supportedCodecs.includes('vp8') ? ' — недоступен' : ''}</option></select></label>
@@ -52,6 +63,7 @@ export function StreamSettingsDialog({ open, busy, preferences, onChange, onClos
       <label className="stream-audio-toggle"><input type="checkbox" checked={preferences.includeAudio} onChange={(event) => patch('includeAudio', event.target.checked)}/><span>Передавать системный звук</span></label>
     </div>
     {preferences.includeAudio && !canRestrictOwnAudio() && <p className="stream-warning">Этот браузер не умеет убирать голоса из Voxhold из системного звука: при показе всего экрана или окна друзья услышат себя. Показывайте отдельную вкладку — тогда передаётся только её звук.</p>}
+    {heavy && <p className="stream-warning">4K и 90+ FPS сильно нагружают процессор и исходящий канал: если картинка начнёт дёргаться, снизьте разрешение или частоту кадров.</p>}
     {hdrCapabilities && !hdrCapabilities.canPublishHDR && <p className="stream-warning">HDR отключён: {hdrCapabilities.reason}</p>}
     {preferences.mode === 'p2p' && <p className="stream-warning">P2P раскрывает IP участникам и расходует ваш исходящий трафик отдельно на каждого зрителя. Максимум — 8 зрителей.</p>}
     <div className="stream-dialog-actions">

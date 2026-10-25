@@ -258,6 +258,8 @@ export interface ActiveStream {
   viewer_count: number
   /** Optional while connecting to a protocol v5 backend. */
   renditions?: StreamRendition[]
+  /** Unix milliseconds; absent on backends older than 0.8. */
+  started_at_ms?: number
 }
 
 export interface StreamSnapshot {

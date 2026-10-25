@@ -45,6 +45,9 @@ interface VoicePanelProps {
   onWatchStream: () => void
   onLeaveStream: () => void
   onExpandStream: () => void
+  /** Publisher only: the outgoing stream audio is muted for viewers. */
+  streamAudioMuted?: boolean
+  onToggleStreamAudio?: () => void
 }
 
 const statusLabel: Record<VoiceConnectionStatus, string> = {
@@ -54,8 +57,9 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream }: VoicePanelProps) {
+export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, streamAudioMuted = false, onToggleStreamAudio }: VoicePanelProps) {
   const activeHere = activeChannel?.id === channel.id
+  const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
   const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
   const statusText = recovering
@@ -85,6 +89,9 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
         </div>
       </div>
 
+      {/* The stream is the main content of the room while it runs. */}
+      <StreamPanel stream={stream} currentUserId={currentUserId} publisherName={publisherName} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream} onToggleAudio={onToggleStreamAudio}/>
+
       <section className="voice-participants">
         <header><div><span className="eyebrow">В КОМНАТЕ</span><h3>{participants.length} {participantWord(participants.length)}</h3></div><span className="voice-secure"><i/><span>DTLS-SRTP</span></span></header>
         {participants.length ? <div className="voice-participant-grid">{participants.map((participant) => {
@@ -96,12 +103,11 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
           return <button className={`voice-participant ${isMe ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)}>
             <div className="voice-participant__avatar"><Avatar name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
             <span><b className={`member-name--${role}`}>{username}{isMe && <small>вы</small>}</b><em>{roleMeta[role].shortLabel}</em></span>
+            {stream?.publisher_user_id === participant.user_id && <b className="voice-participant__live" title="Показывает экран"><Icon name="monitor" size={11}/>В эфире</b>}
             <div className="voice-participant__state">{participant.self_deaf && <span title="Звук выключен"><Icon name="headphonesOff" size={14}/></span>}{participant.self_mute && <span title="Микрофон выключен"><Icon name="micOff" size={14}/></span>}</div>
           </button>
         })}</div> : <div className="voice-empty"><span><Icon name="people" size={25}/></span><div><b>Здесь пока тихо</b><p>Подключитесь первым — остальные увидят вас в комнате сразу.</p></div></div>}
       </section>
-
-      <StreamPanel stream={stream} currentUserId={currentUserId} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream}/>
     </section>
   )
 }

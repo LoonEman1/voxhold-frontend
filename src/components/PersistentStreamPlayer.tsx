@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
+import { useLiveDuration } from '../hooks/useLiveDuration'
 import { useMediaPlayback } from '../hooks/useMediaPlayback'
+import { pictureInPictureAvailable, togglePictureInPicture } from '../lib/pictureInPicture'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
@@ -25,6 +27,8 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
   const playerRef = useRef<HTMLElement>(null)
   const [uiHidden, setUIHidden] = useState(false)
   const isPublisher = role === 'publisher'
+  const duration = useLiveDuration(stream?.started_at_ms)
+  const canPictureInPicture = !isPublisher && pictureInPictureAvailable()
   const wantMuted = isPublisher || preferences.playbackVolume === 0
   const { videoRef, state: playbackState, muted, attach, enableAudio } = useMediaPlayback({
     role,
@@ -110,6 +114,7 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
         <span className="stream-mini-player__channel"><Icon name="volume" size={13}/>{channelName}</span>
       </button>
       <div className="stream-mini-player__actions">
+        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Картинка в картинке" aria-label="Смотреть поверх других окон"><Icon name="pip" size={17}/></button>}
         <button type="button" onClick={onExpand} title="На весь экран" aria-label="Открыть трансляцию на весь экран"><Icon name="maximize" size={17}/></button>
         <button className="is-danger" type="button" onClick={onLeave} title={leaveLabel} aria-label={leaveLabel}><Icon name="logout" size={17}/></button>
       </div>
@@ -118,9 +123,10 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
 
   return <section ref={playerRef} className={`stream-expanded-player ${uiHidden ? 'is-ui-hidden' : ''}`} role="dialog" aria-modal="true" aria-label={`Трансляция в канале ${channelName}`}>
     <header>
-      <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА</span><h2>{channelName}</h2></div>
+      <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА{duration && ` · ${duration}`}</span><h2>{channelName}</h2></div>
       <div className="stream-expanded-player__meta">
         {stream && <><span className="stream-mode">{stream.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></>}
+        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Смотреть поверх других окон"><Icon name="pip"/><span>Картинка в картинке</span></button>}
         <button type="button" onClick={() => void enterCinemaMode()} title="Открыть настоящий полноэкранный режим без интерфейса"><Icon name="maximize"/><span>Полный экран</span></button>
         <button type="button" onClick={onCollapse} title="Свернуть трансляцию"><Icon name="minimize"/><span>Свернуть</span></button>
       </div>

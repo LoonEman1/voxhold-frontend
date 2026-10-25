@@ -24,6 +24,24 @@ export function relativeTime(unixSeconds: number | null): string {
   return rtf.format(Math.round(hours / 24), 'day')
 }
 
+/** Live duration as m:ss, or h:mm:ss from the first hour on. */
+export function formatDuration(milliseconds: number): string {
+  const total = Math.max(0, Math.floor(milliseconds / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
+}
+
+export function viewerLabel(count: number): string {
+  if (count <= 0) return 'пока без зрителей'
+  const mod100 = count % 100
+  const mod10 = count % 10
+  const word = mod100 >= 11 && mod100 <= 14 ? 'зрителей' : mod10 === 1 ? 'зритель' : mod10 >= 2 && mod10 <= 4 ? 'зрителя' : 'зрителей'
+  return `${count} ${word}`
+}
+
 export function initials(value: string): string {
   return value.trim().slice(0, 2).toLocaleUpperCase('ru') || 'VX'
 }
