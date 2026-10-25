@@ -29,7 +29,7 @@ import { humanError, relativeTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
-import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
+import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, capturedAudioIncludesOwnPlayback, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
 import { capturedHDRProbe, detectHDRCapabilities, streamWatchCapabilities } from '../services/hdrCapabilities'
 import { createHDRPublishPipeline, createSDRPublishPipeline, type StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
@@ -1298,6 +1298,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       if (!trackStreamRequest(requestId, 'start')) throw new Error('Realtime-соединение недоступно')
       if (preferences.includeAudio && capture.getAudioTracks().length === 0) {
         setStreamError('Выбранный источник не передал системный звук; видео продолжает транслироваться')
+      } else if (capturedAudioIncludesOwnPlayback(capture)) {
+        setStreamError('Браузер не смог убрать голоса из Voxhold из звука экрана — друзья услышат себя. Покажите отдельную вкладку или отключите звук трансляции')
       }
     } catch (error) {
       failStream(error)

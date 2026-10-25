@@ -7,7 +7,7 @@ import {
   type StreamPreferences,
 } from '../services/streamSettings'
 import { detectHDRCapabilities, type HDRCapabilities } from '../services/hdrCapabilities'
-import { selectedStreamCodec, supportedStreamCodecs } from '../services/stream'
+import { canRestrictOwnAudio, selectedStreamCodec, supportedStreamCodecs } from '../services/stream'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 
@@ -51,6 +51,7 @@ export function StreamSettingsDialog({ open, busy, preferences, onChange, onClos
       <label><span>Звук трансляции</span><select value={preferences.audioBitrateKbps} disabled={!preferences.includeAudio} onChange={(event) => patch('audioBitrateKbps', Number(event.target.value) as StreamPreferences['audioBitrateKbps'])}>{STREAM_AUDIO_BITRATES.map((rate) => <option value={rate} key={rate}>{rate} Кбит/с</option>)}</select></label>
       <label className="stream-audio-toggle"><input type="checkbox" checked={preferences.includeAudio} onChange={(event) => patch('includeAudio', event.target.checked)}/><span>Передавать системный звук</span></label>
     </div>
+    {preferences.includeAudio && !canRestrictOwnAudio() && <p className="stream-warning">Этот браузер не умеет убирать голоса из Voxhold из системного звука: при показе всего экрана или окна друзья услышат себя. Показывайте отдельную вкладку — тогда передаётся только её звук.</p>}
     {hdrCapabilities && !hdrCapabilities.canPublishHDR && <p className="stream-warning">HDR отключён: {hdrCapabilities.reason}</p>}
     {preferences.mode === 'p2p' && <p className="stream-warning">P2P раскрывает IP участникам и расходует ваш исходящий трафик отдельно на каждого зрителя. Максимум — 8 зрителей.</p>}
     <div className="stream-dialog-actions">
