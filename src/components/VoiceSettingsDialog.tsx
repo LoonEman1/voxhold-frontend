@@ -7,6 +7,7 @@ import {
   shortcutLabel,
   type VoicePreferences,
 } from '../services/voiceSettings'
+import { uiSounds } from '../services/uiSounds'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 
@@ -161,6 +162,17 @@ export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, vo
           {previewError && <div className="voice-preview-error" role="alert">{previewError}</div>}
           <VoiceRange label="Громкость собеседников" value={preferences.outputVolume} max={100} onChange={(value) => patch('outputVolume', value)}/>
           <div className="voice-bitrate-setting"><span><b>Качество передачи</b><em>{preferences.bitrateKbps} Кбит/с</em></span><div>{VOICE_BITRATES.map((bitrate) => <button className={preferences.bitrateKbps === bitrate ? 'is-active' : ''} type="button" key={bitrate} onClick={() => patch('bitrateKbps', bitrate)}>{bitrate}</button>)}</div><small>Это максимальный битрейт Opus. При нестабильной сети WebRTC может временно снизить его автоматически.</small></div>
+        </section>
+
+        <section className="voice-settings__section">
+          <div className="voice-settings__heading"><span><Icon name="bell"/></span><div><h3>Звуки интерфейса</h3><p>Короткие сигналы о входе и выходе из канала, а также о включении микрофона и звука. Слышите их только вы.</p></div></div>
+          <div className="voice-toggle-list">
+            <VoiceToggle title="Звуки подключения и микрофона" description="Ваш вход и выход, участники канала, микрофон и звук вкл/выкл." checked={preferences.uiSounds} onChange={(value) => patch('uiSounds', value)}/>
+          </div>
+          {preferences.uiSounds && <>
+            <VoiceRange label="Громкость сигналов" value={preferences.uiSoundVolume} max={100} onChange={(value) => patch('uiSoundVolume', value)}/>
+            <button className="button button--ghost voice-sound-preview" type="button" onClick={() => uiSounds.play('self_join', preferences.uiSoundVolume, preferences.outputDeviceId)}><Icon name="volume"/>Проверить</button>
+          </>}
         </section>
 
         <section className="voice-settings__section">

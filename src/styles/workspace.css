@@ -423,3 +423,5 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
   .stream-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 16px 12px; }
   .stream-action span { display: none; }
 }
+
+.voice-sound-preview { align-self: flex-start; margin-top: 10px; }
