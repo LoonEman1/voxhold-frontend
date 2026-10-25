@@ -148,6 +148,67 @@ describe('publisher color pipelines', () => {
     expect(outputTrack.stop).toHaveBeenCalledOnce()
   })
 
+  it('repeats the last picture on a static screen and follows resolution changes', async () => {
+    const outputTrack = { kind: 'video', contentHint: '', stop: vi.fn() }
+    const source = {
+      kind: 'video',
+      contentHint: 'motion',
+      clone: vi.fn(() => ({ kind: 'video', stop: vi.fn() })),
+      getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+    }
+    const capture = new FakeMediaStream([source]) as unknown as MediaStream
+    let enqueue: (frame: VideoFrame) => void = () => undefined
+    const readable = new ReadableStream<VideoFrame>({
+      start(controller) {
+        enqueue = (frame) => controller.enqueue(frame)
+      },
+    })
+    const written: Array<{ timestamp: number }> = []
+    class FakeProcessor {
+      readable = readable
+    }
+    class FakeGenerator {
+      track = outputTrack
+      writable = new WritableStream<VideoFrame>({
+        write(frame) { written.push(frame as unknown as { timestamp: number }) },
+      })
+    }
+    class FakeVideoFrame {
+      timestamp: number
+      close = vi.fn()
+      constructor(_source: CanvasImageSource, init: VideoFrameInit) {
+        this.timestamp = init.timestamp ?? 0
+      }
+    }
+    const nativeCreateElement = document.createElement.bind(document)
+    const canvas = nativeCreateElement('canvas')
+    const drawImage = vi.fn()
+    canvas.getContext = vi.fn(() => ({ drawImage })) as unknown as typeof canvas.getContext
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => (
+      tagName === 'canvas' ? canvas : nativeCreateElement(tagName)
+    ))
+    vi.stubGlobal('OffscreenCanvas', undefined)
+    vi.stubGlobal('MediaStreamTrackProcessor', FakeProcessor)
+    vi.stubGlobal('VideoTrackGenerator', FakeGenerator)
+    vi.stubGlobal('VideoFrame', FakeVideoFrame)
+    vi.stubGlobal('MediaStream', FakeMediaStream)
+
+    const pipeline = await createSDRPublishPipeline(capture, 'vp9', undefined, { idleRefreshMs: 30 })
+    expect(outputTrack.contentHint).toBe('motion')
+
+    enqueue({ timestamp: 5_000, displayWidth: 1600, displayHeight: 900, close: vi.fn() } as unknown as VideoFrame)
+    await vi.waitFor(() => expect(written.length).toBeGreaterThanOrEqual(3))
+    pipeline.close()
+
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1600, 900)
+    expect(canvas.width).toBe(1600)
+    expect(canvas.height).toBe(900)
+    expect(written[0]?.timestamp).toBe(5_000)
+    for (let index = 1; index < written.length; index += 1) {
+      expect(written[index]?.timestamp ?? 0).toBeGreaterThan(written[index - 1]?.timestamp ?? 0)
+    }
+  })
+
   it('renders the captured screen into an sRGB canvas track and preserves audio', async () => {
     const mocks = installCanvasCaptureMocks()
     const pipeline = await createSDRPublishPipeline(mocks.capture, 'h264')

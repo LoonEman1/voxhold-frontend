@@ -141,10 +141,28 @@ function createFrameCanvas(width: number, height: number): Canvas2DTarget | null
   return canvas
 }
 
+/**
+ * Screen capture delivers frames only when the picture changes, and an
+ * encoder can answer a key frame request only with a new input frame. On a
+ * static screen late joiners therefore stayed black and the viewer decode
+ * watchdog escalated to reconnects. The pipelines re-emit the last picture
+ * at this interval while the source is idle.
+ */
+const IDLE_REFRESH_MS = 500
+
+export interface SDRPipelineOptions {
+  idleRefreshMs?: number
+}
+
+function contentHintOf(source: MediaStreamTrack) {
+  return source.contentHint === 'motion' ? 'motion' : 'detail'
+}
+
 function createFrameDrivenSDRPipeline(
   capture: MediaStream,
   codec: StreamCodec,
-  onFailure?: (error: Error) => void,
+  onFailure: ((error: Error) => void) | undefined,
+  idleRefreshMs: number,
 ): StreamPublishPipeline | null {
   const { Processor, Generator } = frameTransformConstructors()
   if (!Processor || !Generator || typeof VideoFrame === 'undefined') return null
@@ -162,35 +180,62 @@ function createFrameDrivenSDRPipeline(
   const processor = new Processor({ track: processorTrack })
   const generator = new Generator({ kind: 'video' })
   const sdrTrack = generator.track ?? generator as unknown as MediaStreamTrack
-  sdrTrack.contentHint = 'detail'
+  sdrTrack.contentHint = contentHintOf(source)
   const reader = processor.readable.getReader()
   const writer = generator.writable.getWriter()
   let closed = false
+  let failureReported = false
+  let hasPicture = false
+  // Output timestamps (µs) must stay strictly increasing across captured and
+  // repeated frames; repeated frames advance by the elapsed wall time.
+  let lastTimestamp = Number.NEGATIVE_INFINITY
+  let lastEmittedAt = 0
+
+  const reportFailure = (value: unknown) => {
+    if (closed || failureReported) return
+    failureReported = true
+    onFailure?.(value instanceof Error ? value : new Error('SDR frame pipeline stopped'))
+  }
+
+  // VideoFrame snapshots the canvas synchronously and the writer queues
+  // writes in call order, so captured and repeated frames never reorder.
+  const emit = (timestamp: number, duration?: number) => {
+    const output = new VideoFrame(canvas, { timestamp, duration, alpha: 'discard' })
+    lastTimestamp = timestamp
+    lastEmittedAt = performance.now()
+    return writer.write(output).finally(() => output.close())
+  }
 
   const pump = async () => {
     while (!closed) {
       const sample = await reader.read()
       if (sample.done || !sample.value) break
       const input = sample.value
-      let output: VideoFrame | null = null
       try {
-        context.drawImage(input, 0, 0, width, height)
-        output = new VideoFrame(canvas, {
-          timestamp: input.timestamp,
-          duration: input.duration ?? undefined,
-          alpha: 'discard',
-        })
-        await writer.write(output)
+        // Follow resolution changes (resized window, switched surface)
+        // instead of stretching every frame into the initial size.
+        const frameWidth = input.displayWidth || canvas.width
+        const frameHeight = input.displayHeight || canvas.height
+        if (frameWidth !== canvas.width || frameHeight !== canvas.height) {
+          canvas.width = frameWidth
+          canvas.height = frameHeight
+        }
+        context.drawImage(input, 0, 0, canvas.width, canvas.height)
+        hasPicture = true
+        await emit(Math.max(input.timestamp, lastTimestamp + 1), input.duration ?? undefined)
       } finally {
-        output?.close()
         input.close()
       }
     }
     if (!closed) await writer.close()
   }
-  void pump().catch((value: unknown) => {
-    if (!closed) onFailure?.(value instanceof Error ? value : new Error('SDR frame pipeline stopped'))
-  })
+  void pump().catch(reportFailure)
+
+  const refresh = window.setInterval(() => {
+    if (closed || !hasPicture || performance.now() - lastEmittedAt < idleRefreshMs) return
+    const elapsedMicros = Math.max(1, Math.round((performance.now() - lastEmittedAt) * 1000))
+    emit(lastTimestamp + elapsedMicros).catch(reportFailure)
+  }, Math.max(16, Math.round(idleRefreshMs / 2)))
 
   return {
     stream: new MediaStream([sdrTrack, ...capture.getAudioTracks()]),
@@ -198,6 +243,7 @@ function createFrameDrivenSDRPipeline(
     close: () => {
       if (closed) return
       closed = true
+      window.clearInterval(refresh)
       void reader.cancel().catch(() => undefined)
       void writer.abort(new Error('SDR pipeline closed')).catch(() => undefined)
       processorTrack.stop()
@@ -216,11 +262,13 @@ export async function createSDRPublishPipeline(
   capture: MediaStream,
   codec: StreamCodec,
   onFailure?: (error: Error) => void,
+  options: SDRPipelineOptions = {},
 ): Promise<StreamPublishPipeline> {
+  const idleRefreshMs = options.idleRefreshMs ?? IDLE_REFRESH_MS
   // A frame-driven transform is independent of page visibility. Unlike
   // requestVideoFrameCallback/requestAnimationFrame, it continues to receive
   // the active getDisplayMedia track while the publisher opens another tab.
-  const frameDriven = createFrameDrivenSDRPipeline(capture, codec, onFailure)
+  const frameDriven = createFrameDrivenSDRPipeline(capture, codec, onFailure, idleRefreshMs)
   if (frameDriven) return frameDriven
 
   if (typeof document === 'undefined') throw new Error('SDR-преобразование доступно только в браузере')
@@ -266,12 +314,13 @@ export async function createSDRPublishPipeline(
     canvasStream.getTracks().forEach((track) => track.stop())
     throw new Error('Браузер не создал SDR-видеодорожку')
   }
-  sdrTrack.contentHint = 'detail'
+  sdrTrack.contentHint = contentHintOf(source)
 
   let closed = false
   let frameCallback: number | null = null
   let interval: number | null = null
   let failureReported = false
+  let lastDrawAt = performance.now()
   const reportFailure = (value: unknown) => {
     if (closed || failureReported) return
     failureReported = true
@@ -280,7 +329,13 @@ export async function createSDRPublishPipeline(
   const draw = () => {
     if (closed) return
     try {
+      if (video.videoWidth > 0 && video.videoHeight > 0 &&
+        (video.videoWidth !== canvas.width || video.videoHeight !== canvas.height)) {
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+      }
       context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      lastDrawAt = performance.now()
     } catch (error) {
       reportFailure(error)
     }
@@ -294,6 +349,11 @@ export async function createSDRPublishPipeline(
   }
   if (typeof video.requestVideoFrameCallback === 'function') {
     scheduleFrame()
+    // Video frame callbacks stop on a static screen; any redraw makes the
+    // canvas track emit a frame again.
+    interval = window.setInterval(() => {
+      if (performance.now() - lastDrawAt >= idleRefreshMs) draw()
+    }, Math.max(16, Math.round(idleRefreshMs / 2)))
   } else {
     interval = window.setInterval(draw, Math.max(8, Math.round(1000 / frameRate)))
   }

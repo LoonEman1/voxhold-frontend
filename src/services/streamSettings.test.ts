@@ -15,6 +15,7 @@ describe('stream preferences', () => {
       mode: 'p2p',
       codec: 'av1',
       dynamicRange: 'hdr',
+      content: 'motion',
       resolution: '1440p',
       frameRate: 60,
       videoBitrateKbps: 12000,
@@ -26,6 +27,7 @@ describe('stream preferences', () => {
       mode: 'p2p',
       codec: 'av1',
       dynamicRange: 'hdr',
+      content: 'motion',
       resolution: '1440p',
       frameRate: 60,
       videoBitrateKbps: 12000,
@@ -38,6 +40,7 @@ describe('stream preferences', () => {
   it('rejects values outside client presets', () => {
     expect(normalizeStreamPreferences({
       mode: 'unknown',
+      content: 'cinema',
       resolution: '4k',
       frameRate: 144,
       videoBitrateKbps: 50000,
