@@ -4,9 +4,12 @@ export const STREAM_RESOLUTIONS = [
   { id: '720p', label: '1280 × 720', width: 1280, height: 720 },
   { id: '1080p', label: '1920 × 1080', width: 1920, height: 1080 },
   { id: '1440p', label: '2560 × 1440', width: 2560, height: 1440 },
+  { id: '2160p', label: '3840 × 2160 (4K)', width: 3840, height: 2160 },
 ] as const
-export const STREAM_FRAME_RATES = [30, 60] as const
-export const STREAM_VIDEO_BITRATES = [2500, 4500, 6000, 8000, 12000, 16000] as const
+// 24 matches films, 90/120 high-refresh monitors; the browser never captures
+// faster than the screen actually updates.
+export const STREAM_FRAME_RATES = [15, 24, 30, 45, 60, 90, 120] as const
+export const STREAM_VIDEO_BITRATES = [2500, 4500, 6000, 8000, 10000, 12000, 16000] as const
 export const STREAM_AUDIO_BITRATES = [64, 96, 128, 192, 256, 320] as const
 
 export type StreamResolution = typeof STREAM_RESOLUTIONS[number]['id']
@@ -45,6 +48,32 @@ export const DEFAULT_STREAM_PREFERENCES: StreamPreferences = {
   includeAudio: true,
   audioBitrateKbps: 128,
   playbackVolume: 100,
+}
+
+/**
+ * One-click combinations for typical content. Resolution stays as chosen:
+ * it depends on the publisher's screen, not on what is being shown.
+ */
+export const STREAM_PRESETS = [
+  { id: 'desktop', label: 'Рабочий стол', hint: 'чёткий текст, 30 FPS', values: { content: 'detail', frameRate: 30, videoBitrateKbps: 6000 } },
+  { id: 'games', label: 'Игры', hint: 'плавно, 60 FPS', values: { content: 'motion', frameRate: 60, videoBitrateKbps: 12000 } },
+  { id: 'movies', label: 'Фильмы', hint: 'тёмные сцены без квадратов', values: { content: 'motion', frameRate: 30, videoBitrateKbps: 8000 } },
+] as const satisfies ReadonlyArray<{ id: string; label: string; hint: string; values: Partial<StreamPreferences> }>
+
+export type StreamPresetId = typeof STREAM_PRESETS[number]['id']
+
+export function applyStreamPreset(preferences: StreamPreferences, id: StreamPresetId): StreamPreferences {
+  const preset = STREAM_PRESETS.find((item) => item.id === id)
+  return preset ? { ...preferences, ...preset.values } : preferences
+}
+
+export function matchingStreamPreset(preferences: StreamPreferences): StreamPresetId | null {
+  const preset = STREAM_PRESETS.find((item) => (
+    item.values.content === preferences.content
+    && item.values.frameRate === preferences.frameRate
+    && item.values.videoBitrateKbps === preferences.videoBitrateKbps
+  ))
+  return preset?.id ?? null
 }
 
 const STORAGE_KEY = 'voxhold.stream.preferences.v1'

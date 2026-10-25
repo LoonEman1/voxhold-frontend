@@ -35,7 +35,8 @@ import { createHDRPublishPipeline, createSDRPublishPipeline, type StreamPublishP
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { BrowserVoiceInput } from '../services/voiceInput'
-import { SignallingRecoveryCoordinator } from '../services/mediaRecovery'
+import { RetryBudget, SignallingRecoveryCoordinator } from '../services/mediaRecovery'
+import { uiSounds, type UISound } from '../services/uiSounds'
 import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
@@ -109,6 +110,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [streamPreferences, setStreamPreferences] = useState(loadStreamPreferences)
   const [streamRole, setStreamRole] = useState<'publisher' | 'viewer' | null>(null)
   const [streamExpanded, setStreamExpanded] = useState(false)
+  // The expanded player opens straight in fullscreen cinema mode.
+  const [streamCinema, setStreamCinema] = useState(false)
+  const [streamAudioMuted, setStreamAudioMuted] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null)
   const [viewedProfile, setViewedProfile] = useState<Profile | null>(null)
@@ -164,7 +168,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const recoveryActionsRef = useRef<{
     offline: () => void
     ready: () => void
-  }>({ offline: () => undefined, ready: () => undefined })
+    voiceClosed: () => void
+  }>({ offline: () => undefined, ready: () => undefined, voiceClosed: () => undefined })
+  // Server-side media closures are retried automatically, but only a few
+  // times: a server that keeps closing the session must not cause a loop.
+  const voiceRejoinBudgetRef = useRef(new RetryBudget(3, 5 * 60_000))
+  const streamRewatchBudgetRef = useRef(new RetryBudget(2, 2 * 60_000))
   // Unexpected signalling offline keeps the publisher screen capture alive for
   // a bounded grace period so restoring the stream never needs a new
   // getDisplayMedia permission gesture.
@@ -279,6 +288,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   // Speaking detection uses hysteresis: audio above 7% RMS marks a participant
   // as speaking, and they stay marked until it drops below 4%.
+  /** Local join/leave/mute cues; they follow the voice output device. */
+  const playUISound = useCallback((sound: UISound) => {
+    const preferences = voicePreferencesRef.current
+    if (preferences.uiSounds) uiSounds.play(sound, preferences.uiSoundVolume, preferences.outputDeviceId)
+  }, [])
+
+  /** Another participant of the channel this client is connected to. */
+  const isRoommate = useCallback((participant: Pick<VoiceParticipant, 'server_id' | 'channel_id' | 'connection_id' | 'user_id'>) => {
+    const active = voiceSessionRef.current
+    return !!active?.connectionId
+      && participant.server_id === active.serverId
+      && participant.channel_id === active.channelId
+      && participant.connection_id !== active.connectionId
+      && participant.user_id !== user?.id
+  }, [user?.id])
+
   const recomputeSpeakingUsers = useCallback(() => {
     const session = voiceSessionRef.current
     const speaking = new Set<number>()
@@ -441,6 +466,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     streamDynamicRangeRef.current = 'sdr'
     setStreamStatus('idle')
     setStreamExpanded(false)
+    setStreamCinema(false)
+    setStreamAudioMuted(false)
   }, [])
 
   /**
@@ -463,6 +490,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamQuality(null)
     setStreamStatus('idle')
     setStreamExpanded(false)
+    setStreamCinema(false)
+    setStreamAudioMuted(false)
 
     const media = voiceMediaRef.current
     voiceMediaRef.current = null
@@ -880,6 +909,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         voiceSessionRef.current = joined
         setVoiceSession(joined)
         setVoiceStatus('signaling')
+        // An automatic rejoin stays silent: the user never left the channel.
+        const recoveryPhase = recoveryRef.current?.phase
+        if (recoveryPhase !== 'signalling_lost' && recoveryPhase !== 'rejoining_voice' && recoveryPhase !== 'restoring_stream') {
+          playUISound('self_join')
+        }
         // Confirm the automatic rejoin with the new server-side connection id;
         // stale ids from the dead generation are ignored by the coordinator.
         // A viewer has no capture to lose: its stream intent stays restorable.
@@ -895,10 +929,20 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         // Teardown events of the old connection must not cancel the new intent.
         if (recoveryRef.current?.staleConnectionId() === event.connection_id) return
         const active = voiceSessionRef.current
-        if (active?.connectionId === event.connection_id || (!active?.connectionId && active?.serverId === event.server_id && active.channelId === event.channel_id)) closeVoiceLocally()
+        if (active?.connectionId === event.connection_id || (!active?.connectionId && active?.serverId === event.server_id && active.channelId === event.channel_id)) {
+          playUISound('self_leave')
+          closeVoiceLocally()
+        }
       },
-      onVoiceParticipantJoined: upsertVoiceParticipant,
-      onVoiceParticipantLeft: (event) => removeVoiceParticipant(event.connection_id),
+      onVoiceParticipantJoined: (participant) => {
+        upsertVoiceParticipant(participant)
+        if (isRoommate(participant) && !voiceSessionRef.current?.selfDeaf) playUISound('user_join')
+      },
+      onVoiceParticipantLeft: (event) => {
+        const participant = voiceParticipantsRef.current[event.connection_id]
+        removeVoiceParticipant(event.connection_id)
+        if (participant && isRoommate(participant) && !voiceSessionRef.current?.selfDeaf) playUISound('user_leave')
+      },
       onVoiceStateUpdated: (participant) => {
         upsertVoiceParticipant(participant)
         if (voiceSessionRef.current?.connectionId !== participant.connection_id) return
@@ -919,7 +963,20 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           })
           return
         }
+        const replaced = event.reason === 'voice session moved to another connection'
+        const rejoin = !replaced && !!voiceSessionRef.current && voiceRejoinBudgetRef.current.take()
+        clientDiagnostics.record('webrtc', 'voice_closed_by_server', 'warn', {
+          reason: event.reason,
+          action: rejoin ? 'rejoin' : 'leave',
+        })
+        if (rejoin) {
+          // The signalling connection is healthy: rejoin with the same
+          // microphone instead of dropping the user out of the channel.
+          recoveryActionsRef.current.voiceClosed()
+          return
+        }
         setVoiceError(voiceCloseMessage(event.reason))
+        playUISound('self_leave')
         closeVoiceLocally()
       },
       onStreamSnapshot: (snapshot) => {
@@ -964,8 +1021,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onStreamWebRTCClosed: (event) => {
         if (recoveryRef.current?.staleConnectionId()) return
         if (pendingStreamRewatchRef.current) return
-        setStreamError(streamCloseMessage(event.reason))
+        // A viewer whose media session failed (recovery exhausted, rendition
+        // restarted) simply watches again; the publisher's limits are final.
+        const rewatch = streamRoleRef.current === 'viewer'
+          && !STREAM_FINAL_CLOSE_REASONS.has(event.reason)
+          && streamRewatchBudgetRef.current.take()
+        clientDiagnostics.record('webrtc', 'stream_closed_by_server', 'warn', {
+          reason: event.reason,
+          role: streamRoleRef.current,
+          action: rewatch ? 'rewatch' : 'close',
+        })
         closeStreamLocally()
+        if (rewatch) {
+          window.setTimeout(() => streamWatchActionRef.current(false, false), 1_000)
+          return
+        }
+        setStreamError(streamCloseMessage(event.reason))
       },
       onStreamP2POffer: (event) => { void p2pStreamViewerRef.current?.acceptOffer(event.from_connection_id, event.sdp) },
       onStreamP2PAnswer: (event) => { void p2pStreamPublisherRef.current?.acceptAnswer(event.from_connection_id, event.sdp) },
@@ -1005,7 +1076,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     realtimeRef.current = client
     client.connect()
     return () => { client.close(); realtimeRef.current = null }
-  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant])
+  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
 
   useEffect(() => {
     if (selectedServerId && selectedChannelId && selectedChannel?.kind === 'text') realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
@@ -1115,6 +1186,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!voiceSessionRef.current) return
     trackVoiceRequest(realtimeRef.current?.leaveVoice() ?? null, 'leave')
     setVoiceError('')
+    playUISound('self_leave')
     closeVoiceLocally()
   }
 
@@ -1203,6 +1275,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         return
       }
       streamCaptureRef.current = capture
+      // A reused capture may still carry a mute from the previous stream.
+      capture.getAudioTracks().forEach((track) => { track.enabled = true })
+      setStreamAudioMuted(false)
       streamRoleRef.current = 'publisher'
       setStreamRole('publisher')
       setStreamStatus('signaling')
@@ -1410,6 +1485,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 	}
 
   const finishFailedRecovery = useCallback((message: string) => {
+    playUISound('self_leave')
     setMediaRecovering(false)
     setVoiceError(message)
     clearCapturedStreamStash(true)
@@ -1421,7 +1497,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceSessionRef.current = null
     setVoiceSession(null)
     setVoiceStatus('idle')
-  }, [clearCapturedStreamStash, detachMediaPeers])
+  }, [clearCapturedStreamStash, detachMediaPeers, playUISound])
 
   /** Recreates the voice session on the new connection with the same mic. */
   const resumeAfterReconnect = useCallback(async (generation: number) => {
@@ -1493,12 +1569,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   /**
    * Unexpected WebSocket loss: close peers only, keep the microphone and the
    * screen capture alive for a bounded grace period, then wait for `ready`.
+   * `voice_closed`: the server ended the media session while signalling is
+   * still up, so the same connection rejoins at once.
    */
-  const beginSignallingRecovery = useCallback(() => {
+  const beginSignallingRecovery = useCallback((cause: 'signalling' | 'voice_closed' = 'signalling') => {
     const active = voiceSessionRef.current
     if (!active) return
+    // Read before detachMediaPeers() resets it: the intent decides whether
+    // the stream is restored after the voice rejoin.
+    const streamRole = streamRoleRef.current
     recoveryRef.current?.cancel('superseded by newer disconnect')
-    stashCapturedStream('signalling_offline')
+    stashCapturedStream(cause === 'signalling' ? 'signalling_offline' : 'voice_closed_by_server')
     detachMediaPeers()
 
     const coordinator = new SignallingRecoveryCoordinator(
@@ -1528,20 +1609,25 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       serverId: active.serverId,
       channelId: active.channelId,
       channelName: active.channelName,
-      staleConnectionId: active.connectionId,
+      // An in-place rejoin keeps the WebSocket connection id, so the new
+      // voice.joined must not be mistaken for the dead generation.
+      staleConnectionId: cause === 'signalling' ? active.connectionId : null,
       selfMute: active.selfMute,
       selfDeaf: active.selfDeaf,
-      streamRole: streamRoleRef.current,
+      streamRole,
     })
     recoveryRef.current = coordinator
     setMediaRecovering(true)
     setVoiceError('')
     clientDiagnostics.record('media', 'media_recovery_started', 'warn', {
-      stream_role: streamRoleRef.current ?? null,
+      cause,
+      stream_role: streamRole ?? null,
     })
+    if (cause === 'voice_closed') coordinator.handleReady()
   }, [resumeAfterReconnect, stashCapturedStream, detachMediaPeers, finishFailedRecovery])
 
-  recoveryActionsRef.current.offline = beginSignallingRecovery
+  recoveryActionsRef.current.offline = () => beginSignallingRecovery('signalling')
+  recoveryActionsRef.current.voiceClosed = () => beginSignallingRecovery('voice_closed')
   recoveryActionsRef.current.ready = () => { recoveryRef.current?.handleReady() }
 
   const retryMicrophone = async () => {
@@ -1554,6 +1640,16 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
   }
 
+
+  /** Silences the shared system audio for viewers without restarting. */
+  const toggleStreamAudio = () => {
+    const capture = streamCaptureRef.current
+    if (!capture || streamRoleRef.current !== 'publisher') return
+    const muted = !streamAudioMuted
+    // The publish pipeline forwards these same track objects.
+    capture.getAudioTracks().forEach((track) => { track.enabled = !muted })
+    setStreamAudioMuted(muted)
+  }
 
   const leaveStream = () => {
     const role = streamRoleRef.current
@@ -1586,6 +1682,22 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       closeVoiceLocally()
     }
   }, [closeVoiceLocally, trackVoiceRequest])
+
+  // Explicit toggles (buttons, shortcuts) confirm themselves with a cue;
+  // push-to-talk drives updateLocalVoiceState directly and stays silent.
+  const toggleSelfMute = useCallback(() => {
+    const active = voiceSessionRef.current
+    if (!active) return
+    playUISound(active.selfMute ? 'unmute' : 'mute')
+    updateLocalVoiceState(!active.selfMute, active.selfDeaf)
+  }, [playUISound, updateLocalVoiceState])
+
+  const toggleSelfDeaf = useCallback(() => {
+    const active = voiceSessionRef.current
+    if (!active) return
+    playUISound(active.selfDeaf ? 'undeafen' : 'deafen')
+    updateLocalVoiceState(active.selfMute, !active.selfDeaf)
+  }, [playUISound, updateLocalVoiceState])
 
   const updateVoicePreferences = (next: VoicePreferences) => {
     const previous = voicePreferencesRef.current
@@ -1625,10 +1737,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       if (event.repeat) return
       if (shortcutMatches(event, preferences.muteShortcut)) {
         event.preventDefault()
-        updateLocalVoiceState(!active.selfMute, active.selfDeaf)
+        toggleSelfMute()
       } else if (shortcutMatches(event, preferences.deafenShortcut)) {
         event.preventDefault()
-        updateLocalVoiceState(active.selfMute, !active.selfDeaf)
+        toggleSelfDeaf()
       }
     }
 
@@ -1651,7 +1763,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       window.removeEventListener('keyup', releasePushToTalk)
       window.removeEventListener('blur', cancelPushToTalk)
     }
-  }, [updateLocalVoiceState])
+  }, [updateLocalVoiceState, toggleSelfMute, toggleSelfDeaf])
 
   const openActiveVoiceChannel = () => {
     const active = voiceSessionRef.current
@@ -2049,11 +2161,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
               {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onContextMenu={(event) => openChannelMenu(event, channel)}/>)}
             </ChannelGroup>
             <ChannelGroup title="Голосовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
-              {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} speakingUserIds={speakingUserIds} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} onContextMenu={(event) => openChannelMenu(event, channel)} onParticipantContextMenu={(event, participant, member) => openMemberMenu(event, member ?? { user_id: participant.user_id, username: `Пользователь #${participant.user_id}`, role: 'member' } as ServerMember, { volume: true })}/>)}
+              {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} livePublisherId={streams[channel.id]?.publisher_user_id ?? null} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} speakingUserIds={speakingUserIds} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} onContextMenu={(event) => openChannelMenu(event, channel)} onParticipantContextMenu={(event, participant, member) => openMemberMenu(event, member ?? { user_id: participant.user_id, username: `Пользователь #${participant.user_id}`, role: 'member' } as ServerMember, { volume: true })}/>)}
             </ChannelGroup>
             {channels.length === 0 && <button className="sidebar-empty" onClick={() => canManage && setDialog('channel')}><span><Icon name="add"/></span><b>Создайте первый канал</b><small>Начните с общего чата</small></button>}
           </div>
-          {voiceSession && <VoiceDock channelName={voiceSession.channelName} status={voiceStatus} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} onOpen={openActiveVoiceChannel} onToggleMute={() => updateLocalVoiceState(!voiceSession.selfMute, voiceSession.selfDeaf)} onToggleDeaf={() => updateLocalVoiceState(voiceSession.selfMute, !voiceSession.selfDeaf)} onLeave={leaveVoiceChannel}/>} 
+          {voiceSession && <VoiceDock channelName={voiceSession.channelName} status={voiceStatus} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} onOpen={openActiveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onLeave={leaveVoiceChannel}/>} 
           <div className="user-dock"><button className="user-dock__profile" onClick={() => setDialog('profile')}><Avatar name={user?.username ?? 'V'} online/><span><b>{user?.username}</b><small><i className={`connection-dot connection-dot--${connection}`}/>{connection === 'online' ? 'В сети' : connection === 'connecting' ? 'Подключение' : 'Не в сети'}</small></span></button><button className="icon-button" onClick={() => setDialog('profile')} title="Настройки профиля" aria-label="Настройки профиля"><Icon name="people"/></button><button className="icon-button" onClick={openVoiceSettings} title="Настройки голоса" aria-label="Настройки голоса"><Icon name="settings"/></button><button className="icon-button" onClick={() => setDialog('logout')} title="Выйти" aria-label="Выйти"><Icon name="logout"/></button></div>
         </> : <div className="sidebar-no-server"><Brand/><p>У вас нет доступа к этому пространству.</p></div>}
         <div className="workspace-resizer workspace-resizer--channels" role="separator" aria-label="Изменить ширину списка каналов" aria-orientation="vertical" tabIndex={0} onPointerDown={(event) => workspaceLayout.beginResize('channels', event)} onKeyDown={(event) => workspaceLayout.handleResizeKey('channels', event)} onDoubleClick={() => workspaceLayout.resetPanel('channels')}/>
@@ -2073,7 +2185,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           </div>
         </header>
 
-        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={() => voiceSession && updateLocalVoiceState(!voiceSession.selfMute, voiceSession.selfDeaf)} onToggleDeaf={() => voiceSession && updateLocalVoiceState(voiceSession.selfMute, !voiceSession.selfDeaf)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={() => void watchStream()} onLeaveStream={leaveStream} onExpandStream={() => setStreamExpanded(true)}/> : <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/> : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
+        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={() => void watchStream()} onLeaveStream={leaveStream} onExpandStream={() => { setStreamCinema(false); setStreamExpanded(true) }} onFullscreenStream={() => { setStreamCinema(true); setStreamExpanded(true) }} streamAudioMuted={streamAudioMuted} onToggleStreamAudio={toggleStreamAudio}/> : <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/> : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
         {selectedServer && token && <MessageSearchPanel open={messagePanel === 'search'} api={api} token={token} serverId={selectedServer.id} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage}/>} 
         {selectedChannel?.kind === 'text' && <PinnedMessagesPanel open={messagePanel === 'pins'} pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/>} 
         {messagePanel && <button className="message-panel-scrim" aria-label="Закрыть панель" onClick={() => setMessagePanel(null)}/>} 
@@ -2101,8 +2213,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         preferences={streamPreferences}
         quality={streamQuality}
         onPreferencesChange={updateStreamPreferences}
-        onExpand={() => setStreamExpanded(true)}
-        onCollapse={() => setStreamExpanded(false)}
+        startInCinema={streamCinema}
+        onExpand={() => { setStreamCinema(false); setStreamExpanded(true) }}
+        onCollapse={() => { setStreamCinema(false); setStreamExpanded(false) }}
         onLeave={leaveStream}
       />}
 
@@ -2126,13 +2239,13 @@ function ChannelGroup({ title, canAdd, onAdd, children }: { title: string; canAd
   return <section className="channel-group"><header><span>{title}</span>{canAdd && <button onClick={onAdd} aria-label={`Добавить: ${title}`}><Icon name="add" size={15}/></button>}</header>{children}</section>
 }
 
-function ChannelButton({ channel, active, unread = false, canManage, canShare = false, participants = [], members = [], currentVoiceConnectionId = null, speakingUserIds = [], onSelect, onEdit, onShare, onOpenProfile, onContextMenu, onParticipantContextMenu }: { channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void; onContextMenu?: (event: ReactMouseEvent) => void; onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void }) {
+function ChannelButton({ channel, active, unread = false, canManage, canShare = false, participants = [], livePublisherId = null, members = [], currentVoiceConnectionId = null, speakingUserIds = [], onSelect, onEdit, onShare, onOpenProfile, onContextMenu, onParticipantContextMenu }: { channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; livePublisherId?: number | null; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void; onContextMenu?: (event: ReactMouseEvent) => void; onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void }) {
   const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
-  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
+  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{livePublisherId !== null && <b className="channel-row__live" title="Идёт трансляция экрана">LIVE</b>}{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
     const member = members.find((item) => item.user_id === participant.user_id)
     const username = member?.username ?? `Пользователь #${participant.user_id}`
     const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
-    return <button key={participant.connection_id} className={`${participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} onClick={() => onOpenProfile?.(participant.user_id, member?.role ?? 'member')} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)} title={username}><Avatar name={username} size="small"/><span>{username}</span>{participant.self_deaf ? <Icon name="headphonesOff" size={12}/> : participant.self_mute ? <Icon name="micOff" size={12}/> : <i/>}</button>
+    return <button key={participant.connection_id} className={`${participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} onClick={() => onOpenProfile?.(participant.user_id, member?.role ?? 'member')} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)} title={username}><Avatar name={username} size="small"/><span>{username}</span>{participant.user_id === livePublisherId && <b className="channel-voice-users__live" title="Показывает экран">LIVE</b>}{participant.self_deaf ? <Icon name="headphonesOff" size={12}/> : participant.self_mute ? <Icon name="micOff" size={12}/> : <i/>}</button>
   })}</div>}</div>
 }
 
@@ -2171,6 +2284,14 @@ function streamRealtimeError(message: string) {
   }
   return translations[message] ?? message
 }
+
+/** Server reasons that a new watch attempt cannot fix. */
+const STREAM_FINAL_CLOSE_REASONS = new Set([
+  'stream video bitrate limit exceeded',
+  'stream audio bitrate limit exceeded',
+  'duplicate stream media track',
+  'too many pending ICE candidates',
+])
 
 function streamCloseMessage(reason: string) {
   const translations: Record<string, string> = {

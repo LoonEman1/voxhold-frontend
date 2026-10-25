@@ -18,6 +18,9 @@ export interface VoicePreferences {
   muteShortcut: string
   deafenShortcut: string
   pushToTalkShortcut: string
+  /** Join/leave and mute/deafen cues. */
+  uiSounds: boolean
+  uiSoundVolume: number
 }
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
@@ -35,6 +38,8 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   muteShortcut: 'Control+Shift+KeyM',
   deafenShortcut: 'Control+Shift+KeyD',
   pushToTalkShortcut: 'Space',
+  uiSounds: true,
+  uiSoundVolume: 60,
 }
 
 const STORAGE_KEY = 'voxhold.voice.preferences.v1'
@@ -66,6 +71,8 @@ export function normalizeVoicePreferences(value: unknown): VoicePreferences {
     muteShortcut: validShortcut(source.muteShortcut, DEFAULT_VOICE_PREFERENCES.muteShortcut),
     deafenShortcut: validShortcut(source.deafenShortcut, DEFAULT_VOICE_PREFERENCES.deafenShortcut),
     pushToTalkShortcut: validShortcut(source.pushToTalkShortcut, DEFAULT_VOICE_PREFERENCES.pushToTalkShortcut),
+    uiSounds: typeof source.uiSounds === 'boolean' ? source.uiSounds : true,
+    uiSoundVolume: numberInRange(source.uiSoundVolume, DEFAULT_VOICE_PREFERENCES.uiSoundVolume, 0, 100),
   }
 }
 

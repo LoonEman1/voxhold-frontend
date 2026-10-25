@@ -34,6 +34,8 @@ export type IconName =
   | 'trash'
   | 'userPlus'
   | 'volume'
+  | 'volumeOff'
+  | 'pip'
 
 const paths: Record<IconName, React.ReactNode> = {
   add: <path d="M12 5v14M5 12h14" />,
@@ -69,6 +71,8 @@ const paths: Record<IconName, React.ReactNode> = {
   trash: <><path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6M10 11v6M14 11v6"/></>,
   userPlus: <><path d="M15 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></>,
   volume: <><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></>,
+  volumeOff: <><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="m16 9 6 6M22 9l-6 6"/></>,
+  pip: <><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1"/></>,
 }
 
 interface IconProps extends SVGProps<SVGSVGElement> {

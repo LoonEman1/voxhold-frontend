@@ -39,6 +39,12 @@ describe('voice preferences', () => {
     })
   })
 
+  it('keeps interface sounds on by default and validates their volume', () => {
+    expect(normalizeVoicePreferences(null)).toMatchObject({ uiSounds: true, uiSoundVolume: 60 })
+    expect(normalizeVoicePreferences({ uiSounds: false, uiSoundVolume: 250 })).toMatchObject({ uiSounds: false, uiSoundVolume: 100 })
+    expect(normalizeVoicePreferences({ uiSounds: 'yes', uiSoundVolume: 'loud' })).toMatchObject({ uiSounds: true, uiSoundVolume: 60 })
+  })
+
   it('validates noise suppression mode and gate threshold', () => {
     expect(normalizeVoicePreferences({ noiseSuppressionMode: 'threshold', noiseGateThreshold: 250 })).toMatchObject({
       noiseSuppressionMode: 'threshold',

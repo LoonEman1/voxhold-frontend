@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Channel, ChannelRead, Message, ServerMember, StreamRendition, VoiceParticipant } from '../domain/types'
-import { RealtimeClient } from './realtime'
+import { isAuthClose, RealtimeClient, reconnectDelayMs } from './realtime'
 
-type FakeEvent = { data?: string; code?: number }
+type FakeEvent = { data?: string; code?: number; reason?: string }
 type FakeListener = (event: FakeEvent) => void
 
 class FakeWebSocket {
@@ -28,9 +28,9 @@ class FakeWebSocket {
     this.sent.push(payload)
   }
 
-  close(code = 1000) {
+  close(code = 1000, reason = '') {
     this.readyState = FakeWebSocket.CLOSED
-    this.emit('close', { code })
+    this.emit('close', { code, reason })
   }
 
   open() {
@@ -330,6 +330,57 @@ describe('RealtimeClient', () => {
       codec_profiles: [{ codec: 'av1', profile: 'main10' }],
     })
 
+    client.close()
+  })
+})
+
+describe('RealtimeClient reconnection policy', () => {
+  afterEach(() => {
+    FakeWebSocket.latest = null
+    vi.unstubAllGlobals()
+  })
+
+  it('treats only lost sessions as auth failures', () => {
+    expect(isAuthClose(1008, 'invalid or expired session')).toBe(true)
+    expect(isAuthClose(1008, 'session expired or revoked')).toBe(true)
+    expect(isAuthClose(1008, 'server is shutting down')).toBe(false)
+    expect(isAuthClose(1008, 'event rate limit exceeded')).toBe(false)
+    expect(isAuthClose(1012, 'server is shutting down')).toBe(false)
+    expect(isAuthClose(1006, undefined)).toBe(false)
+  })
+
+  it('retries every few seconds during the first minute of an outage', () => {
+    expect(reconnectDelayMs(0)).toBe(1_000)
+    expect(reconnectDelayMs(4)).toBe(5_000)
+    const firstMinute = Array.from({ length: 15 }, (_, attempt) => reconnectDelayMs(attempt))
+    expect(Math.max(...firstMinute)).toBe(5_000)
+    expect(firstMinute.reduce((sum, value) => sum + value, 0)).toBeGreaterThanOrEqual(60_000)
+    expect(reconnectDelayMs(30)).toBe(30_000)
+  })
+
+  it('reconnects after a server restart instead of logging out', () => {
+    const timers: number[] = []
+    vi.stubGlobal('window', {
+      location: { protocol: 'http:', host: 'localhost:3000', href: 'http://localhost:3000/' },
+      setTimeout: (_handler: () => void, delay: number) => { timers.push(delay); return timers.length },
+      clearTimeout: () => undefined,
+    })
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const onUnauthorized = vi.fn()
+    const client = new RealtimeClient({ token: 'secret', onMessage: vi.fn(), onStateChange: vi.fn(), onUnauthorized })
+
+    client.connect()
+    FakeWebSocket.latest?.open()
+    FakeWebSocket.latest?.serverEvent('ready', { user_id: 1, protocol_version: 6 })
+    const before = timers.length
+    FakeWebSocket.latest?.close(1012, 'server is shutting down')
+
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect(timers.length).toBe(before + 1)
+    expect(timers.at(-1)).toBeLessThanOrEqual(1_500)
+
+    FakeWebSocket.latest?.close(1008, 'invalid or expired session')
+    expect(onUnauthorized).toHaveBeenCalledOnce()
     client.close()
   })
 })

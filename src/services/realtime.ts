@@ -414,8 +414,11 @@ export class RealtimeClient {
       this.pendingSubscription = null
       this.awaitingUnsubscribe = false
       this.options.onStateChange('offline')
-      if (event.code === 1008) this.options.onUnauthorized()
-      if (!this.intentionallyClosed && event.code !== 1008) this.scheduleReconnect()
+      if (isAuthClose(event.code, event.reason)) {
+        this.options.onUnauthorized()
+        return
+      }
+      if (!this.intentionallyClosed) this.scheduleReconnect()
     })
 
     socket.addEventListener('error', () => {
@@ -464,7 +467,7 @@ export class RealtimeClient {
   }
 
   private scheduleReconnect() {
-    const delay = Math.min(1_000 * 2 ** this.attempts, 30_000) + Math.random() * 500
+    const delay = reconnectDelayMs(this.attempts) + Math.random() * 500
     this.attempts += 1
     clientDiagnostics.record('websocket', 'reconnect_scheduled', 'warn', {
       attempt: this.attempts,
@@ -472,6 +475,34 @@ export class RealtimeClient {
     })
     this.reconnectTimer = window.setTimeout(() => this.open(), delay)
   }
+}
+
+/**
+ * Server reasons that mean the session itself is gone. 1008 is also used for
+ * rate limits and, by backends before 0.8, for a plain restart ("server is
+ * shutting down"): those must reconnect, not log the user out.
+ */
+const AUTH_CLOSE_REASONS = new Set([
+  'authentication required',
+  'authentication must be the first event',
+  'invalid authentication payload',
+  'session token is required',
+  'invalid or expired session',
+  'session expired or revoked',
+])
+
+export function isAuthClose(code: number, reason: string | undefined) {
+  return code === 1008 && AUTH_CLOSE_REASONS.has(reason ?? '')
+}
+
+/**
+ * A server update restarts the backend in ~10–30 s while voice recovery keeps
+ * the call for 60 s, so the first minute retries every few seconds; only a
+ * longer outage backs off to 30 s.
+ */
+export function reconnectDelayMs(attempt: number) {
+  if (attempt < 15) return Math.min(1_000 * 1.5 ** attempt, 5_000)
+  return Math.min(5_000 * 2 ** (attempt - 15), 30_000)
 }
 
 export type { ConnectionState }

@@ -305,6 +305,11 @@ function monitorVideoQuality(
   let previousBytes: number | null = null
   let previousTimestamp: number | null = null
   let sampling = false
+  // Screen capture only produces frames when the picture changes, so raw
+  // per-sample FPS and bitrate jump around; people read the moving average.
+  let smoothedFps: number | null = null
+  let smoothedKbps: number | null = null
+  const smooth = (previous: number | null, value: number) => previous === null ? value : previous * 0.6 + value * 0.4
 
   const sample = async () => {
     if (sampling || peer.connectionState === 'closed') return
@@ -350,10 +355,13 @@ function monitorVideoQuality(
         || rawReason === 'other'
       ) ? rawReason : ''
 
+      smoothedFps = smooth(smoothedFps, video.framesPerSecond ?? 0)
+      if (bitrateKbps > 0) smoothedKbps = smooth(smoothedKbps, bitrateKbps)
+
       callback({
         codec: codecReport?.mimeType?.replace(/^video\//i, '').toUpperCase() ?? '',
-        bitrateKbps,
-        framesPerSecond: Math.round(video.framesPerSecond ?? 0),
+        bitrateKbps: Math.round(smoothedKbps ?? 0),
+        framesPerSecond: Math.round(smoothedFps),
         width: video.frameWidth ?? 0,
         height: video.frameHeight ?? 0,
         packetsLost: Math.max(0, video.packetsLost ?? 0),

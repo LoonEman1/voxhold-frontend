@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DecodeWatchdog,
+  RetryBudget,
   SignallingRecoveryCoordinator,
   type InboundVideoSample,
   type RecoveryIntent,
@@ -264,3 +265,18 @@ describe('SignallingRecoveryCoordinator', () => {
 })
 
 
+
+describe('RetryBudget', () => {
+  it('allows a bounded number of retries per sliding window', () => {
+    let now = 0
+    const budget = new RetryBudget(2, 60_000, () => now)
+
+    expect(budget.take()).toBe(true)
+    now = 10_000
+    expect(budget.take()).toBe(true)
+    now = 20_000
+    expect(budget.take()).toBe(false)
+    now = 60_001
+    expect(budget.take()).toBe(true)
+  })
+})

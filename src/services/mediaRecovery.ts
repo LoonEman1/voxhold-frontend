@@ -246,6 +246,28 @@ export async function sampleInboundVideoStats(
   return result
 }
 
+/**
+ * Sliding-window budget for automatic retries: a server that keeps closing a
+ * session must not turn the client into a reconnect loop.
+ */
+export class RetryBudget {
+  private attempts: number[] = []
+
+  constructor(
+    private readonly maxAttempts: number,
+    private readonly windowMs: number,
+    private readonly now: () => number = () => Date.now(),
+  ) {}
+
+  take(): boolean {
+    const now = this.now()
+    this.attempts = this.attempts.filter((value) => now - value < this.windowMs)
+    if (this.attempts.length >= this.maxAttempts) return false
+    this.attempts.push(now)
+    return true
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Signalling-loss recovery state machine
 // ---------------------------------------------------------------------------
