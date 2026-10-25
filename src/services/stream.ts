@@ -791,6 +791,11 @@ export class BrowserP2PStreamPublisher {
   private negotiate(connectionId: string, state: PeerState, restartICE: boolean) {
     const operation = state.operation.then(async () => {
       if (this.closed || this.peers.get(connectionId) !== state) return
+      // A lost answer leaves the offer pending forever; an ICE restart must
+      // roll it back instead of silently skipping every recovery attempt.
+      if (restartICE && state.peer.signalingState === 'have-local-offer') {
+        await state.peer.setLocalDescription({ type: 'rollback' })
+      }
       if (state.peer.signalingState !== 'stable') return
       if (restartICE) state.peer.restartIce()
       const offer = await state.peer.createOffer(restartICE ? { iceRestart: true } : undefined)

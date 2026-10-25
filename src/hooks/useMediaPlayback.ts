@@ -55,12 +55,13 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
       if (video.readyState < 3) setState('stalled')
     }
     const onTrackEnded = () => setState('stalled')
+    const markFailed = () => setState('failed')
     video.addEventListener('loadedmetadata', markPlaying)
     video.addEventListener('canplay', markPlaying)
     video.addEventListener('playing', markPlaying)
     video.addEventListener('waiting', markStalled)
     video.addEventListener('stalled', markStalled)
-    video.addEventListener('error', () => setState('failed'))
+    video.addEventListener('error', markFailed)
     for (const track of tracks) track.addEventListener('ended', onTrackEnded)
 
     return () => {
@@ -69,6 +70,7 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
       video.removeEventListener('playing', markPlaying)
       video.removeEventListener('waiting', markStalled)
       video.removeEventListener('stalled', markStalled)
+      video.removeEventListener('error', markFailed)
       for (const track of tracks) track.removeEventListener('ended', onTrackEnded)
       if (video.srcObject === media) video.srcObject = null
     }
