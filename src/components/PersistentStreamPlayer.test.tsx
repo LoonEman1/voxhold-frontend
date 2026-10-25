@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ActiveStream } from '../domain/types'
 import { DEFAULT_STREAM_PREFERENCES } from '../services/streamSettings'
-import { PersistentStreamPlayer } from './PersistentStreamPlayer'
+import { CINEMA_IDLE_MS, PersistentStreamPlayer } from './PersistentStreamPlayer'
 
 const stream: ActiveStream = {
   server_id: 1,
@@ -87,5 +87,63 @@ describe('PersistentStreamPlayer', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(handlers.onCollapse).toHaveBeenCalledOnce()
+  })
+})
+
+describe('PersistentStreamPlayer cinema mode', () => {
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(undefined),
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    Reflect.deleteProperty(HTMLElement.prototype, 'requestFullscreen')
+  })
+
+  function renderExpanded(startInCinema: boolean) {
+    render(<PersistentStreamPlayer
+      mode="expanded"
+      stream={stream}
+      role="viewer"
+      status="connected"
+      media={{} as MediaStream}
+      channelName="Общий"
+      preferences={DEFAULT_STREAM_PREFERENCES}
+      startInCinema={startInCinema}
+      onPreferencesChange={vi.fn()}
+      onExpand={vi.fn()}
+      onCollapse={vi.fn()}
+      onLeave={vi.fn()}
+    />)
+    return screen.getByRole('dialog')
+  }
+
+  it('opens straight in fullscreen and leaves only the picture after a pause', () => {
+    vi.useFakeTimers()
+    const dialog = renderExpanded(true)
+
+    expect(HTMLElement.prototype.requestFullscreen).toHaveBeenCalledOnce()
+    expect(dialog.classList.contains('is-ui-hidden')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Выйти из полного экрана' })).toBeTruthy()
+    expect(dialog.classList.contains('is-idle')).toBe(false)
+
+    act(() => { vi.advanceTimersByTime(CINEMA_IDLE_MS + 100) })
+    expect(dialog.classList.contains('is-idle')).toBe(true)
+
+    fireEvent.pointerMove(dialog)
+    expect(dialog.classList.contains('is-idle')).toBe(false)
+  })
+
+  it('toggles fullscreen with the F key', () => {
+    const dialog = renderExpanded(false)
+
+    fireEvent.keyDown(window, { code: 'KeyF', key: 'f' })
+    expect(dialog.classList.contains('is-ui-hidden')).toBe(true)
+
+    fireEvent.keyDown(window, { code: 'KeyF', key: 'f' })
+    expect(dialog.classList.contains('is-ui-hidden')).toBe(false)
   })
 })

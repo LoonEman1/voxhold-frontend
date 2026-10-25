@@ -355,8 +355,14 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .stream-expanded-player.is-ui-hidden > header, .stream-expanded-player.is-ui-hidden > footer { display: none; }
 .stream-expanded-player.is-ui-hidden .stream-expanded-player__video { border: 0; border-radius: 0; }
 .stream-expanded-player.is-ui-hidden .stream-expanded-player__video > span { display: none; }
-.stream-expanded-player__restore-ui { position: absolute; z-index: 2; top: 14px; right: 14px; display: flex; min-height: 36px; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid rgba(255,255,255,.18); border-radius: 9px; opacity: .42; color: white; background: rgba(10,10,9,.72); cursor: pointer; font-size: 10px; font-weight: 750; transition: opacity .15s, background .15s; backdrop-filter: blur(8px); }
-.stream-expanded-player__restore-ui:hover, .stream-expanded-player__restore-ui:focus-visible { opacity: 1; background: rgba(20,20,18,.9); }
+/* Cinema mode: only the picture; controls fade in on input and out after a pause. */
+.stream-cinema-controls { position: absolute; z-index: 3; inset: auto 0 0 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 48px 22px calc(18px + env(safe-area-inset-bottom)); background: linear-gradient(to bottom, transparent, rgba(0,0,0,.72)); opacity: 1; transition: opacity .3s ease; }
+.stream-expanded-player.is-idle .stream-cinema-controls { opacity: 0; pointer-events: none; }
+.stream-cinema-controls__volume { display: flex; width: min(260px, 45vw); align-items: center; gap: 10px; color: white; }
+.stream-cinema-controls__volume input { width: 100%; accent-color: var(--lime); }
+.stream-cinema-controls > button { display: flex; min-height: 36px; align-items: center; gap: 7px; padding: 0 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 9px; color: white; background: rgba(10,10,9,.6); cursor: pointer; font-size: 11px; font-weight: 750; backdrop-filter: blur(6px); }
+.stream-cinema-controls > button:hover, .stream-cinema-controls > button:focus-visible { background: rgba(30,30,27,.9); }
+.stream-expanded-player.is-ui-hidden .stream-audio-blocked-overlay { inset: auto 0 5.5rem 0; margin: 0 auto; width: max-content; max-width: calc(100% - 2rem); }
 
 @keyframes stream-mini-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
 

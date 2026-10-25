@@ -26,10 +26,12 @@ interface StreamPanelProps {
   onWatch: () => void
   onLeave: () => void
   onExpand: () => void
+  /** Opens the player straight in fullscreen cinema mode. */
+  onFullscreen?: () => void
   onToggleAudio?: () => void
 }
 
-export function StreamPanel({ stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onToggleAudio }: StreamPanelProps) {
+export function StreamPanel({ stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
   const pendingPublisher = !stream && !!media
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
   const duration = useLiveDuration(stream?.started_at_ms)
@@ -82,7 +84,7 @@ export function StreamPanel({ stream, currentUserId, publisherName, voiceActive,
       <div className="stream-badges"><span className="stream-mode">{stream?.codec?.toUpperCase() ?? preferences.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream?.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></div>
     </header>
 
-    {media && <div className="stream-video" onDoubleClick={onExpand}>
+    {media && <div className="stream-video" onDoubleClick={onFullscreen ?? onExpand}>
       <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0} controls={false}/>
       <span>{liveLabel}</span>
       {!isPublisher && playbackState === 'audio_blocked' && (
@@ -111,7 +113,8 @@ export function StreamPanel({ stream, currentUserId, publisherName, voiceActive,
       {isPublisher && stream?.has_audio && onToggleAudio && <button className={`stream-action ${audioMuted ? 'is-off' : ''}`} type="button" onClick={onToggleAudio} aria-pressed={audioMuted} title={audioMuted ? 'Зрители не слышат звук трансляции' : 'Выключить звук трансляции для зрителей'}>
         <Icon name={audioMuted ? 'volumeOff' : 'volume'} size={16}/><span>{audioMuted ? 'Звук выключен' : 'Звук трансляции'}</span>
       </button>}
-      {media && <button className="stream-action" type="button" onClick={onExpand} title="Открыть трансляцию на весь экран"><Icon name="maximize" size={16}/><span>На весь экран</span></button>}
+      {media && onFullscreen && <button className="stream-action" type="button" onClick={onFullscreen} title="Только видео, без интерфейса (F, выход — Esc)"><Icon name="maximize" size={16}/><span>Полный экран</span></button>}
+      {media && <button className="stream-action" type="button" onClick={onExpand} title="Развернуть трансляцию в окне приложения"><Icon name="monitor" size={16}/><span>Развернуть</span></button>}
       {media && !isPublisher && pictureInPictureAvailable() && <button className="stream-action" type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Смотреть поверх других окон"><Icon name="pip" size={16}/><span>Картинка в картинке</span></button>}
     </div>
   </section>

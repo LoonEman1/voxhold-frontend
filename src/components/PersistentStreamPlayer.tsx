@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
@@ -21,11 +21,18 @@ interface PersistentStreamPlayerProps {
   onExpand: () => void
   onCollapse: () => void
   onLeave: () => void
+  /** Expanded only: enter the fullscreen cinema mode right after mounting. */
+  startInCinema?: boolean
 }
 
-export function PersistentStreamPlayer({ mode, stream, role, status, media, channelName, preferences, quality, onPreferencesChange, onExpand, onCollapse, onLeave }: PersistentStreamPlayerProps) {
+/** Cinema controls fade out after this long without input. */
+export const CINEMA_IDLE_MS = 2_500
+
+export function PersistentStreamPlayer({ mode, stream, role, status, media, channelName, preferences, quality, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false }: PersistentStreamPlayerProps) {
   const playerRef = useRef<HTMLElement>(null)
   const [uiHidden, setUIHidden] = useState(false)
+  const [idle, setIdle] = useState(false)
+  const controlsHoveredRef = useRef(false)
   const isPublisher = role === 'publisher'
   const duration = useLiveDuration(stream?.started_at_ms)
   const canPictureInPicture = !isPublisher && pictureInPictureAvailable()
@@ -47,16 +54,53 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     if (video) video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
   }, [isPublisher, preferences.playbackVolume, videoRef])
 
+  const enterCinemaMode = useCallback(async () => {
+    setUIHidden(true)
+    const player = playerRef.current
+    if (!player?.requestFullscreen || document.fullscreenElement) return
+    try {
+      await player.requestFullscreen()
+    } catch {
+      // CSS fullscreen remains available when the browser denies the native API.
+    }
+  }, [])
+
+  const restoreUI = useCallback(async () => {
+    setUIHidden(false)
+    if (document.fullscreenElement !== playerRef.current || !document.exitFullscreen) return
+    try {
+      await document.exitFullscreen()
+    } catch {
+      // The browser may already be leaving fullscreen after Escape.
+    }
+  }, [])
+
+  // "Полный экран" in the room panel mounts the player and goes fullscreen in
+  // the same click, while the browser still honours the user gesture.
+  const startInCinemaRef = useRef(startInCinema)
+  useEffect(() => {
+    if (mode === 'expanded' && startInCinemaRef.current) void enterCinemaMode()
+  }, [mode, enterCinemaMode])
+
   useEffect(() => {
     if (mode !== 'expanded') return
-    const collapseOnEscape = (event: KeyboardEvent) => {
+    const handleKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const typing = !!target && (target.isContentEditable || target.tagName === 'TEXTAREA'
+        || (target.tagName === 'INPUT' && (target as HTMLInputElement).type !== 'range'))
+      if (event.code === 'KeyF' && !typing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault()
+        if (uiHidden) void restoreUI()
+        else void enterCinemaMode()
+        return
+      }
       if (event.key !== 'Escape') return
       if (uiHidden) setUIHidden(false)
       else onCollapse()
     }
-    window.addEventListener('keydown', collapseOnEscape)
-    return () => window.removeEventListener('keydown', collapseOnEscape)
-  }, [mode, onCollapse, uiHidden])
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [mode, onCollapse, uiHidden, enterCinemaMode, restoreUI])
 
   useEffect(() => {
     if (mode === 'mini') setUIHidden(false)
@@ -71,26 +115,31 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
   }, [mode, uiHidden])
 
-  const enterCinemaMode = async () => {
-    setUIHidden(true)
+  // Cinema mode shows nothing but the picture: the controls come back on any
+  // input and fade out again after a short pause. The cursor stays visible.
+  useEffect(() => {
     const player = playerRef.current
-    if (!player?.requestFullscreen || document.fullscreenElement) return
-    try {
-      await player.requestFullscreen()
-    } catch {
-      // CSS fullscreen remains available when the browser denies the native API.
+    if (!uiHidden || !player) {
+      setIdle(false)
+      return
     }
-  }
-
-  const restoreUI = async () => {
-    setUIHidden(false)
-    if (document.fullscreenElement !== playerRef.current || !document.exitFullscreen) return
-    try {
-      await document.exitFullscreen()
-    } catch {
-      // The browser may already be leaving fullscreen after Escape.
+    let timer = 0
+    const wake = () => {
+      setIdle(false)
+      window.clearTimeout(timer)
+      timer = window.setTimeout(function hideWhenUntouched() {
+        if (controlsHoveredRef.current) timer = window.setTimeout(hideWhenUntouched, CINEMA_IDLE_MS)
+        else setIdle(true)
+      }, CINEMA_IDLE_MS)
     }
-  }
+    wake()
+    const events = ['pointermove', 'pointerdown', 'wheel', 'touchstart', 'keydown'] as const
+    events.forEach((name) => player.addEventListener(name, wake, { passive: true }))
+    return () => {
+      window.clearTimeout(timer)
+      events.forEach((name) => player.removeEventListener(name, wake))
+    }
+  }, [uiHidden])
 
   const updateVolume = (value: number) => {
     onPreferencesChange({ ...preferences, playbackVolume: Math.max(0, Math.min(100, value)) })
@@ -121,7 +170,7 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
     </aside>
   }
 
-  return <section ref={playerRef} className={`stream-expanded-player ${uiHidden ? 'is-ui-hidden' : ''}`} role="dialog" aria-modal="true" aria-label={`Трансляция в канале ${channelName}`}>
+  return <section ref={playerRef} className={`stream-expanded-player ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role="dialog" aria-modal="true" aria-label={`Трансляция в канале ${channelName}`}>
     <header>
       <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА{duration && ` · ${duration}`}</span><h2>{channelName}</h2></div>
       <div className="stream-expanded-player__meta">
@@ -143,7 +192,18 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
         <div className="stream-audio-blocked-overlay"><span>Восстанавливаем соединение…</span></div>
       )}
       {!audioBlockedOverlay && playbackState !== 'stalled' && <span><i/>{liveLabel}</span>}
-      {uiHidden && <button className="stream-expanded-player__restore-ui" type="button" onClick={() => void restoreUI()} onDoubleClick={(event) => event.stopPropagation()} title="Показать интерфейс"><Icon name="minimize"/><span>Показать интерфейс</span></button>}
+      {uiHidden && <div
+        className="stream-cinema-controls"
+        onDoubleClick={(event) => event.stopPropagation()}
+        onPointerEnter={() => { controlsHoveredRef.current = true }}
+        onPointerLeave={() => { controlsHoveredRef.current = false }}
+      >
+        {!isPublisher && stream?.has_audio ? <label className="stream-cinema-controls__volume">
+          <Icon name={preferences.playbackVolume === 0 ? 'volumeOff' : 'volume'} size={17}/>
+          <input type="range" min="0" max="100" step="1" value={preferences.playbackVolume} aria-label="Громкость трансляции" onChange={(event) => updateVolume(Number(event.target.value))}/>
+        </label> : <span/>}
+        <button type="button" onClick={() => void restoreUI()} title="Выйти из полноэкранного режима (Esc или F)"><Icon name="minimize" size={16}/><span>Выйти из полного экрана</span></button>
+      </div>}
     </div>
     <footer>
       <StreamQualitySummary stats={quality}/>
