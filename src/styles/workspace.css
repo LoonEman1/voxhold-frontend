@@ -580,3 +580,10 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
   .voice-stage-content .voice-participant { min-height: 150px; padding: 18px 10px; }
   .voice-stage-content .voice-participant .avatar { width: 68px; height: 68px; font-size: 24px; }
 }
+
+.message-pending { padding: 8px 20px; opacity: .7; overflow-wrap: anywhere; }
+.message-pending p { white-space: pre-wrap; margin: 0 0 4px; }
+.message-pending small { display: flex; gap: 12px; align-items: center; }
+.message-pending--failed { opacity: 1; }
+.message-pending button { color: var(--cyan); background: none; border: 0; cursor: pointer; }
+.members-sidebar__scroll .member-group { margin: 0; padding: 12px 0 8px; }

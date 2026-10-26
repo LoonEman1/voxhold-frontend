@@ -86,6 +86,7 @@ export interface MessageAuthor {
 }
 
 export interface Message {
+  client_message_id?: string
   id: EntityId
   channel_id: EntityId
   author: MessageAuthor
@@ -93,6 +94,15 @@ export interface Message {
   created_at: number
   edited_at: number | null
   revision?: number
+}
+
+export interface MessageSyncPage {
+  messages: Message[]
+  deleted_ids: number[]
+  cursor: number
+  reset: boolean
+  has_more: boolean
+  has_older: boolean
 }
 
 export interface MessagePage {

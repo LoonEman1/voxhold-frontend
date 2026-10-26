@@ -1,3 +1,4 @@
+import { useSpeakingUsers } from './MediaActivity'
 import { useMemo, type ReactNode } from 'react'
 import type { ActiveStream, Channel, ServerMember, ServerRole, VoiceParticipant } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
@@ -18,7 +19,7 @@ interface VoicePanelProps {
   participants: VoiceParticipant[]
   members: ServerMember[]
   currentUserId: number
-  speakingUserIds: number[]
+  speakingUserIds?: number[]
   connectionStatus: VoiceConnectionStatus
   realtimeOnline: boolean
   selfMute: boolean
@@ -65,7 +66,8 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
   const activeHere = activeChannel?.id === channel.id
   const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
-  const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
+  const speakers = useSpeakingUsers(speakingUserIds)
+  const speakingUsers = useMemo(() => new Set(speakers), [speakers])
   const statusText = recovering
     ? 'Восстанавливаем соединение…'
     : micUnavailable

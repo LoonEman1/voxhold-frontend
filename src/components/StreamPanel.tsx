@@ -1,3 +1,4 @@
+import { useStreamQuality } from './MediaActivity'
 import { useEffect } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
@@ -31,7 +32,8 @@ interface StreamPanelProps {
   onToggleAudio?: () => void
 }
 
-export function StreamPanel({ stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
+export function StreamPanel({ stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality: qualityOverride, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
+  const quality = useStreamQuality(qualityOverride)
   const pendingPublisher = !stream && !!media
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
   const duration = useLiveDuration(stream?.started_at_ms)
