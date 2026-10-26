@@ -9,6 +9,7 @@ export interface LocalRecording {
   duration: number
   finished: boolean
   error?: string
+  preview?: Blob
 }
 const request = <T>(value: IDBRequest<T>) => new Promise<T>((resolve, reject) => {
   value.onsuccess = () => resolve(value.result)
@@ -45,6 +46,22 @@ export class RecordingStore {
   async blob(local: LocalRecording, tail: Blob[] = []) {
     const chunks = await request(this.db.transaction('chunks').objectStore('chunks').getAll(IDBKeyRange.bound([this.scope, local.record.id, 0], [this.scope, local.record.id, Number.MAX_SAFE_INTEGER]))) as Blob[]
     return new Blob([...chunks, ...tail], { type: local.record.mime_type })
+  }
+  async previewSource(local: LocalRecording) {
+    const chunks = await request(this.db.transaction('chunks').objectStore('chunks').getAll(IDBKeyRange.bound([this.scope, local.record.id, 0], [this.scope, local.record.id, Number.MAX_SAFE_INTEGER]), 4)) as Blob[]
+    return new Blob(chunks, { type: local.record.mime_type }).slice(0, 8 << 20, local.record.mime_type)
+  }
+  // Read-modify-write preserves newer upload status and metadata from other tabs.
+  async updateMetadata(id: string, patch: Partial<Pick<LocalRecording, 'preview' | 'record'>>) {
+    const tx = this.db.transaction('recordings', 'readwrite'), done = completed(tx)
+    const records = tx.objectStore('recordings')
+    const existing = await request(records.get(this.key(id))) as LocalRecording | undefined
+    if (existing) {
+      const next = { ...existing, ...patch }
+      if (patch.record && existing.record.updated_at > patch.record.updated_at) next.record = existing.record
+      records.put(next)
+    }
+    await done
   }
   async remove(id: string) {
     const tx = this.db.transaction(['recordings', 'chunks'], 'readwrite')

@@ -4,6 +4,7 @@ import { formatDuration, humanError } from '../lib/format'
 import type { LocalRecording } from '../services/recordingStore'
 import { Modal } from './Modal'
 import { Icon } from './Icon'
+import { RecordingPreview, type PreviewLoader } from './RecordingPreview'
 
 function recordState(record: ChannelRecording, local: LocalRecording | undefined, size: number, progress: number | string | undefined) {
   const now = Date.now()
@@ -18,11 +19,12 @@ function recordState(record: ChannelRecording, local: LocalRecording | undefined
   return progress ?? 'В этом браузере · ожидает загрузки'
 }
 
-export function RecordingsDialog({ open, onClose, records, locals, serverId, progress, voiceActive, onDownload, onRemoveLocal, onRetry, channels = [] }: {
+export function RecordingsDialog({ open, onClose, records, locals, serverId, progress, voiceActive, onDownload, onRemoveLocal, onRetry, loadPreview, channels = [] }: {
   open: boolean; onClose: () => void; records: ChannelRecording[]; locals: LocalRecording[]; serverId: number | null
   progress: Record<string, number | string>; voiceActive: boolean
   onDownload: (record: ChannelRecording) => Promise<void>; onRemoveLocal: (id: string) => Promise<void>; onRetry: () => void
   channels?: Channel[]
+  loadPreview?: PreviewLoader
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
@@ -51,11 +53,14 @@ export function RecordingsDialog({ open, onClose, records, locals, serverId, pro
       const removable = !!local && (local.finished || !live)
       const percent = progress[record.id]
       return <article key={record.id} className="recordings-row">
+        <RecordingPreview record={record} load={loadPreview} localReady={!!local?.finished}/>
+        <div className="recordings-row__details">
         <div className="recordings-row__heading"><span className="recordings-row__icon"><Icon name="inbox" size={19}/></span><div><b>{channels.find((channel) => channel.id === record.channel_id)?.name ?? `Канал #${record.channel_id}`}</b><time dateTime={new Date(record.created_at * 1000).toISOString()}>{new Date(record.created_at * 1000).toLocaleString()}</time></div></div>
         <div className="recordings-row__meta"><span>{record.owner_username}</span><span>{formatDuration(local?.duration ?? record.duration_ms)}</span><span>{(size / 2 ** 20).toFixed(1)} МБ</span></div>
         <small className={`recordings-row__status${live ? ' is-live' : ''}`}>{live && <i className="record-dot is-active"/>}{recordState(record, local, size, percent)}</small>
         {typeof percent === 'number' && !serverReady && <progress className="recordings-row__progress" max={100} value={percent} aria-label="Загрузка записи на сервер"/>}
         <div className="recordings-row__actions"><button className="button button--secondary button--small" disabled={!available || busy !== null} onClick={() => void run(record.id, () => onDownload(record))}>{busy === record.id ? 'Подождите…' : partial ? 'Скачать часть' : 'Скачать'}</button>{removable && <button className="button button--ghost button--small" disabled={busy !== null} title="Удалить только копию в этом браузере" onClick={() => { if (!serverReady && confirmRemove !== record.id) { setConfirmRemove(record.id); return } setConfirmRemove(null); void run(record.id, () => onRemoveLocal(record.id)) }}>{confirmRemove === record.id ? 'Удалить единственную копию?' : 'Удалить локальную'}</button>}{confirmRemove === record.id && <button className="button button--ghost button--small" onClick={() => setConfirmRemove(null)}>Отмена</button>}</div>
+        </div>
       </article>
     }) : <div className="recordings-empty"><Icon name="inbox" size={28}/><b>Записей пока нет</b><p>Начните запись кнопкой с кружком в панели звонка.</p></div>}</div>
     {error && <div className="form-error" role="alert">{error}</div>}

@@ -8,6 +8,14 @@ function mockTransport(response: TransportResponse<unknown>) {
 }
 
 describe('Voxhold API client', () => {
+  it('uploads and privately reads recording previews', async () => {
+    const { api, request } = mockTransport({ status: 200, data: {} })
+    const image = new Blob(['jpeg'], { type: 'image/jpeg' })
+    await api.recordings.uploadPreview('session', 'record', image)
+    expect(request).toHaveBeenLastCalledWith({ token: 'session', path: '/api/v1/recordings/record/preview', method: 'PUT', rawBody: image, contentType: 'image/jpeg', signal: undefined })
+    await api.recordings.preview('session', 'record', 'v1')
+    expect(request).toHaveBeenLastCalledWith({ token: 'session', path: '/api/v1/recordings/record/preview?v=v1', responseType: 'blob', signal: undefined })
+  })
   it('uploads the original avatar with selected crop coordinates', async () => {
     const { api, request } = mockTransport({ status: 200, data: { etag: 'new-version' } })
     const file = new Blob(['original'], { type: 'image/png' }) as File

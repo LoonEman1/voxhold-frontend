@@ -4,6 +4,7 @@ import { humanError } from '../lib/format'
 import { ApiError, type VoxholdApi } from '../services/api'
 import type { BrowserVoiceSession } from '../services/voice'
 import { CallRecorder, recordingMIME } from '../services/recording'
+import { createRecordingPreview } from '../services/recordingPreview'
 import { downloadBlob, downloadFile, recordingFilename, RecordingStore, type LocalRecording } from '../services/recordingStore'
 
 const MAX_SERVER_BYTES = 2 ** 31
@@ -40,12 +41,39 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   const latestStream = useRef(stream); latestStream.current = stream
   const latestVoice = useRef(voice); latestVoice.current = voice
   const latestRecords = useRef(records); latestRecords.current = records
+  const latestLocals = useRef(locals); latestLocals.current = locals
+  const previewTasks = useRef(new Map<string, Promise<Blob | null>>())
   const uploadAbort = useRef<AbortController | null>(null)
   const starting = useRef(false)
   const merge = useCallback((record: ChannelRecording) => setRecords((current) => {
     const previous = current[record.id]
     return previous && previous.updated_at > record.updated_at ? current : { ...current, [record.id]: record }
   }), [])
+  const ensurePreview = useCallback((local: LocalRecording, opened: RecordingStore): Promise<Blob | null> => {
+    if (local.preview) return Promise.resolve(local.preview)
+    const key = `${opened.scope}:${local.record.id}:${local.chunks}`
+    let task = previewTasks.current.get(key)
+    if (!task) {
+      task = (async () => {
+        const preview = await createRecordingPreview(await opened.previewSource(local), Math.min(local.duration, 4000))
+        if (preview) await opened.updateMetadata(local.record.id, { preview }).catch(() => undefined)
+        return preview
+      })().catch(() => null)
+      previewTasks.current.set(key, task)
+      if (previewTasks.current.size > 128) previewTasks.current.delete(previewTasks.current.keys().next().value!)
+    }
+    return task
+  }, [])
+  const loadPreview = useCallback(async (record: ChannelRecording, signal: AbortSignal) => {
+    const saved = latestLocals.current.find((local) => local.record.id === record.id)
+    if (saved?.preview) return saved.preview
+    if (saved?.finished && saved.bytes && store.current) {
+      const preview = await ensurePreview(saved, store.current)
+      if (preview) return preview
+    }
+    if (!signal.aborted && credentials.current && record.preview_version) return api.recordings.preview(credentials.current, record.id, record.preview_version, signal)
+    return null
+  }, [api, ensurePreview])
   const refreshLocal = useCallback(async () => {
     if (!store.current) return
     try {
@@ -164,8 +192,18 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
         if (controller.signal.aborted) break
         if (!local.finished || local.error || !local.bytes || local.bytes > MAX_SERVER_BYTES || local.record.expires_at * 1000 <= Date.now()) continue
         // The local status survives reloads and covers servers whose list is not loaded.
-        if (local.record.status === 'ready' || latestRecords.current[local.record.id]?.status === 'ready') continue
+        const ready = latestRecords.current[local.record.id]?.status === 'ready' ? latestRecords.current[local.record.id] : local.record.status === 'ready' ? local.record : undefined
+        if (ready?.preview_version) continue
         try {
+          if (ready) {
+            const preview = await ensurePreview(local, opened)
+            if (controller.signal.aborted) return
+            if (preview) {
+              const updated = await api.recordings.uploadPreview(token, ready.id, preview, controller.signal)
+              merge(updated); await opened.updateMetadata(ready.id, { record: updated })
+            }
+            continue
+          }
           setProgress((value) => ({ ...value, [local.record.id]: 0 }))
           const currentToken = credentials.current
           if (!currentToken) return
@@ -193,8 +231,17 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
           if (controller.signal.aborted) return
           const completed = await api.recordings.complete(currentToken, record.id)
           merge(completed)
-          await opened.save({ ...local, record: completed }).catch(() => undefined)
+          await opened.updateMetadata(record.id, { record: completed }).catch(() => undefined)
           setProgress((value) => ({ ...value, [record.id]: 'Сохранено на сервере' }))
+          // A thumbnail failure must never turn a successful video upload into a failure.
+          try {
+            const preview = await ensurePreview(local, opened)
+            if (controller.signal.aborted) return
+            if (preview) {
+              const updated = await api.recordings.uploadPreview(currentToken, record.id, preview, controller.signal)
+              merge(updated); await opened.updateMetadata(record.id, { record: updated })
+            }
+          } catch { /* Retry independently on the next queue run; keep the video ready. */ }
         } catch (error) {
           if (controller.signal.aborted) break
           setProgress((value) => ({ ...value, [local.record.id]: humanError(error) }))
@@ -203,7 +250,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
     })()
     return () => controller.abort()
     // Server events/progress are read through refs so they never restart the queue mid-chunk.
-  }, [voiceActive, scope, token, locals, retry, api, merge])
+  }, [voiceActive, scope, token, locals, retry, api, merge, ensurePreview])
   const download = async (record: ChannelRecording) => {
     try {
       const saved = locals.find((local) => local.record.id === record.id)
@@ -222,8 +269,9 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
         try { merge(await api.recordings.stop(value, id, 0, remote.duration_ms, true)) } catch { /* Cleanup still expires abandoned server files. */ }
       }
       await store.current?.remove(id); retained.current.delete(id); volatileLocals.current.delete(id); await refreshLocal()
+      for (const key of previewTasks.current.keys()) if (key.includes(`:${id}:`)) previewTasks.current.delete(key)
     }
     catch { notify('Не удалось удалить локальную копию', 'error') }
   }
-  return { records: Object.values(records).filter((record) => record.expires_at * 1000 > Date.now()), locals, activeId, busy, progress, merge, start, stop, download, removeLocal, retry: () => setRetry((value) => value + 1) }
+  return { records: Object.values(records).filter((record) => record.expires_at * 1000 > Date.now()), locals, activeId, busy, progress, merge, start, stop, download, removeLocal, loadPreview, retry: () => { previewTasks.current.clear(); setRetry((value) => value + 1) } }
 }

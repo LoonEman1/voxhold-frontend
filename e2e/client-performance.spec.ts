@@ -170,6 +170,8 @@ test('call controls stop and download, defer the server copy during a call, then
   await expect(page.locator('#ready')).toHaveText('0')
   await page.getByRole('button', { name: 'Список записей', exact: true }).click()
   await expect(page.getByText('Загрузка копий на сервер продолжится после выхода из звонка.')).toBeVisible()
+  await expect(page.getByAltText('Кадр из записи')).toBeVisible()
+  await page.screenshot({ path: test.info().outputPath('recordings-with-preview.png'), animations: 'disabled' })
   const retry = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Скачать', exact: true }).click()
   expect((await retry).suggestedFilename()).toMatch(/\.webm$/)
@@ -178,6 +180,16 @@ test('call controls stop and download, defer the server copy during a call, then
   await expect(page.locator('#ready')).toHaveText('1')
   await page.getByRole('button', { name: 'Записи', exact: true }).click()
   await expect(page.getByText(/На сервере до/)).toBeVisible()
+  await expect.poll(async () => page.evaluate(async () => {
+    const { RecordingStore } = await import('/src/services/recordingStore.ts'); const store = await RecordingStore.open('calls-fixture')
+    try { const entries = await store.list(); return entries.some((local) => local.preview?.type === 'image/jpeg' && !!local.record.preview_version) } finally { store.close() }
+  })).toBe(true)
+  await page.getByRole('button', { name: 'Удалить локальную', exact: true }).click()
+  await expect(page.getByAltText('Кадр из записи')).toBeVisible()
+  expect(await page.evaluate(async () => {
+    const { RecordingStore } = await import('/src/services/recordingStore.ts'); const store = await RecordingStore.open('calls-fixture')
+    try { return (await store.list()).length } finally { store.close() }
+  })).toBe(0)
   expect(pageErrors).toEqual([])
 })
 

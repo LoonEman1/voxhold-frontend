@@ -499,7 +499,12 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .recordings-notice { display: flex; align-items: center; gap: 9px; margin: 14px 0 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--surface-2); font-size: 11px; line-height: 1.5; }
 .recordings-notice svg { flex: 0 0 auto; }
 .recordings-list { display: flex; flex-direction: column; gap: 12px; max-height: 46vh; overflow-y: auto; margin: 18px 0; padding: 1px; }
-.recordings-row { display: flex; min-width: 0; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); }
+.recordings-row { display: grid; min-width: 0; grid-template-columns: 132px minmax(0, 1fr); align-items: start; gap: 14px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); }
+.recordings-row__details { display: flex; min-width: 0; flex-direction: column; gap: 11px; }
+.recordings-preview { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.recordings-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.recordings-preview__empty { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 5px; color: var(--muted); }
+.recordings-preview__empty small { font-size: 9px; }
 .recordings-row__heading { display: flex; align-items: center; gap: 11px; }
 .recordings-row__icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--surface-2); }
 .recordings-row__heading > div { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
@@ -520,7 +525,7 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .members-sidebar { background: var(--surface); }
 @media (max-width: 480px) {
   .recordings-dialog { padding: 0 16px 16px; }
-  .recordings-row { padding: 12px; }
+  .recordings-row { padding: 12px; grid-template-columns: minmax(0, 1fr); }
   .recordings-row__actions > button { flex: 1 1 auto; }
 }
 @media (max-width: 900px) {

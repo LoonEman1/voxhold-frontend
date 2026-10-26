@@ -13,6 +13,7 @@ export interface ChannelRecording {
   created_at: number
   updated_at: number
   expires_at: number
+  preview_version?: string
 }
 
 /** Instance-wide server copy budget, managed by the instance owner. */
