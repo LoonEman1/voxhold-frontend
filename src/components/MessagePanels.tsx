@@ -115,6 +115,7 @@ export function MessageSearchPanel({ open, api, token, serverId, onClose, onOpen
 }
 
 interface PinsPanelProps {
+  docked?: boolean
   open: boolean
   pins: PinnedMessage[]
   loading: boolean
@@ -124,7 +125,7 @@ interface PinsPanelProps {
   onUnpin: (messageId: number) => Promise<void>
 }
 
-export function PinnedMessagesPanel({ open, pins, loading, canManage, onClose, onOpenMessage, onUnpin }: PinsPanelProps) {
+export function PinnedMessagesPanel({ docked = false, open, pins, loading, canManage, onClose, onOpenMessage, onUnpin }: PinsPanelProps) {
   const [pendingId, setPendingId] = useState<number | null>(null)
   const [error, setError] = useState('')
 
@@ -137,7 +138,7 @@ export function PinnedMessagesPanel({ open, pins, loading, canManage, onClose, o
   }
 
   return (
-    <aside className={`message-panel pins-panel ${open ? 'is-open' : ''}`} aria-hidden={!open}>
+    <aside className={`message-panel pins-panel ${docked ? 'message-panel--docked' : ''} ${open ? 'is-open' : ''}`} aria-hidden={!open}>
       <header className="message-panel__header">
         <div><span className="eyebrow">ВАЖНОЕ В КАНАЛЕ</span><h2>Закреплённые сообщения</h2></div>
         <button className="icon-button" onClick={onClose} aria-label="Закрыть закрепы"><Icon name="close"/></button>
