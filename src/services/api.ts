@@ -1,5 +1,7 @@
 import type {
   ApiErrorPayload,
+  ChannelRecording,
+  RecordingStorage,
   AuthPayload,
   Channel,
   ChannelRead,
@@ -107,6 +109,10 @@ export function createApi(transport: Transport) {
         authorized(token, { path: '/api/v1/account', method: 'DELETE' }) as Promise<void>,
     },
     profile: {
+      // The version makes each URL immutable, so the HTTP cache needs no revalidation.
+      avatar: (token: string, userId: number, version: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/users/${url(userId)}/avatar?v=${url(version)}`, responseType: 'blob', signal }) as Promise<Blob>,
+      uploadAvatar: (token: string, file: File) => authorized(token, { path: '/api/v1/me/avatar', method: 'PUT', rawBody: file, contentType: file.type }) as Promise<{ etag: string }>,
+      removeAvatar: (token: string) => authorized(token, { path: '/api/v1/me/avatar', method: 'DELETE' }) as Promise<void>,
       me: (token: string, signal?: AbortSignal) =>
         authorized(token, { path: '/api/v1/me/profile', signal }) as Promise<Profile>,
       byUser: (token: string, userId: number, signal?: AbortSignal) =>
@@ -132,6 +138,23 @@ export function createApi(transport: Transport) {
           path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`,
           method: 'POST',
         }) as Promise<void>,
+    },
+    recordings: {
+      storage: (token: string, signal?: AbortSignal) => authorized(token, { path: '/api/v1/instance/recording-storage', signal }) as Promise<RecordingStorage>,
+      setQuota: (token: string, quota_bytes: number) => authorized(token, { path: '/api/v1/instance/recording-storage', method: 'PUT', body: { quota_bytes } }) as Promise<RecordingStorage>,
+      list: (token: string, serverId: number, signal?: AbortSignal) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/recordings`, signal }) as Promise<{ recordings: ChannelRecording[] }>,
+      start: (token: string, serverId: number, channelId: number, mime_type: string) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/recordings`, method: 'POST', body: { mime_type } }) as Promise<ChannelRecording>,
+      heartbeat: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}/heartbeat`, method: 'POST' }),
+      stop: (token: string, id: string, size_bytes: number, duration_ms: number, local_only = false) => authorized(token, { path: `/api/v1/recordings/${url(id)}/stop`, method: 'POST', body: { size_bytes, duration_ms, local_only } }) as Promise<ChannelRecording>,
+      offset: (token: string, id: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}/upload`, signal }) as Promise<{ offset: number }>,
+      append: (token: string, id: string, offset: number, chunk: Blob, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}/content?offset=${offset}`, method: 'PATCH', rawBody: chunk, signal }) as Promise<{ offset: number }>,
+      complete: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}/complete`, method: 'POST' }) as Promise<ChannelRecording>,
+      download: async (token: string, id: string) => {
+        const result = await authorized(token, { path: `/api/v1/recordings/${url(id)}/download`, method: 'POST' }) as { url: string }
+        // Only our relative route may receive the signed, short-lived ticket.
+        if (!result.url.startsWith('/api/v1/recording-downloads/')) throw new Error('Invalid recording download URL')
+        return transport.resolveURL?.(result.url) ?? result.url
+      },
     },
     channels: {
       list: (token: string, serverId: number, signal?: AbortSignal) =>

@@ -135,6 +135,44 @@ describe('BrowserVoiceSession', () => {
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
   })
 
+  it('keeps remote playback and the peer unchanged across microphone toggles and acknowledgements', async () => {
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const session = await startSession(input)
+    const peer = FakePeerConnection.latest!
+    peer.ontrack?.({ track: new FakeTrack() } as unknown as RTCTrackEvent)
+    const output = document.querySelector<HTMLAudioElement>('.voice-audio-output')!
+    const remoteMedia = output.srcObject
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
+    play.mockClear()
+
+    try {
+      for (const muted of [true, true, false, false, true, false]) {
+        session.setState(muted, false)
+        expect(inputTrack.enabled).toBe(!muted)
+        expect(output.srcObject).toBe(remoteMedia)
+        expect(output.muted).toBe(false)
+      }
+      expect(play).not.toHaveBeenCalled()
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
+      expect(peer.addTrack).toHaveBeenCalledOnce()
+      expect(peer.sender.replaceTrack).not.toHaveBeenCalled()
+      expect(peer.createAnswer).not.toHaveBeenCalled()
+      expect(peer.close).not.toHaveBeenCalled()
+
+      session.setState(false, true)
+      expect(output.muted).toBe(true)
+      session.setState(false, false)
+      expect(output.muted).toBe(false)
+      expect(play).toHaveBeenCalledOnce()
+      session.setState(false, false)
+      expect(play).toHaveBeenCalledOnce()
+    } finally {
+      session.close()
+      input.close()
+    }
+  })
+
   it('stops remote outputs exactly once and never touches the shared input', async () => {
     const input = new BrowserVoiceInput()
     await input.start(DEFAULT_VOICE_PREFERENCES)

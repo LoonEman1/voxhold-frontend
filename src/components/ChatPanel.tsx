@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Channel, ChannelRead, Message, ServerMember, ServerRole } from '../domain/types'
 import { formatDate, formatTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
@@ -62,9 +63,28 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
   const readFrameRef = useRef<number | null>(null)
   const onReadThroughRef = useRef(onReadThrough)
   onReadThroughRef.current = onReadThrough
+  const membersById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members])
+  const virtualized = messages.length > 0
+  const getMessageKey = useCallback((index: number) => messages[index]!.id, [messages])
+  const estimateMessageSize = useCallback((index: number) => 52 + Math.min(240, Math.floor((messages[index]?.content.length ?? 0) / 80) * 18), [messages])
+  const getScrollElement = useCallback(() => scrollRef.current, [])
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement,
+    getItemKey: getMessageKey,
+    estimateSize: estimateMessageSize,
+    overscan: 8,
+    enabled: virtualized,
+    anchorTo: 'end',
+    followOnAppend: true,
+    scrollEndThreshold: 180,
+    initialRect: { width: 800, height: 600 },
+  })
+  const virtualItems = virtualizer.getVirtualItems()
+  const visibleRows = virtualized ? virtualItems.map((item) => ({ index: item.index, key: item.key })) : messages.map((message, index) => ({ index, key: message.id }))
 
   const scheduleReadCheck = () => {
-    if (readFrameRef.current !== null) window.cancelAnimationFrame(readFrameRef.current)
+    if (readFrameRef.current !== null) return
     readFrameRef.current = window.requestAnimationFrame(() => {
       readFrameRef.current = null
       const container = scrollRef.current
@@ -100,6 +120,16 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
     if (loading) return
     if (!focusedMessageId) previousFocus.current = null
     if (focusedMessageId && previousFocus.current !== focusedMessageId) {
+      if (virtualized) {
+        const index = messages.findIndex((message) => message.id === focusedMessageId)
+        if (index >= 0) {
+          virtualizer.scrollToIndex(index, { align: 'center' })
+          previousFocus.current = focusedMessageId
+          pendingChannelScroll.current = null
+          previousMessageCount.current = messages.length
+          return
+        }
+      }
       const target = container.querySelector<HTMLElement>(`[data-message-id="${focusedMessageId}"]`)
       if (target) {
         target.scrollIntoView({ block: 'center', behavior: 'auto' })
@@ -110,17 +140,18 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
       }
     }
     if (pendingChannelScroll.current === channelId) {
-      container.scrollTop = container.scrollHeight
+      if (virtualized) virtualizer.scrollToEnd()
+      else container.scrollTop = container.scrollHeight
       pendingChannelScroll.current = null
       previousMessageCount.current = messages.length
       return
     }
     const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 180
-    if (messages.length > previousMessageCount.current && wasNearBottom) {
+    if (!virtualized && messages.length > previousMessageCount.current && wasNearBottom) {
       container.scrollTop = container.scrollHeight
     }
     previousMessageCount.current = messages.length
-  }, [channelId, focusedMessageId, loading, messages])
+  }, [channelId, focusedMessageId, loading, messages, virtualized, virtualizer])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -133,14 +164,14 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
       const previousTop = root.scrollTop
       void onLoadOlder().finally(() => {
         window.requestAnimationFrame(() => {
-          root.scrollTop = previousTop + root.scrollHeight - previousHeight
+          if (!virtualized) root.scrollTop = previousTop + root.scrollHeight - previousHeight
           autoLoadingOlderRef.current = false
         })
       })
     }, { root, rootMargin: '260px 0px 0px' })
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [hasMore, loading, loadingOlder, onLoadOlder])
+  }, [hasMore, loading, loadingOlder, onLoadOlder, virtualized])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -265,12 +296,6 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
   }
 
   if (!channel) return <section className="chat-panel"><EmptyState icon="message" title="Выберите канал">Откройте текстовый канал слева, чтобы начать разговор.</EmptyState></section>
-  if (channel.kind === 'voice') return (
-    <section className="chat-panel voice-room">
-      <div className="voice-orbit"><span><Icon name="volume" size={34}/></span><i/><i/><i/></div>
-      <span className="eyebrow">ГОЛОСОВАЯ КОМНАТА</span><h2>{channel.name}</h2><p>Комната готова. Голосовой медиатранспорт появится после подключения WebRTC на сервере.</p><button className="button button--secondary" disabled><Icon name="mic"/> Голос скоро</button>
-    </section>
-  )
 
   return (
     <section className="chat-panel">
@@ -278,8 +303,11 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
         {loading ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
           <div className="channel-start"><span><Icon name="hash" size={30}/></span><h2>Начало канала #{channel.name}</h2><p>Первое сообщение задаёт настроение. Сделайте его хорошим.</p></div>
-        ) : messages.map((message, index) => {
-          const role = members.find((member) => member.user_id === message.author.user_id)?.role ?? 'member'
+        ) : <>
+        {virtualized && <div aria-hidden="true" style={{ height: virtualItems[0]?.start ?? 0 }}/>}
+        {visibleRows.map(({ index, key }) => {
+          const message = messages[index]!
+          const role = membersById.get(message.author.user_id)?.role ?? 'member'
           const mine = message.author.user_id === currentUserId
           const readers = mine ? members.filter((member) => member.user_id !== currentUserId && (channelReads[member.user_id]?.last_read_message_id ?? 0) >= message.id) : []
           const pinned = pinnedMessageIds.has(message.id)
@@ -287,10 +315,10 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
           const showDate = !previous || !sameDay(previous.created_at, message.created_at)
           const grouped = previous && previous.author.user_id === message.author.user_id && message.created_at - previous.created_at < 300 && !showDate
           return (
-            <div key={message.id}>
+            <div key={key} data-index={index} ref={virtualized ? virtualizer.measureElement : undefined}>
               {showDate && <div className="date-divider"><span>{formatDate(message.created_at)}</span></div>}
               <article data-message-id={message.id} className={`message ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
-                {!grouped && <button className="message__avatar-button" onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)} aria-label={`Открыть профиль ${message.author.username}`}><Avatar name={message.author.username}/></button>}
+                {!grouped && <button className="message__avatar-button" onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)} aria-label={`Открыть профиль ${message.author.username}`}><Avatar userId={message.author.user_id} name={message.author.username}/></button>}
                 <div className="message__body">
                   {!grouped && <header><button className={`message__author message__author--${role}`} onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)}>{message.author.username}</button><span className={`role-badge role-badge--${role}`}>{roleMeta[role].shortLabel}</span>{mine && <span className="you-tag">вы</span>}<time dateTime={new Date(message.created_at * 1000).toISOString()}>{formatTime(message.created_at)}</time></header>}
                   {pinned && <span className="message__pin-label"><Icon name="pin" size={11}/> Закреплено</span>}
@@ -305,7 +333,7 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
                 </div>
                 {mine && editingId !== message.id && <>
                   <button type="button" className={`message__delivery ${readers.length ? 'is-read' : ''}`} title={readers.length ? `Прочитали: ${readers.map((reader) => reader.username).join(', ')}` : 'Сообщение сохранено на сервере'} aria-label={readers.length ? `Прочитано: ${readers.map((reader) => reader.username).join(', ')}` : 'Доставлено на сервер'} onClick={() => setReceiptMessageId((current) => current === message.id ? null : message.id)}><span><Icon name="check" size={11}/>{readers.length > 0 && <Icon name="check" size={11}/>}</span></button>
-                  {receiptMessageId === message.id && <div className="message-readers"><header><b>{readers.length ? 'Прочитали' : 'Статус сообщения'}</b><button onClick={() => setReceiptMessageId(null)} aria-label="Закрыть"><Icon name="close" size={12}/></button></header>{readers.length ? readers.map((reader) => <div key={reader.user_id}><Avatar name={reader.username} size="small"/><span><b>{reader.username}</b><small>{roleMeta[reader.role].label}</small></span></div>) : <p><Icon name="check" size={13}/> Сохранено на сервере. Пока никто не прочитал.</p>}</div>}
+                  {receiptMessageId === message.id && <div className="message-readers"><header><b>{readers.length ? 'Прочитали' : 'Статус сообщения'}</b><button onClick={() => setReceiptMessageId(null)} aria-label="Закрыть"><Icon name="close" size={12}/></button></header>{readers.length ? readers.map((reader) => <div key={reader.user_id}><Avatar userId={reader.user_id} name={reader.username} size="small"/><span><b>{reader.username}</b><small>{roleMeta[reader.role].label}</small></span></div>) : <p><Icon name="check" size={13}/> Сохранено на сервере. Пока никто не прочитал.</p>}</div>}
                 </>}
                 {grouped && <time className="message__hover-time">{formatTime(message.created_at)}</time>}
                 {editingId !== message.id && (mine || canManage) && <div className="message__actions">
@@ -318,6 +346,8 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
             </div>
           )
         })}
+        {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
+        </>}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}

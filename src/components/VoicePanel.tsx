@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import type { ActiveStream, Channel, ServerMember, ServerRole, VoiceParticipant } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
@@ -10,6 +10,9 @@ import { StreamPanel } from './StreamPanel'
 export type VoiceConnectionStatus = 'idle' | 'requesting' | 'signaling' | 'connected'
 
 interface VoicePanelProps {
+  controls?: ReactNode
+  chat?: ReactNode
+  recordingLabel?: string
   channel: Channel
   activeChannel: Pick<Channel, 'id' | 'name'> | null
   participants: VoiceParticipant[]
@@ -58,7 +61,7 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio }: VoicePanelProps) {
+export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel }: VoicePanelProps) {
   const activeHere = activeChannel?.id === channel.id
   const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
@@ -70,31 +73,16 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
       : statusLabel[connectionStatus]
 
   return (
-    <section className="chat-panel voice-room voice-room--active">
-      <div className="voice-room__hero">
-        <div className={`voice-orbit ${activeHere ? 'is-active' : ''} ${connectionStatus === 'connected' ? 'is-connected' : ''}`}><span><Icon name="volume" size={34}/></span><i/><i/><i/></div>
-        <div className="voice-room__intro">
-          <span className="eyebrow">ГОЛОСОВАЯ КОМНАТА</span>
-          <h2>{channel.name}</h2>
-          <p>{activeHere ? statusText : activeChannel ? `Сейчас вы подключены к «${activeChannel.name}»` : 'Подключитесь, чтобы общаться с участниками в реальном времени.'}</p>
-          {error && <div className="voice-error" role="alert">{error}</div>}
-          {micUnavailable && onRetryMic && <button className="button button--ghost" type="button" onClick={onRetryMic}><Icon name="mic"/>Повторить</button>}
-          {playbackBlocked && onEnablePlayback && <button className="button button--primary" type="button" onClick={onEnablePlayback}><Icon name="volume"/>Включить звук</button>}
-          {!activeHere ? <button className="button button--primary button--large" onClick={() => void onJoin()} disabled={!realtimeOnline}><Icon name="mic"/>{activeChannel ? 'Перейти в канал' : 'Подключиться'}</button> : <div className="voice-controls">
-            <button className={`voice-control ${selfMute ? 'is-disabled' : ''}`} onClick={onToggleMute} disabled={connecting} title={selfMute ? 'Включить микрофон' : 'Выключить микрофон'}><span><Icon name="mic"/></span><small>{selfMute ? 'Микрофон выкл.' : 'Микрофон'}</small></button>
-            <button className={`voice-control ${selfDeaf ? 'is-disabled' : ''}`} onClick={onToggleDeaf} disabled={connecting} title={selfDeaf ? 'Включить звук' : 'Выключить звук'}><span><Icon name="headphones"/></span><small>{selfDeaf ? 'Звук выключен' : 'Звук'}</small></button>
-            {!stream && <button className="voice-control" onClick={onOpenStreamSettings} disabled={connectionStatus !== 'connected' || streamStatus !== 'idle'} title="Поделиться экраном"><span><Icon name="monitor"/></span><small>Экран</small></button>}
-            <button className="voice-control voice-control--leave" onClick={onLeave}><span><Icon name="logout"/></span><small>Отключиться</small></button>
-          </div>}
-          {!realtimeOnline && <small className="voice-offline-note">Голос станет доступен после восстановления WebSocket-соединения.</small>}
-        </div>
-      </div>
-
+    <section className="voice-stage-layout" data-voice-state={connectionStatus} data-voice-channel-id={channel.id}><div className="chat-panel voice-room voice-room--active">
+      <header className="voice-stage-status"><span><i className={connectionStatus === 'connected' ? 'connection-dot connection-dot--online' : 'connection-dot'}/>{activeHere ? statusText : channel.name}</span>{recordingLabel && <span className="recording-label"><i className="record-dot is-active"/>Записывает {recordingLabel}</span>}</header>
+      {error && <div className="voice-error" role="alert">{error}</div>}
+      {micUnavailable && onRetryMic && <button className="button button--ghost" onClick={onRetryMic}>Повторить подключение микрофона</button>}
+      {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
+      <div className="voice-stage-content">
       {/* The stream is the main content of the room while it runs. */}
       <StreamPanel stream={stream} currentUserId={currentUserId} publisherName={publisherName} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>
 
       <section className="voice-participants">
-        <header><div><span className="eyebrow">В КОМНАТЕ</span><h3>{participants.length} {participantWord(participants.length)}</h3></div><span className="voice-secure"><i/><span>DTLS-SRTP</span></span></header>
         {participants.length ? <div className="voice-participant-grid">{participants.map((participant) => {
           const member = members.find((item) => item.user_id === participant.user_id)
           const username = member?.username ?? `Пользователь #${participant.user_id}`
@@ -102,22 +90,14 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
           const isMe = participant.user_id === currentUserId
           const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
           return <button className={`voice-participant ${isMe ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)}>
-            <div className="voice-participant__avatar"><Avatar name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
+            <div className="voice-participant__avatar"><Avatar userId={participant.user_id} name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
             <span><b className={`member-name--${role}`}>{username}{isMe && <small>вы</small>}</b><em>{roleMeta[role].shortLabel}</em></span>
             {stream?.publisher_user_id === participant.user_id && <b className="voice-participant__live" title="Показывает экран"><Icon name="monitor" size={11}/>В эфире</b>}
             <div className="voice-participant__state">{participant.self_deaf && <span title="Звук выключен"><Icon name="headphonesOff" size={14}/></span>}{participant.self_mute && <span title="Микрофон выключен"><Icon name="micOff" size={14}/></span>}</div>
           </button>
         })}</div> : <div className="voice-empty"><span><Icon name="people" size={25}/></span><div><b>Здесь пока тихо</b><p>Подключитесь первым — остальные увидят вас в комнате сразу.</p></div></div>}
-      </section>
-    </section>
+      </section></div>
+      <footer className="voice-stage-footer">{activeHere ? controls ?? <div className="voice-controls"><button disabled={connecting} onClick={onToggleMute}>{selfMute ? 'Включить микрофон' : 'Выключить микрофон'}</button><button onClick={onToggleDeaf}>{selfDeaf ? 'Включить звук' : 'Выключить звук'}</button><button onClick={onLeave}>Отключиться</button></div> : <button className="button button--primary" disabled={!realtimeOnline} onClick={() => void onJoin()}><Icon name="volume"/>{activeChannel ? 'Перейти в канал' : 'Подключиться к каналу'}</button>}</footer>
+    </div>{chat}</section>
   )
-}
-
-function participantWord(count: number) {
-  const mod100 = count % 100
-  const mod10 = count % 10
-  if (mod100 >= 11 && mod100 <= 14) return 'участников'
-  if (mod10 === 1) return 'участник'
-  if (mod10 >= 2 && mod10 <= 4) return 'участника'
-  return 'участников'
 }

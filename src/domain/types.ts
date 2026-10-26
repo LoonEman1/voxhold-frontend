@@ -1,5 +1,31 @@
 export type EntityId = number
 
+export interface ChannelRecording {
+  id: string
+  server_id: number
+  channel_id: number
+  owner_user_id: number
+  owner_username: string
+  status: 'recording' | 'uploading' | 'ready' | 'local_only' | 'failed'
+  mime_type: 'video/webm' | 'video/mp4'
+  size_bytes: number
+  duration_ms: number
+  created_at: number
+  updated_at: number
+  expires_at: number
+}
+
+/** Instance-wide server copy budget, managed by the instance owner. */
+export interface RecordingStorage {
+  quota_bytes: number
+  used_bytes: number
+  default_quota_bytes: number
+  min_quota_bytes: number
+  max_quota_bytes: number
+  max_file_bytes: number
+  retention_seconds: number
+}
+
 export interface User {
   id: EntityId
   username: string
@@ -142,6 +168,8 @@ export interface ServerMember {
   about: string
   country_code: string | null
   last_seen_at: number | null
+  /** ETag of the current avatar; null/absent means initials, with no request. */
+  avatar_version?: string | null
 }
 
 export interface ServerMemberChangedEvent {

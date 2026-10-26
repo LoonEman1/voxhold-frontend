@@ -1,10 +1,9 @@
-import { Component, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, Suspense, lazy, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Brand } from './components/Brand'
 import { InviteAppPrompt } from './components/InviteAppPrompt'
 import { ToastProvider } from './components/Toast'
 import { AuthPage } from './pages/AuthPage'
-import { WorkspacePage } from './pages/WorkspacePage'
 import { browserSessionStorage, createFetchTransport } from './platform/transport'
 import { createApi } from './services/api'
 import { ThemeProvider } from './theme/ThemeContext'
@@ -14,6 +13,7 @@ import { createNativeInviteURL } from './lib/inviteLinks'
 import { clientDiagnostics } from './platform/clientDiagnostics'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+const WorkspacePage = lazy(() => import('./pages/WorkspacePage').then((module) => ({ default: module.WorkspacePage })))
 clientDiagnostics.configure(API_BASE_URL)
 
 function inviteTokenFromLocation() {
@@ -102,7 +102,7 @@ export default function App() {
       <ThemeProvider>
         <ToastProvider>
           <AuthProvider api={api} storage={browserSessionStorage}>
-            <AppRouter api={api}/>
+            <Suspense fallback={<div className="app-loader" role="status"><Brand/><span>Загружаем рабочее пространство…</span><div className="loader-line"><i/></div></div>}><AppRouter api={api}/></Suspense>
           </AuthProvider>
         </ToastProvider>
       </ThemeProvider>

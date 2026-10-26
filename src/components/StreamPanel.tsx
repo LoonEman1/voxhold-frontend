@@ -84,7 +84,7 @@ export function StreamPanel({ stream, currentUserId, publisherName, voiceActive,
       <div className="stream-badges"><span className="stream-mode">{stream?.codec?.toUpperCase() ?? preferences.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream?.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></div>
     </header>
 
-    {media && <div className="stream-video" onDoubleClick={onFullscreen ?? onExpand}>
+    {media && <div className="stream-video" onClick={(event) => { if (event.target === videoRef.current) onExpand() }} onDoubleClick={onFullscreen ?? onExpand}>
       <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0} controls={false}/>
       <span>{liveLabel}</span>
       {!isPublisher && playbackState === 'audio_blocked' && (

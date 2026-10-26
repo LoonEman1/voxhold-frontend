@@ -37,8 +37,8 @@ describe('channelHasUnreadMessages', () => {
     expect(channelHasUnreadMessages(channel)).toBe(true)
   })
 
-  it('does not mark voice channels or legacy channel events as unread', () => {
-    expect(channelHasUnreadMessages({ ...channel, kind: 'voice' }, read)).toBe(false)
+  it('marks voice-channel chat as unread but ignores legacy events without a cursor', () => {
+    expect(channelHasUnreadMessages({ ...channel, kind: 'voice' }, read)).toBe(true)
     expect(channelHasUnreadMessages({ ...channel, last_message_id: undefined }, read)).toBe(false)
   })
 })

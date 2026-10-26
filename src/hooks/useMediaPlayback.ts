@@ -45,18 +45,38 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
       return
     }
     video.srcObject = media
+    const startedAt = performance.now()
+    let firstFrameMs: number | null = null
+    let stalledAt: number | null = null
+    let stallCount = 0
+    let stallMs = 0
+    let frameCallback: number | null = null
+    const firstFrame = () => {
+      if (firstFrameMs !== null) return
+      firstFrameMs = Math.round(performance.now() - startedAt)
+      clientDiagnostics.record('media', 'stream_first_frame', 'info', { ...contextRef.current, role: options.role, first_frame_ms: firstFrameMs })
+    }
+    const loadedData = () => { if (typeof video.requestVideoFrameCallback !== 'function') firstFrame() }
+    if (typeof video.requestVideoFrameCallback === 'function') frameCallback = video.requestVideoFrameCallback(firstFrame)
+    const resetHiddenStall = () => { if (document.visibilityState !== 'visible') stalledAt = null }
+    document.addEventListener('visibilitychange', resetHiddenStall)
 
     const tracks = (typeof media.getVideoTracks === 'function' ? media.getVideoTracks() : []) as MediaStreamTrack[]
 
     const markPlaying = () => {
+      if (stalledAt !== null) { stallMs += performance.now() - stalledAt; stalledAt = null }
       if (stateRef.current !== 'failed') setState('playing')
     }
     const markStalled = () => {
-      if (video.readyState < 3) setState('stalled')
+      if (video.readyState < 3) {
+        setState('stalled')
+        if (firstFrameMs !== null && stalledAt === null && document.visibilityState === 'visible') { stalledAt = performance.now(); stallCount += 1 }
+      }
     }
     const onTrackEnded = () => setState('stalled')
     const markFailed = () => setState('failed')
     video.addEventListener('loadedmetadata', markPlaying)
+    video.addEventListener('loadeddata', loadedData)
     video.addEventListener('canplay', markPlaying)
     video.addEventListener('playing', markPlaying)
     video.addEventListener('waiting', markStalled)
@@ -65,6 +85,11 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
     for (const track of tracks) track.addEventListener('ended', onTrackEnded)
 
     return () => {
+      if (stalledAt !== null) stallMs += performance.now() - stalledAt
+      clientDiagnostics.record('media', 'stream_playback_summary', 'info', { ...contextRef.current, role: options.role, duration_ms: Math.round(performance.now() - startedAt), first_frame_ms: firstFrameMs, stall_count: stallCount, stall_ms: Math.round(stallMs) })
+      document.removeEventListener('visibilitychange', resetHiddenStall)
+      if (frameCallback !== null) video.cancelVideoFrameCallback?.(frameCallback)
+      video.removeEventListener('loadeddata', loadedData)
       video.removeEventListener('loadedmetadata', markPlaying)
       video.removeEventListener('canplay', markPlaying)
       video.removeEventListener('playing', markPlaying)
@@ -74,7 +99,7 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
       for (const track of tracks) track.removeEventListener('ended', onTrackEnded)
       if (video.srcObject === media) video.srcObject = null
     }
-  }, [media])
+  }, [media, options.role])
 
   // Attempt playback whenever media or mute intent changes.
   useEffect(() => {

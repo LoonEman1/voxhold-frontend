@@ -47,7 +47,7 @@ docker compose -f compose.fullstack.yaml down
 
 ## Локальная разработка
 
-Нужен Node.js 22+ и запущенный backend:
+Нужен Node.js 24 и запущенный backend:
 
 ```bash
 npm ci
@@ -104,3 +104,9 @@ Screen sharing is available inside an active voice channel. It supports
 server-forwarded and P2P modes, 720p/1080p/1440p, 30/60 FPS, video rates up to
 12 Mbit/s, and separate system-audio rates up to 320 Kbit/s. Server mode also
 requires UDP `${WEBRTC_STREAM_UDP_PORT:-50001}` to be reachable.
+
+## Производительность клиента
+
+Оптимизации чата, AudioWorklet, обработки видео и метрик качества описаны в [docs/client-performance.md](docs/client-performance.md). Изолированные браузерные проверки запускаются командой `npm run test:e2e:performance` и не требуют backend.
+
+Запись и повторное скачивание, локальные и серверные копии, аватары и интерфейс звонка: [подробное описание](docs/calls-recordings.md).

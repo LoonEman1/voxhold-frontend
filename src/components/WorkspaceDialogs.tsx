@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { Channel, ChannelKind, CreatedInviteLink, IncomingInvite, Profile, Server, ServerRole } from '../domain/types'
+import type { Channel, ChannelKind, CreatedInviteLink, IncomingInvite, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
 import { countryByCode } from '../lib/countries'
 import { formatDate, humanError } from '../lib/format'
 import { createWebInviteURL } from '../lib/inviteLinks'
@@ -180,7 +180,7 @@ export function InvitesDialog({ open, onClose, invites, onRespond }: AsyncDialog
   )
 }
 
-export function ProfileDialog({ open, onClose, profile, onSubmit }: AsyncDialogProps & { profile: Profile | null; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar }: AsyncDialogProps & { profile: Profile | null; onAvatar?: (file: File | null) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const [about, setAbout] = useState('')
   const [country, setCountry] = useState('')
   const [error, setError] = useState('')
@@ -192,7 +192,8 @@ export function ProfileDialog({ open, onClose, profile, onSubmit }: AsyncDialogP
   }
   return (
     <Modal open={open} onClose={onClose} title="Ваш профиль" eyebrow="КАК ВАС ВИДЯТ ДРУГИЕ" size="medium">
-      <div className="profile-hero"><Avatar name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></div>
+      <div className="profile-hero"><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></div>
+      {onAvatar && <div className="avatar-editor"><label className="button button--secondary">Загрузить аватар<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" disabled={pending} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; if (file.size > 5 * 1024 * 1024) { setError('Максимальный размер аватара — 5 МБ'); return } setPending(true); setError(''); void onAvatar(file).catch((caught) => setError(humanError(caught))).finally(() => setPending(false)) }}/></label><button className="button button--ghost" disabled={pending} onClick={() => { setPending(true); setError(''); void onAvatar(null).catch((caught) => setError(humanError(caught))).finally(() => setPending(false)) }}>Удалить</button><small>Квадратное кадрирование · 256×256 · JPEG, PNG, WebP, GIF до 5 МБ</small></div>}
       <form className="dialog-form" onSubmit={submit}>
         <label><span>О себе <small>{about.length}/512</small></span><textarea value={about} onChange={(e) => setAbout(e.target.value)} maxLength={512} rows={4} placeholder="Пара слов о себе, интересах или текущем проекте…" /></label>
         <label><span>Страна проживания</span><CountrySelect value={country} onChange={setCountry} /></label>
@@ -223,7 +224,7 @@ export function MemberProfileDialog({ open, onClose, profile, role, loading, err
     <Modal open={open} onClose={onClose} title="Профиль участника" eyebrow="ВИЗИТНАЯ КАРТОЧКА" size="medium">
       {loading ? <div className="profile-view-loading"><span className="spinner"/><p>Загружаем профиль…</p></div> : error ? <div className="profile-view-error"><Icon name="close"/><p>{error}</p></div> : profile && <div className="member-profile-card">
         <div className="member-profile-cover"><i/><i/><i/></div>
-        <div className="member-profile-avatar-slot" aria-label="Место для будущей фотографии профиля"><Avatar name={profile.username} size="large"/></div>
+        <div className="member-profile-avatar-slot" aria-label="Фотография профиля"><Avatar userId={profile.user_id} name={profile.username} size="large"/></div>
         <div className="member-profile-head"><div><h3>{profile.username}</h3><span>@{profile.username}</span></div><span className={`role-badge role-badge--${role}`}>{roleMeta[role].label}</span></div>
         <dl className="profile-facts">
           <div><dt>В Voxhold с</dt><dd>{formatDate(profile.created_at)}</dd></div>
@@ -277,7 +278,12 @@ interface ServerSettingsDialogProps extends AsyncDialogProps {
   onDeleteAccount(): Promise<void>
   onDownloadDiagnostics(): Promise<void>
   onSaveCorsOrigins(origins: string[]): Promise<string[]>
+  recordingStorage?: RecordingStorage | null
+  onSaveRecordingQuota?(quotaBytes: number): Promise<void>
 }
+
+const GIB = 2 ** 30
+const gib = (bytes: number) => (bytes / GIB).toLocaleString('ru-RU', { maximumFractionDigits: 1 })
 
 export function ServerSettingsDialog({
   open,
@@ -289,9 +295,16 @@ export function ServerSettingsDialog({
   onDeleteAccount,
   onDownloadDiagnostics,
   onSaveCorsOrigins,
+  recordingStorage = null,
+  onSaveRecordingQuota,
 }: ServerSettingsDialogProps) {
   const [name, setName] = useState('')
   const [corsValue, setCorsValue] = useState('')
+  const [quotaValue, setQuotaValue] = useState('')
+  const [quotaPending, setQuotaPending] = useState(false)
+  useEffect(() => {
+    if (open && recordingStorage) setQuotaValue(String(Math.round(recordingStorage.quota_bytes / GIB)))
+  }, [open, recordingStorage])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [diagnosticsPending, setDiagnosticsPending] = useState(false)
@@ -333,10 +346,20 @@ export function ServerSettingsDialog({
       setCorsPending(false)
     }
   }
+  const saveRecordingQuota = async (event: FormEvent) => {
+    event.preventDefault()
+    if (quotaPending || !recordingStorage || !onSaveRecordingQuota) return
+    const value = Number(quotaValue)
+    const min = recordingStorage.min_quota_bytes / GIB, max = recordingStorage.max_quota_bytes / GIB
+    if (!Number.isInteger(value) || value < min || value > max) { setError(`Лимит записей — целое число от ${min} до ${max} ГБ`); return }
+    setQuotaPending(true); setError('')
+    try { await onSaveRecordingQuota(value * GIB) } catch (caught) { setError(humanError(caught)) } finally { setQuotaPending(false) }
+  }
   return (
     <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
       {owner && <form className="dialog-form settings-section" onSubmit={rename}><div><h3>Название</h3><p>Его увидят все участники пространства.</p></div><label><span>Название сервера</span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required /></label><button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button></form>}
       {owner && <form className="dialog-form settings-section" onSubmit={saveCorsOrigins}><div><h3>Доступ внешних клиентов</h3><p>Разрешите браузерным клиентам на других доменах обращаться к API и WebSocket этого инстанса.</p></div><label><span>Разрешённые origin</span><textarea rows={5} value={corsValue} onChange={(event) => setCorsValue(event.target.value)} disabled={corsOriginsLoading || corsPending} placeholder={corsOriginsLoading ? 'Загрузка…' : 'https://client.example.com\nhttp://localhost:5173'} spellCheck={false}/></label><small className="field-hint">По одному точному origin на строку: схема, домен и необязательный порт. Без пути и wildcard.</small><button className="button button--secondary align-self-end" disabled={corsOriginsLoading || corsPending}>{corsPending ? <span className="spinner"/> : 'Сохранить CORS'}</button></form>}
+      {owner && onSaveRecordingQuota && <form className="dialog-form settings-section" onSubmit={saveRecordingQuota}><div><h3>Хранилище записей</h3><p>Сколько места на сервере можно занять копиями записей звонков. Копия хранится 24 часа; файл больше 2 ГБ или сверх лимита остаётся только у записавшего.</p></div><label><span>Лимит, ГБ</span><input type="number" inputMode="numeric" step={1} min={recordingStorage ? recordingStorage.min_quota_bytes / GIB : 1} max={recordingStorage ? recordingStorage.max_quota_bytes / GIB : undefined} value={quotaValue} onChange={(event) => setQuotaValue(event.target.value)} disabled={!recordingStorage || quotaPending} placeholder={recordingStorage ? undefined : 'Загрузка…'}/></label><small className="field-hint">{recordingStorage ? `Занято ${gib(recordingStorage.used_bytes)} из ${gib(recordingStorage.quota_bytes)} ГБ · по умолчанию ${gib(recordingStorage.default_quota_bytes)} ГБ. Уменьшение не удаляет уже сохранённые копии — они исчезнут по истечении 24 часов.` : 'Загружаем текущий лимит…'}</small><button className="button button--secondary align-self-end" disabled={!recordingStorage || quotaPending}>{quotaPending ? <span className="spinner"/> : 'Сохранить лимит'}</button></form>}
       {owner && <div className="dialog-form settings-section"><div><h3>Диагностика клиентов</h3><p>HTTP, WebSocket и WebRTC-метрики автоматически хранятся на сервере 24 часа. Секреты, сообщения, SDP и ICE-адреса удаляются.</p></div><button className="button button--secondary align-self-end" type="button" disabled={diagnosticsPending} onClick={() => void downloadDiagnostics()}>{diagnosticsPending ? <span className="spinner"/> : 'Скачать JSON'}</button></div>}
       {!owner && <div className="danger-zone"><div><h3>Удалить аккаунт</h3><p>Профиль, настройки и доступ к этому инстансу будут удалены. Старые сообщения останутся обезличенными.</p></div>{confirming ? <div className="danger-confirm"><span>Удалить аккаунт без возможности восстановления?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить аккаунт'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить аккаунт</button>}</div>}
       {owner && <div className="instance-notice"><Icon name="lock"/><div><b>Владелец инстанса</b><p>Владелец не может удалить пространство или свой аккаунт из приложения.</p></div></div>}

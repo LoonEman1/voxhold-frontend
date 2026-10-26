@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
+import { AvatarProvider } from '../components/AvatarProvider'
+import { CallControls } from '../components/CallControls'
+import { RecordingsDialog } from '../components/RecordingsDialog'
+import { useCallRecordings } from '../hooks/useCallRecordings'
 import { Avatar } from '../components/Avatar'
 import { Brand } from '../components/Brand'
 import { ChatPanel } from '../components/ChatPanel'
@@ -22,7 +26,7 @@ import {
   ProfileDialog,
   ServerSettingsDialog,
 } from '../components/WorkspaceDialogs'
-import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
+import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, RecordingStorage, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
@@ -66,6 +70,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
   const [corsOrigins, setCorsOrigins] = useState<string[]>([])
   const [corsOriginsLoading, setCorsOriginsLoading] = useState(false)
+  const [recordingStorage, setRecordingStorage] = useState<RecordingStorage | null>(null)
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
@@ -100,7 +105,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [voicePreferences, setVoicePreferences] = useState(loadVoicePreferences)
   const [voiceDevices, setVoiceDevices] = useState<MediaDeviceInfo[]>([])
   const [voiceDevicesLoading, setVoiceDevicesLoading] = useState(false)
-  const [voiceInputLevel, setVoiceInputLevel] = useState(0)
   const [speakingUserIds, setSpeakingUserIds] = useState<number[]>([])
   const [streams, setStreams] = useState<Record<number, ActiveStream>>({})
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
@@ -113,6 +117,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   // The expanded player opens straight in fullscreen cinema mode.
   const [streamCinema, setStreamCinema] = useState(false)
   const [streamAudioMuted, setStreamAudioMuted] = useState(false)
+  const [voiceChatOpen, setVoiceChatOpen] = useState(false)
+  const [recordingsOpen, setRecordingsOpen] = useState(false)
+  const pendingWatch = useRef<number | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null)
   const [viewedProfile, setViewedProfile] = useState<Profile | null>(null)
@@ -125,6 +132,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const realtimeRef = useRef<RealtimeClient | null>(null)
   const voiceMediaRef = useRef<BrowserVoiceSession | null>(null)
   const voiceSessionRef = useRef<ActiveVoiceSession | null>(voiceSession)
+  const recording = useCallRecordings({ api, token, scope: `${realtimeBaseUrl || window.location.origin}:${user?.id ?? 0}`, serverId: selectedServerId, voice: voiceSession, voiceMedia: voiceMediaRef, stream: streamMedia, notify, mediaVersion: voiceStatus })
+  const recordingMerge = recording.merge
+  const recordingSyncRef = useRef(recording.retry); recordingSyncRef.current = recording.retry
   const voicePreferencesRef = useRef(voicePreferences)
   const pushToTalkHeldRef = useRef(false)
   const voiceRequestIdsRef = useRef(new Map<string, 'join' | 'state' | 'media' | 'leave'>())
@@ -149,6 +159,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const speakingStatesRef = useRef(new Map<string, boolean>())
   const speakingUserIdsRef = useRef<number[]>([])
   const voiceInputLevelRef = useRef(0)
+  const getVoiceInputLevel = useCallback(() => voiceInputLevelRef.current, [])
   const viewedProfileRef = useRef<Profile | null>(viewedProfile)
   const pendingReadMarksRef = useRef(new Map<number, { serverId: number; messageId: number; timer: number }>())
   const activeChannelRef = useRef<number | null>(selectedChannelId)
@@ -232,10 +243,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   hasNewerRef.current = hasNewer
   messageTargetRef.current = messageTarget
 
+  const chatVisible = voiceChatOpen || channels.some((channel) => channel.id === selectedChannelId && channel.kind === 'text')
   syncLatestRef.current = () => {
     const serverId = activeServerRef.current
     const channelId = activeChannelRef.current
-    if (!token || !serverId || !channelId || hasNewerRef.current || messageTargetRef.current) return
+    if (!chatVisible || !token || !serverId || !channelId || hasNewerRef.current || messageTargetRef.current) return
     void api.messages.list(token, serverId, channelId).then((page) => {
       if (activeServerRef.current !== serverId || activeChannelRef.current !== channelId || messageTargetRef.current) return
       setMessages((current) => {
@@ -251,7 +263,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   syncPinsRef.current = () => {
     const serverId = activeServerRef.current
     const channelId = activeChannelRef.current
-    if (!token || !serverId || !channelId) return
+    if (!chatVisible || !token || !serverId || !channelId) return
     void api.messages.pins(token, serverId, channelId).then((pins) => {
       if (activeServerRef.current === serverId && activeChannelRef.current === channelId) setPinnedMessages(pins)
     }).catch(() => undefined)
@@ -260,6 +272,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const selectedServer = servers.find((server) => server.id === selectedServerId) ?? null
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId) ?? null
   const canManage = selectedServer?.role === 'owner' || selectedServer?.role === 'admin'
+  // Avatars are requested only for members whose list entry names a version.
+  const avatarVersions = useMemo(() => new Map(members.flatMap((member) => member.avatar_version ? [[member.user_id, member.avatar_version] as const] : [])), [members])
+  const setMemberAvatar = useCallback((userId: number, version: string | null) => {
+    setMembers((current) => current.map((member) => member.user_id === userId ? { ...member, avatar_version: version } : member))
+  }, [])
   const pinnedMessageIds = useMemo(() => new Set(pinnedMessages.map((pin) => pin.message.id)), [pinnedMessages])
 
   const handleError = useCallback((error: unknown, fallback = 'Не удалось выполнить действие') => {
@@ -497,7 +514,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceMediaRef.current = null
     media?.close()
     pushToTalkHeldRef.current = false
-    setVoiceInputLevel(0)
     voiceInputLevelRef.current = 0
     speakingStatesRef.current.clear()
     recomputeSpeakingUsers()
@@ -535,7 +551,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       input = new BrowserVoiceInput({
         onLevel: (level) => {
           voiceInputLevelRef.current = level
-          setVoiceInputLevel(level)
           recomputeSpeakingUsers()
         },
         onUnavailable: () => {
@@ -650,7 +665,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           setNextBeforeId(null)
           setHasMore(false)
           setHasNewer(false)
-          setMessagesLoading(nextChannel?.kind === 'text')
+          setMessagesLoading(!!nextChannel)
         }
         setSelectedChannelId(nextChannelId)
       } catch (error) {
@@ -662,7 +677,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [api, token, selectedServerId, handleError])
 
   useEffect(() => {
-    if (!token || !selectedServerId || !selectedChannelId || selectedChannel?.kind !== 'text') {
+    if (!token || !selectedServerId || !selectedChannelId || !chatVisible) {
       setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false)
       setMessagesLoading(false)
       return
@@ -700,10 +715,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       })
       .finally(() => { if (!controller.signal.aborted) setMessagesLoading(false) })
     return () => controller.abort()
-  }, [api, token, selectedServerId, selectedChannelId, selectedChannel?.kind, messageTarget, handleError])
+  }, [api, token, selectedServerId, selectedChannelId, chatVisible, messageTarget, handleError])
 
   useEffect(() => {
-    if (!token || !selectedServerId || !selectedChannelId || selectedChannel?.kind !== 'text') {
+    if (!token || !selectedServerId || !selectedChannelId || !chatVisible) {
       setPinnedMessages([])
       return
     }
@@ -716,7 +731,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       })
       .finally(() => { if (!controller.signal.aborted) setPinsLoading(false) })
     return () => controller.abort()
-  }, [api, token, selectedServerId, selectedChannelId, selectedChannel?.kind, handleError])
+  }, [api, token, selectedServerId, selectedChannelId, chatVisible, handleError])
 
   useEffect(() => {
     if (!token) return
@@ -736,7 +751,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setMediaRecovering(false)
         expire()
       },
+      onRecordingUpdated: recordingMerge,
+      onAvatarUpdated: ({ user_id, version }) => setMemberAvatar(user_id, version ?? null),
       onReady: () => {
+        recordingSyncRef.current()
         syncLatestRef.current(); syncPinsRef.current()
         // Allow the next media start to fetch fresh runtime ICE values.
         webrtcConfigPromiseRef.current = null
@@ -877,7 +895,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         })
         if (activeChannelRef.current === event.channel_id) {
           const nextChannel = remaining.find((channel) => channel.kind === 'text') ?? remaining[0] ?? null
-          setMessages([]); setPinnedMessages([]); setHasMore(false); setHasNewer(false); setFocusedMessageId(null); setMessagesLoading(nextChannel?.kind === 'text'); setSelectedChannelId(nextChannel?.id ?? null)
+          setMessages([]); setPinnedMessages([]); setHasMore(false); setHasNewer(false); setFocusedMessageId(null); setMessagesLoading(!!nextChannel); setSelectedChannelId(nextChannel?.id ?? null)
         }
       },
       onReadSnapshot: (snapshot) => snapshot.reads.forEach(applyChannelRead),
@@ -1076,12 +1094,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     realtimeRef.current = client
     client.connect()
     return () => { client.close(); realtimeRef.current = null }
-  }, [token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
+  }, [recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
 
   useEffect(() => {
-    if (selectedServerId && selectedChannelId && selectedChannel?.kind === 'text') realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
+    if (selectedServerId && selectedChannelId && chatVisible) realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
     else realtimeRef.current?.unsubscribe()
-  }, [selectedServerId, selectedChannelId, selectedChannel?.kind])
+  }, [selectedServerId, selectedChannelId, chatVisible])
 
   const selectChannel = (id: number) => {
     if (id === selectedChannelId) {
@@ -1090,7 +1108,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       return
     }
     const channel = channels.find((item) => item.id === id)
-    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(channel?.kind === 'text'); setSelectedChannelId(id); setMessageTarget(null); setFocusedMessageId(null); setMessagePanel(null); setMobileNav(false)
+    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(!!channel); setSelectedChannelId(id); setMessageTarget(null); setFocusedMessageId(null); setMessagePanel(null); setMobileNav(false)
   }
 
   const joinVoiceChannel = async (channel: Channel) => {
@@ -1163,7 +1181,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onError: fail,
       onInputLevel: (level) => {
         voiceInputLevelRef.current = level
-        setVoiceInputLevel(level)
         recomputeSpeakingUsers()
       },
       onRemoteLevels: applyRemoteLevels,
@@ -1676,7 +1693,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceSessionRef.current = updated
     setVoiceSession(updated)
     voiceMediaRef.current?.setState(selfMute, selfDeaf)
-    voiceMediaRef.current?.resumeAudio()
+    if (active.selfDeaf && !selfDeaf) voiceMediaRef.current?.resumeAudio()
     if (!trackVoiceRequest(realtimeRef.current?.updateVoiceState(selfMute, selfDeaf) ?? null, 'state')) {
       setVoiceError('Realtime-соединение недоступно')
       closeVoiceLocally()
@@ -1777,7 +1794,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   const openMessage = (channelId: number, messageId: number) => {
     const channel = channels.find((item) => item.id === channelId)
-    if (!channel || channel.kind !== 'text') {
+    if (!channel) {
       notify('Канал для этого сообщения недоступен', 'error')
       return
     }
@@ -1786,6 +1803,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setHasMore(false)
     setHasNewer(false)
     setMessagesLoading(true)
+    if (channel.kind === 'voice') setVoiceChatOpen(true)
     setMessageTarget({ channelId, messageId })
     setFocusedMessageId(messageId)
     setSelectedChannelId(channelId)
@@ -1796,7 +1814,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const createChannel = async (name: string, kind: ChannelKind) => {
     if (!token || !selectedServerId) return
     const created = await api.channels.create(token, selectedServerId, name, kind)
-    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(kind === 'text');     setChannels((current) => {
+    setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(true);     setChannels((current) => {
       const nextChannel = { ...created, last_message_id: created.last_message_id ?? current.find((item) => item.id === created.id)?.last_message_id ?? 0 }
       const next = [...current.filter((item) => item.id !== created.id), nextChannel]
         .sort((left, right) => left.position - right.position || left.id - right.id)
@@ -1820,6 +1838,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       .then((payload) => setCorsOrigins(payload.origins))
       .catch((error: unknown) => handleError(error, 'Не удалось загрузить CORS-настройки'))
       .finally(() => setCorsOriginsLoading(false))
+    setRecordingStorage(null)
+    void api.recordings.storage(token)
+      .then(setRecordingStorage)
+      .catch((error: unknown) => handleError(error, 'Не удалось загрузить лимит записей'))
+  }
+
+  const saveRecordingQuota = async (quotaBytes: number) => {
+    if (!token || selectedServer?.role !== 'owner') throw new Error('Настройки доступны только владельцу')
+    const storage = await api.recordings.setQuota(token, quotaBytes)
+    setRecordingStorage(storage)
+    notify('Лимит записей сохранён', 'success')
   }
 
   const saveCorsOrigins = async (origins: string[]) => {
@@ -1862,7 +1891,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setChannels(remaining)
     if (activeChannelRef.current === channel.id) {
       const nextChannel = remaining[0] ?? null
-      setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(nextChannel?.kind === 'text'); setSelectedChannelId(nextChannel?.id ?? null)
+      setMessages([]); setPinnedMessages([]); setNextBeforeId(null); setHasMore(false); setHasNewer(false); setMessagesLoading(!!nextChannel); setSelectedChannelId(nextChannel?.id ?? null)
     }
     notify('Канал удалён', 'success')
   }
@@ -2085,7 +2114,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setLoadingOlder(true)
     try {
       const page = await api.messages.list(token, selectedServerId, selectedChannelId, nextBeforeId)
-      setMessages((current) => [...page.messages.filter((older) => !current.some((item) => item.id === older.id)), ...current])
+      setMessages((current) => {
+        const known = new Set(current.map((message) => message.id))
+        return [...page.messages.filter((older) => !known.has(older.id)), ...current]
+      })
       setNextBeforeId(page.pagination.next_before_id); setHasMore(page.pagination.has_more)
     } catch (error) { handleError(error) } finally { setLoadingOlder(false) }
   }
@@ -2145,6 +2177,26 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     : [], [selectedChannel, voiceParticipantList])
   const activeVoiceChannel = voiceSession ? { id: voiceSession.channelId, name: voiceSession.channelName } : null
   const activeVoiceStream = voiceSession ? (streams[voiceSession.channelId] ?? null) : null
+  useEffect(() => {
+    if (!pendingWatch.current || voiceStatus !== 'connected' || voiceSession?.channelId !== pendingWatch.current) return
+    pendingWatch.current = null
+    void watchStream()
+    // The intent is consumed exactly when the requested voice session connects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceStatus, voiceSession?.channelId])
+  const openPublisherStream = (channel: Channel) => {
+    selectChannel(channel.id)
+    if (voiceSession?.channelId === channel.id && voiceStatus === 'connected') { if (!streamRole) void watchStream(); return }
+    pendingWatch.current = channel.id
+    // A rejected join must not auto-watch on some later connection to this room.
+    void joinVoiceChannel(channel).finally(() => { if (voiceSessionRef.current?.channelId !== channel.id) pendingWatch.current = null })
+  }
+  const callControls = voiceSession && <CallControls connecting={voiceStatus !== 'connected'} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} recording={!!recording.activeId} recordBusy={recording.busy} canRecord={!!recording.activeId || (voiceStatus === 'connected' && !recording.records.some((item) => item.channel_id === voiceSession.channelId && item.status === 'recording'))} canShare={voiceStatus === 'connected' && !activeVoiceStream && !streamRole} chatOpen={voiceChatOpen} onMute={toggleSelfMute} onDeaf={toggleSelfDeaf} onRecord={() => { if (recording.activeId) void recording.stop(); else void recording.start() }} onRecordings={() => setRecordingsOpen(true)} onChat={() => {
+    // From another channel or the expanded player the button opens the room chat; in the room it toggles.
+    const inRoom = !streamExpanded && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId
+    openActiveVoiceChannel(); setStreamExpanded(false); setVoiceChatOpen((value) => inRoom ? !value : true)
+  }} onShare={() => openStreamSettings(voiceSession.channelId)} onLeave={leaveVoiceChannel}/>
+  const channelChat = <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
   const streamChannelIsOpen = !!voiceSession && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId && selectedChannel?.kind === 'voice'
   const canChangeViewedRole = !!selectedServer && selectedServer.role === 'owner' && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner'
   const canBanViewedMember = !!selectedServer && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner' && (selectedServer.role === 'owner' || (selectedServer.role === 'admin' && viewedProfileRole === 'member'))
@@ -2152,7 +2204,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   if (initialLoading) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div><span>Собираем ваши комнаты…</span></div>
 
   return (
-    <main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()}>
+    <AvatarProvider api={api} token={token ?? ''} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()}>
       <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
           <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={openServerSettings} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
@@ -2161,12 +2213,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
               {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onContextMenu={(event) => openChannelMenu(event, channel)}/>)}
             </ChannelGroup>
             <ChannelGroup title="Голосовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
-              {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} livePublisherId={streams[channel.id]?.publisher_user_id ?? null} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} speakingUserIds={speakingUserIds} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} onContextMenu={(event) => openChannelMenu(event, channel)} onParticipantContextMenu={(event, participant, member) => openMemberMenu(event, member ?? { user_id: participant.user_id, username: `Пользователь #${participant.user_id}`, role: 'member' } as ServerMember, { volume: true })}/>)}
+              {channels.filter((channel) => channel.kind === 'voice').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} canManage={!!canManage} canShare={voiceSession?.serverId === channel.server_id && voiceSession.channelId === channel.id && voiceStatus === 'connected' && !streams[channel.id] && !streamRole} participants={voiceParticipantList.filter((participant) => participant.server_id === channel.server_id && participant.channel_id === channel.id)} livePublisherId={streams[channel.id]?.publisher_user_id ?? null} members={members} currentVoiceConnectionId={voiceSession?.connectionId ?? null} speakingUserIds={speakingUserIds} recording={recording.records.some((item) => item.channel_id === channel.id && item.status === 'recording')} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} onWatch={() => openPublisherStream(channel)} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onShare={() => openStreamSettings(channel.id)} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} onContextMenu={(event) => openChannelMenu(event, channel)} onParticipantContextMenu={(event, participant, member) => openMemberMenu(event, member ?? { user_id: participant.user_id, username: `Пользователь #${participant.user_id}`, role: 'member' } as ServerMember, { volume: true })}/>)}
             </ChannelGroup>
             {channels.length === 0 && <button className="sidebar-empty" onClick={() => canManage && setDialog('channel')}><span><Icon name="add"/></span><b>Создайте первый канал</b><small>Начните с общего чата</small></button>}
           </div>
-          {voiceSession && <VoiceDock channelName={voiceSession.channelName} status={voiceStatus} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} onOpen={openActiveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onLeave={leaveVoiceChannel}/>} 
-          <div className="user-dock"><button className="user-dock__profile" onClick={() => setDialog('profile')}><Avatar name={user?.username ?? 'V'} online/><span><b>{user?.username}</b><small><i className={`connection-dot connection-dot--${connection}`}/>{connection === 'online' ? 'В сети' : connection === 'connecting' ? 'Подключение' : 'Не в сети'}</small></span></button><button className="icon-button" onClick={() => setDialog('profile')} title="Настройки профиля" aria-label="Настройки профиля"><Icon name="people"/></button><button className="icon-button" onClick={openVoiceSettings} title="Настройки голоса" aria-label="Настройки голоса"><Icon name="settings"/></button><button className="icon-button" onClick={() => setDialog('logout')} title="Выйти" aria-label="Выйти"><Icon name="logout"/></button></div>
+          {voiceSession && <VoiceDock channelName={voiceSession.channelName} status={voiceStatus} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} onOpen={openActiveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onLeave={leaveVoiceChannel}/>}
+          <div className="user-dock"><button className="user-dock__profile" onClick={() => setDialog('profile')}><Avatar userId={user?.id} name={user?.username ?? 'V'} online/><span><b>{user?.username}</b><small><i className={`connection-dot connection-dot--${connection}`}/>{connection === 'online' ? 'В сети' : connection === 'connecting' ? 'Подключение' : 'Не в сети'}</small></span></button><button className="icon-button" onClick={() => setDialog('profile')} title="Настройки профиля" aria-label="Настройки профиля"><Icon name="people"/></button><button className="icon-button" onClick={openVoiceSettings} title="Настройки голоса" aria-label="Настройки голоса"><Icon name="settings"/></button><button className="icon-button" onClick={() => setDialog('logout')} title="Выйти" aria-label="Выйти"><Icon name="logout"/></button></div>
         </> : <div className="sidebar-no-server"><Brand/><p>У вас нет доступа к этому пространству.</p></div>}
         <div className="workspace-resizer workspace-resizer--channels" role="separator" aria-label="Изменить ширину списка каналов" aria-orientation="vertical" tabIndex={0} onPointerDown={(event) => workspaceLayout.beginResize('channels', event)} onKeyDown={(event) => workspaceLayout.handleResizeKey('channels', event)} onDoubleClick={() => workspaceLayout.resetPanel('channels')}/>
       </aside>
@@ -2178,17 +2230,19 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           <div className="content-header__actions">
             {selectedServer && <button className={`header-action header-action--inbox ${invites.length ? 'has-badge' : ''}`} onClick={() => setDialog('invites')} title="Входящие приглашения"><Icon name="inbox"/><span>Приглашения</span>{invites.length > 0 && <b>{invites.length}</b>}</button>}
             {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
-            {selectedChannel?.kind === 'text' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
+            {selectedChannel?.kind === 'voice' && <button className="icon-button" onClick={() => setVoiceChatOpen((value) => !value)} title="Чат канала" aria-label="Чат канала" aria-pressed={voiceChatOpen}><Icon name="message"/></button>}
+            {selectedChannel && <button className="icon-button" onClick={() => setRecordingsOpen(true)} title="Скачать записи" aria-label="Скачать записи"><Icon name="inbox"/></button>}
+            {chatVisible && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
             <button className="header-action theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/><span>{theme === 'dark' ? 'Светлая' : 'Тёмная'}</span></button>
             {selectedServer && canManage && <button className="header-action" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
             <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
           </div>
         </header>
 
-        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={() => void watchStream()} onLeaveStream={leaveStream} onExpandStream={() => { setStreamCinema(false); setStreamExpanded(true) }} onFullscreenStream={() => { setStreamCinema(true); setStreamExpanded(true) }} streamAudioMuted={streamAudioMuted} onToggleStreamAudio={toggleStreamAudio}/> : <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/> : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
-        {selectedServer && token && <MessageSearchPanel open={messagePanel === 'search'} api={api} token={token} serverId={selectedServer.id} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage}/>} 
-        {selectedChannel?.kind === 'text' && <PinnedMessagesPanel open={messagePanel === 'pins'} pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/>} 
-        {messagePanel && <button className="message-panel-scrim" aria-label="Закрыть панель" onClick={() => setMessagePanel(null)}/>} 
+        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel controls={callControls} recordingLabel={recording.records.find((item) => item.channel_id === selectedChannel.id && item.status === 'recording')?.owner_username} chat={voiceChatOpen ? <aside className="voice-channel-chat"><header><b>Чат канала</b><button className="icon-button" onClick={() => setVoiceChatOpen(false)} aria-label="Закрыть чат"><Icon name="close"/></button></header>{channelChat}</aside> : null} channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={() => void watchStream()} onLeaveStream={leaveStream} onExpandStream={() => { setStreamCinema(false); setStreamExpanded(true) }} onFullscreenStream={() => { setStreamCinema(true); setStreamExpanded(true) }} streamAudioMuted={streamAudioMuted} onToggleStreamAudio={toggleStreamAudio}/> : channelChat : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
+        {selectedServer && token && <MessageSearchPanel open={messagePanel === 'search'} api={api} token={token} serverId={selectedServer.id} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage}/>}
+        {selectedChannel && <PinnedMessagesPanel open={messagePanel === 'pins'} pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/>}
+        {messagePanel && <button className="message-panel-scrim" aria-label="Закрыть панель" onClick={() => setMessagePanel(null)}/>}
       </section>
 
       {selectedServer && workspaceLayout.membersOpen && <aside className="members-sidebar is-open">
@@ -2198,7 +2252,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         <MemberGroup title={`Не в сети — ${offlineMembers.length}`} members={offlineMembers} online={false} onOpenProfile={(member) => void openUserProfile(member.user_id, member.role)} onMemberContextMenu={(event, member) => openMemberMenu(event, member)}/></div>
       </aside>}
 
-      {mobileNav && <button className="mobile-scrim" aria-label="Закрыть меню" onClick={() => setMobileNav(false)}/>} 
+      {mobileNav && <button className="mobile-scrim" aria-label="Закрыть меню" onClick={() => setMobileNav(false)}/>}
 
       {/* Mini and expanded layouts render different <video> elements; the key
           remounts the player so the new element gets srcObject attached. */}
@@ -2213,25 +2267,27 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         preferences={streamPreferences}
         quality={streamQuality}
         onPreferencesChange={updateStreamPreferences}
+        callControls={callControls}
         startInCinema={streamCinema}
         onExpand={() => { setStreamCinema(false); setStreamExpanded(true) }}
         onCollapse={() => { setStreamCinema(false); setStreamExpanded(false) }}
         onLeave={leaveStream}
       />}
 
+      <RecordingsDialog channels={channels} open={recordingsOpen} onClose={() => setRecordingsOpen(false)} records={recording.records} locals={recording.locals} serverId={selectedServerId} progress={recording.progress} voiceActive={!!voiceSession} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry}/>
       <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
       <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} onRename={renameChannel} onRemove={deleteChannel}/>
       <InviteUserDialog open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onSubmit={async (username) => { if (token && selectedServerId) { await api.invites.create(token, selectedServerId, username); notify('Приглашение отправлено', 'success') } }} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <InvitesDialog open={dialog === 'invites'} onClose={() => setDialog(null)} invites={invites} onRespond={respondInvite}/>
-      <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
+      <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} onAvatar={async (file) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
-      <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} inputLevel={voiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>
+      <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>
       <StreamSettingsDialog open={dialog === 'streamSettings'} busy={streamStatus !== 'idle'} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/>
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
       {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)}/>}
       {confirmRequest && <ConfirmDialog open title={confirmRequest.title} description={confirmRequest.description} confirmLabel={confirmRequest.confirmLabel} onClose={() => setConfirmRequest(null)} onConfirm={confirmRequest.action}/>}
-      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} corsOrigins={corsOrigins} corsOriginsLoading={corsOriginsLoading} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics} onSaveCorsOrigins={saveCorsOrigins}/>
-    </main>
+      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} corsOrigins={corsOrigins} corsOriginsLoading={corsOriginsLoading} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics} onSaveCorsOrigins={saveCorsOrigins} recordingStorage={recordingStorage} onSaveRecordingQuota={saveRecordingQuota}/>
+    </main></AvatarProvider>
   )
 }
 
@@ -2239,13 +2295,13 @@ function ChannelGroup({ title, canAdd, onAdd, children }: { title: string; canAd
   return <section className="channel-group"><header><span>{title}</span>{canAdd && <button onClick={onAdd} aria-label={`Добавить: ${title}`}><Icon name="add" size={15}/></button>}</header>{children}</section>
 }
 
-function ChannelButton({ channel, active, unread = false, canManage, canShare = false, participants = [], livePublisherId = null, members = [], currentVoiceConnectionId = null, speakingUserIds = [], onSelect, onEdit, onShare, onOpenProfile, onContextMenu, onParticipantContextMenu }: { channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; livePublisherId?: number | null; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void; onContextMenu?: (event: ReactMouseEvent) => void; onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void }) {
+function ChannelButton({ recording = false, onWatch, channel, active, unread = false, canManage, canShare = false, participants = [], livePublisherId = null, members = [], currentVoiceConnectionId = null, speakingUserIds = [], onSelect, onEdit, onShare, onOpenProfile, onContextMenu, onParticipantContextMenu }: { recording?: boolean; onWatch?: () => void; channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; livePublisherId?: number | null; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void; onContextMenu?: (event: ReactMouseEvent) => void; onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void }) {
   const speakingUsers = useMemo(() => new Set(speakingUserIds), [speakingUserIds])
-  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{livePublisherId !== null && <b className="channel-row__live" title="Идёт трансляция экрана">LIVE</b>}{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
+  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{recording && <span className="record-dot is-active" title="Канал записывается" aria-label="Канал записывается"/>}{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
     const member = members.find((item) => item.user_id === participant.user_id)
     const username = member?.username ?? `Пользователь #${participant.user_id}`
     const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
-    return <button key={participant.connection_id} className={`${participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} onClick={() => onOpenProfile?.(participant.user_id, member?.role ?? 'member')} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)} title={username}><Avatar name={username} size="small"/><span>{username}</span>{participant.user_id === livePublisherId && <b className="channel-voice-users__live" title="Показывает экран">LIVE</b>}{participant.self_deaf ? <Icon name="headphonesOff" size={12}/> : participant.self_mute ? <Icon name="micOff" size={12}/> : <i/>}</button>
+    return <button key={participant.connection_id} className={`${participant.connection_id === currentVoiceConnectionId ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} onClick={() => participant.user_id === livePublisherId ? onWatch?.() : onOpenProfile?.(participant.user_id, member?.role ?? 'member')} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)} title={username}><Avatar userId={participant.user_id} name={username} size="small"/><span>{username}</span>{participant.user_id === livePublisherId && <b className="channel-voice-users__live" title="Показывает экран">LIVE</b>}{participant.self_deaf ? <Icon name="headphonesOff" size={12}/> : participant.self_mute ? <Icon name="micOff" size={12}/> : <i/>}</button>
   })}</div>}</div>
 }
 
@@ -2255,7 +2311,7 @@ function VoiceDock({ channelName, status, selfMute, selfDeaf, onOpen, onToggleMu
 
 function MemberGroup({ title, members, online, onOpenProfile, onMemberContextMenu }: { title: string; members: ServerMember[]; online: boolean; onOpenProfile: (member: ServerMember) => void; onMemberContextMenu?: (event: ReactMouseEvent, member: ServerMember) => void }) {
   if (!members.length) return null
-  return <section className="member-group"><h3>{title}</h3>{members.map((member) => <button className={`member-row member-row--${member.role}`} key={member.user_id} onClick={() => onOpenProfile(member)} onContextMenu={(event) => onMemberContextMenu?.(event, member)}><Avatar name={member.username} size="small" online={online}/><span><b className={`member-name member-name--${member.role}`}>{member.username}</b><small><span className={`role-dot role-dot--${member.role}`}/>{roleMeta[member.role].label}{!online && ` · ${relativeTime(member.last_seen_at)}`}</small></span>{member.country_code && <em>{member.country_code}</em>}</button>)}</section>
+  return <section className="member-group"><h3>{title}</h3>{members.map((member) => <button className={`member-row member-row--${member.role}`} key={member.user_id} onClick={() => onOpenProfile(member)} onContextMenu={(event) => onMemberContextMenu?.(event, member)}><Avatar userId={member.user_id} name={member.username} size="small" online={online}/><span><b className={`member-name member-name--${member.role}`}>{member.username}</b><small><span className={`role-dot role-dot--${member.role}`}/>{roleMeta[member.role].label}{!online && ` · ${relativeTime(member.last_seen_at)}`}</small></span>{member.country_code && <em>{member.country_code}</em>}</button>)}</section>
 }
 
 function voiceRealtimeError(message: string) {

@@ -425,3 +425,57 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 }
 
 .voice-sound-preview { align-self: flex-start; margin-top: 10px; }
+
+/* The room is a stream stage with a compact call dock and its own chat. */
+.avatar > img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.avatar-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 22px; }
+.avatar-editor input { display: none; }
+.avatar-editor small { width: 100%; color: var(--muted); }
+.record-dot { display: inline-block; width: 12px; height: 12px; flex: 0 0 12px; border: 2px solid currentColor; border-radius: 50%; }
+.record-dot.is-active { background: #fa4f68; border-color: #fa4f68; box-shadow: 0 0 0 3px #fa4f6818; }
+.voice-stage-layout { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.voice-stage-layout .voice-room { flex: 1; min-width: 0; min-height: 0; overflow: hidden; padding: 0; display: flex; flex-direction: column; background: #111318; }
+.voice-stage-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; padding: 10px 22px; color: #a9b0bd; font-size: 12px; }
+.voice-stage-status > span { display: inline-flex; align-items: center; gap: 8px; }
+.voice-stage-status .recording-label { color: #ff91a2; }
+.voice-stage-content { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; justify-content: flex-start; gap: 18px; padding: 14px 24px; }
+.voice-stage-content .stream-panel { flex: 1 0 auto; margin: 0; border: 1px solid #ffffff10; background: #191c23; }
+.voice-stage-content .stream-video { background: #000; }
+.voice-stage-content .voice-participants { padding: 0; margin: 0; border: 0; background: transparent; }
+.voice-stage-content .voice-participant-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+.voice-stage-content .voice-participant { display: flex; position: relative; min-height: 140px; flex-direction: column; align-items: center; justify-content: center; gap: 14px; border: 2px solid transparent; border-radius: 12px; background: #242832; color: #e7eaf0; }
+.voice-stage-content .voice-participant.is-speaking { border-color: #5fcd95; box-shadow: none; }
+.voice-stage-content .voice-participant .avatar { width: 56px; height: 56px; font-size: 22px; border-radius: 50%; }
+.voice-stage-content .voice-participant > span { text-align: center; flex: 0; }
+.voice-stage-content .voice-participant > span em { display: none; }
+.voice-stage-content .voice-participant__live { position: absolute; top: 10px; right: 10px; }
+.voice-stage-content .voice-participant__state { position: absolute; left: 12px; bottom: 12px; }
+.voice-stage-content .voice-empty { color: #a9b0bd; }
+.voice-stage-footer { display: flex; justify-content: center; padding: 18px 10px 22px; }
+.call-controls { display: inline-flex; align-items: center; gap: 6px; padding: 7px; border: 1px solid #ffffff14; border-radius: 14px; background: #20232b; box-shadow: 0 6px 30px #0004; }
+.call-controls > button { display: flex; align-items: center; justify-content: center; width: 44px; height: 40px; border: 0; border-radius: 9px; background: transparent; color: #dce0e8; cursor: pointer; }
+.call-controls > button:hover, .call-controls > button.is-active { background: #ffffff14; }
+.call-controls > button.is-muted, .call-controls > button.is-recording { background: #fa4f6823; color: #ff8399; }
+.call-controls > button.is-leave { background: #f04760; color: white; margin-left: 5px; }
+.call-controls > button:disabled { opacity: .4; cursor: default; }
+.voice-channel-chat { display: flex; flex-direction: column; width: clamp(300px, 34%, 440px); flex-shrink: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.voice-channel-chat > header { display: flex; justify-content: space-between; align-items: center; min-height: 48px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.voice-channel-chat .chat-panel { flex: 1; min-height: 0; }
+.voice-channel-chat .message { padding-left: 16px; padding-right: 12px; }
+.voice-channel-chat .chat-composer { margin: 10px; }
+.stream-expanded-player .call-controls { flex-shrink: 0; }
+.stream-expanded-player > footer { flex-wrap: wrap; }
+.stream-cinema-controls .call-controls { pointer-events: auto; }
+.recordings-hint { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.recordings-list { max-height: 55vh; overflow-y: auto; margin: 18px 0; }
+.recordings-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.recordings-row > div { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+.recordings-row small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .voice-stage-layout { position: relative; }
+  .voice-channel-chat { position: absolute; inset: 0 0 0 auto; width: min(100%, 420px); z-index: 5; box-shadow: -10px 0 35px #0007; }
+  .voice-stage-content { padding: 10px; }
+  .call-controls { gap: 2px; }
+  .call-controls > button { width: 36px; }
+  .stream-cinema-controls { flex-wrap: wrap; }
+}

@@ -35,9 +35,9 @@ async function runStreamSmoke(browser: Browser, requireTURN: boolean, pages: Pag
 
   const beforeRestart = await remoteIceUfrags(viewer)
   await viewerContext.setOffline(true)
-  await expect(viewer.locator('.voice-orbit')).not.toHaveClass(/is-connected/, { timeout: 15_000 })
+  await expect(viewer.locator('.voice-stage-layout')).not.toHaveAttribute('data-voice-state', 'connected', { timeout: 15_000 })
   await viewerContext.setOffline(false)
-  await expect(viewer.locator('.voice-orbit')).toHaveClass(/is-connected/, { timeout: 75_000 })
+  await expect(viewer.locator('.voice-stage-layout')).toHaveAttribute('data-voice-state', 'connected', { timeout: 75_000 })
   await expectDecodedFrames(viewer, 6)
 
   await expect.poll(async () => new Set(await remoteIceUfrags(viewer)).size, {
