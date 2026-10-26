@@ -110,3 +110,23 @@ requires UDP `${WEBRTC_STREAM_UDP_PORT:-50001}` to be reachable.
 Оптимизации чата, AudioWorklet, обработки видео и метрик качества описаны в [docs/client-performance.md](docs/client-performance.md). Изолированные браузерные проверки запускаются командой `npm run test:e2e:performance` и не требуют backend.
 
 Запись и повторное скачивание, локальные и серверные копии, аватары и интерфейс звонка: [подробное описание](docs/calls-recordings.md).
+
+## v1.11.0 — call layout and instance invitations
+
+Participant tiles have a bounded square layout with larger avatars and names.
+Both sidebars use larger participant names and avatars. Voice-channel chat
+opens from the bottom call controls; its pins replace chat content inside the
+same dock, including on narrow screens. The header no longer repeats its chat
+button. Single-instance invitations use registration links; the unused inbox
+and invitations by username have been removed from the workspace.
+
+Messages retain the highest server revision across WebSocket events and HTTP
+history/mutation responses. Deploy backend **v0.10.0** and migration **000019**
+before this frontend to enable that ordering guarantee. Existing backends
+remain compatible with the additive revision field.
+
+Карточки участников стали квадратнее, аватары и имена увеличены. Чат звонка
+открывается из нижней панели, а закрепы переключаются внутри той же боковой
+области. Входящие приглашения и приглашения по имени убраны; новые участники
+регистрируются по ссылке. Для защиты от устаревших правок сообщений сначала
+обновите backend до v0.10.0 и примените миграцию 000019.

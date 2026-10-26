@@ -19,15 +19,15 @@ import {
   ChannelSettingsDialog,
   ConfirmDialog,
   CreateChannelDialog,
-  InvitesDialog,
   InviteUserDialog,
   LogoutConfirmDialog,
   MemberProfileDialog,
   ProfileDialog,
   ServerSettingsDialog,
 } from '../components/WorkspaceDialogs'
-import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, RecordingStorage, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
+import type { ActiveStream, Channel, ChannelKind, ChannelRead, InstanceMetadata, Message, PinnedMessage, Profile, RecordingStorage, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
+import { messageSnapshot, newerMessage } from '../lib/messageRevisions'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
@@ -46,7 +46,7 @@ import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUs
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { useTheme } from '../theme/ThemeContext'
 
-type Dialog = 'server' | 'channel' | 'channelSettings' | 'invite' | 'invites' | 'profile' | 'userProfile' | 'settings' | 'voiceSettings' | 'streamSettings' | 'logout' | null
+type Dialog = 'server' | 'channel' | 'channelSettings' | 'invite' | 'profile' | 'userProfile' | 'settings' | 'voiceSettings' | 'streamSettings' | 'logout' | null
 type MessagePanel = 'search' | 'pins' | null
 type MessageTarget = { channelId: number; messageId: number }
 type ActiveVoiceSession = { serverId: number; channelId: number; channelName: string; connectionId: string | null; selfMute: boolean; selfDeaf: boolean }
@@ -58,6 +58,8 @@ interface WorkspaceProps {
 }
 
 function upsertPinnedMessage(current: PinnedMessage[], value: PinnedMessage) {
+  const existing = current.find((pin) => pin.message.id === value.message.id)
+  value = { ...value, message: newerMessage(existing?.message, value.message) }
   return [value, ...current.filter((pin) => pin.message.id !== value.message.id)]
     .sort((left, right) => right.pinned_at - left.pinned_at || right.message.id - left.message.id)
 }
@@ -83,7 +85,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [hasMore, setHasMore] = useState(false)
   const [hasNewer, setHasNewer] = useState(false)
   const [loadingNewer, setLoadingNewer] = useState(false)
-  const [invites, setInvites] = useState<IncomingInvite[]>([])
   const [profile, setProfile] = useState<Profile | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [messagesLoading, setMessagesLoading] = useState(false)
@@ -252,7 +253,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       if (activeServerRef.current !== serverId || activeChannelRef.current !== channelId || messageTargetRef.current) return
       setMessages((current) => {
         const merged = new Map(current.map((message) => [message.id, message]))
-        page.messages.forEach((message) => merged.set(message.id, message))
+        page.messages.forEach((message) => merged.set(message.id, newerMessage(merged.get(message.id), message)))
         return [...merged.values()].sort((left, right) => left.id - right.id)
       })
       setNextBeforeId(page.pagination.next_before_id)
@@ -265,7 +266,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     const channelId = activeChannelRef.current
     if (!chatVisible || !token || !serverId || !channelId) return
     void api.messages.pins(token, serverId, channelId).then((pins) => {
-      if (activeServerRef.current === serverId && activeChannelRef.current === channelId) setPinnedMessages(pins)
+      if (activeServerRef.current === serverId && activeChannelRef.current === channelId) setPinnedMessages((current) => pins.map((pin) => ({ ...pin, message: newerMessage(current.find((item) => item.message.id === pin.message.id)?.message, pin.message) })))
     }).catch(() => undefined)
   }
 
@@ -609,21 +610,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     return data
   }, [api, token])
 
-  const loadInvites = useCallback(async (signal?: AbortSignal) => {
-    if (!token) return
-    const data = await api.invites.list(token, signal)
-    setInvites(data.filter((invite) => invite.status === 'pending'))
-  }, [api, token])
-
   useEffect(() => {
     if (!token) return
     const controller = new AbortController()
     const load = async () => {
       setInitialLoading(true)
       try {
-        const [, , ownProfile, metadata] = await Promise.all([
+        const [, ownProfile, metadata] = await Promise.all([
           loadServers(controller.signal),
-          loadInvites(controller.signal),
           api.profile.me(token, controller.signal),
           api.instance.get(controller.signal),
         ])
@@ -637,7 +631,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     void load()
     return () => controller.abort()
-  }, [api, token, loadServers, loadInvites, handleError])
+  }, [api, token, loadServers, handleError])
 
   useEffect(() => {
     if (!token || !selectedServerId) {
@@ -697,7 +691,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       : api.messages.list(token, selectedServerId, selectedChannelId, undefined, controller.signal)
     request
       .then((page) => {
-        setMessages(page.messages)
+        setMessages((current) => messageSnapshot(current, page.messages))
         if ('target_index' in page) {
           setNextBeforeId(page.messages[0]?.id ?? null)
           setHasMore(page.target_index >= 25)
@@ -770,8 +764,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onMessageUpdated: (message) => {
         if (message.channel_id !== activeChannelRef.current) return
-        setMessages((current) => current.map((item) => item.id === message.id ? message : item))
-        setPinnedMessages((current) => current.map((pin) => pin.message.id === message.id ? { ...pin, message } : pin))
+        setMessages((current) => current.map((item) => item.id === message.id ? newerMessage(item, message) : item))
+        setPinnedMessages((current) => current.map((pin) => pin.message.id === message.id ? { ...pin, message: newerMessage(pin.message, message) } : pin))
       },
       onMessageDeleted: (event) => {
         if (event.channel_id !== activeChannelRef.current) return
@@ -850,10 +844,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         if (activeServerRef.current === event.server_id) {
           setMessages([]); setPinnedMessages([]); setChannels([]); setMembers([]); setSelectedChannelId(null); setSelectedServerId(remaining[0]?.id ?? null)
         }
-      },
-      onInvitationReceived: (invite) => {
-        if (invite.status !== 'pending') return
-        setInvites((current) => current.some((item) => item.id === invite.id) ? current : [...current, invite])
       },
       onChannelCreated: (channel) => {
         if (channel.server_id !== activeServerRef.current) return
@@ -2048,7 +2038,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       const page = await api.messages.list(token, selectedServerId, selectedChannelId)
       setMessageTarget(null)
       setFocusedMessageId(null)
-      setMessages(page.messages)
+      setMessages((current) => messageSnapshot(current, page.messages))
       setNextBeforeId(page.pagination.next_before_id)
       setHasMore(page.pagination.has_more)
       setHasNewer(false)
@@ -2076,8 +2066,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!token || !selectedServerId || !selectedChannelId) return
     try {
       const updated = await api.messages.update(token, selectedServerId, selectedChannelId, messageId, content)
-      setMessages((current) => current.map((message) => message.id === updated.id ? updated : message))
-      setPinnedMessages((current) => current.map((pin) => pin.message.id === updated.id ? { ...pin, message: updated } : pin))
+      setMessages((current) => current.map((message) => message.id === updated.id ? newerMessage(message, updated) : message))
+      setPinnedMessages((current) => current.map((pin) => pin.message.id === updated.id ? { ...pin, message: newerMessage(pin.message, updated) } : pin))
     } catch (error) {
       throw new Error(humanError(error))
     }
@@ -2141,7 +2131,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         const latest = await api.messages.list(token, selectedServerId, selectedChannelId)
         setMessages((current) => {
           const merged = new Map(current.map((message) => [message.id, message]))
-          latest.messages.forEach((message) => merged.set(message.id, message))
+          latest.messages.forEach((message) => merged.set(message.id, newerMessage(merged.get(message.id), message)))
           return [...merged.values()].sort((left, right) => left.id - right.id)
         })
       }
@@ -2152,20 +2142,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       newerRequestRef.current = false
       setLoadingNewer(false)
     }
-  }
-
-  const respondInvite = async (invite: IncomingInvite, action: 'accept' | 'decline') => {
-    if (!token) return
-    if (action === 'accept') {
-      const server = await api.invites.accept(token, invite.id)
-      setInvites((current) => current.filter((item) => item.id !== invite.id))
-      setServers((current) => current.some((item) => item.id === server.id) ? current : [...current, server])
-      setSelectedServerId((current) => current ?? server.id)
-      notify(`Вы присоединились к ${server.name}`, 'success')
-      return
-    }
-    await api.invites.decline(token, invite.id)
-    setInvites((current) => current.filter((item) => item.id !== invite.id))
   }
 
   const onlineUserIds = useMemo(() => new Set(selectedServerId ? (onlineByServer[selectedServerId] ?? []) : []), [onlineByServer, selectedServerId])
@@ -2224,25 +2200,23 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       </aside>
 
       <section className="content-shell">
-        {!selectedServer && instance?.initialized && <div className="instance-access-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ДОСТУП ОГРАНИЧЕН</span><h1>Нужно приглашение</h1><p>Ваш аккаунт существует, но пока не состоит в пространстве этого инстанса. Примите приглашение, чтобы войти.</p><button className="button button--primary button--large" onClick={() => setDialog('invites')}><Icon name="inbox"/>Приглашения</button></div>}
+        {!selectedServer && instance?.initialized && <div className="instance-access-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ДОСТУП ОГРАНИЧЕН</span><h1>Нужно приглашение</h1><p>Ваш аккаунт пока не имеет доступа к этому инстансу. Обратитесь к администратору за ссылкой-приглашением.</p></div>}
         <header className="content-header">
           <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
           <div className="content-header__actions">
-            {selectedServer && <button className={`header-action header-action--inbox ${invites.length ? 'has-badge' : ''}`} onClick={() => setDialog('invites')} title="Входящие приглашения"><Icon name="inbox"/><span>Приглашения</span>{invites.length > 0 && <b>{invites.length}</b>}</button>}
             {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
-            {selectedChannel?.kind === 'voice' && <button className="icon-button" onClick={() => setVoiceChatOpen((value) => !value)} title="Чат канала" aria-label="Чат канала" aria-pressed={voiceChatOpen}><Icon name="message"/></button>}
             {selectedServer && <button className="header-action" onClick={() => setRecordingsOpen(true)} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
-            {chatVisible && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
+            {chatVisible && selectedChannel?.kind === 'text' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
             <button className="header-action theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/><span>{theme === 'dark' ? 'Светлая' : 'Тёмная'}</span></button>
             {selectedServer && canManage && <button className="header-action" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
             <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
           </div>
         </header>
 
-        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel controls={callControls} recordingLabel={recording.records.find((item) => item.channel_id === selectedChannel.id && item.status === 'recording')?.owner_username} chat={voiceChatOpen ? <aside className="voice-channel-chat"><header><b>Чат канала</b><button className="icon-button" onClick={() => setVoiceChatOpen(false)} aria-label="Закрыть чат"><Icon name="close"/></button></header>{channelChat}</aside> : null} channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={() => void watchStream()} onLeaveStream={leaveStream} onExpandStream={() => { setStreamCinema(false); setStreamExpanded(true) }} onFullscreenStream={() => { setStreamCinema(true); setStreamExpanded(true) }} streamAudioMuted={streamAudioMuted} onToggleStreamAudio={toggleStreamAudio}/> : channelChat : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
+        {selectedServer ? selectedChannel?.kind === 'voice' ? <VoicePanel controls={callControls} recordingLabel={recording.records.find((item) => item.channel_id === selectedChannel.id && item.status === 'recording')?.owner_username} chat={voiceChatOpen ? <aside className="voice-channel-chat"><header><div className="voice-channel-chat__tabs" aria-label="Раздел чата канала"><button aria-pressed={messagePanel !== 'pins'} onClick={() => setMessagePanel(null)}>Чат</button><button aria-pressed={messagePanel === 'pins'} onClick={() => setMessagePanel('pins')}><Icon name="pin" size={14}/>Закрепы{pinnedMessages.length > 0 && <small>{pinnedMessages.length}</small>}</button></div><button className="icon-button" onClick={() => { setVoiceChatOpen(false); if (messagePanel === 'pins') setMessagePanel(null) }} aria-label="Закрыть чат"><Icon name="close"/></button></header>{messagePanel === 'pins' ? <PinnedMessagesPanel docked open pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/> : channelChat}</aside> : null} channel={selectedChannel} activeChannel={activeVoiceChannel} participants={selectedVoiceParticipants} members={members} currentUserId={user?.id ?? 0} speakingUserIds={speakingUserIds} connectionStatus={voiceSession?.channelId === selectedChannel.id ? voiceStatus : 'idle'} realtimeOnline={connection === 'online'} selfMute={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfMute : false} selfDeaf={voiceSession?.channelId === selectedChannel.id ? voiceSession.selfDeaf : false} error={voiceError} recovering={mediaRecovering} micUnavailable={micUnavailable} onRetryMic={() => void retryMicrophone()} playbackBlocked={voicePlaybackBlocked} onEnablePlayback={() => { voiceMediaRef.current?.resumeAudio(); setVoicePlaybackBlocked(false) }} onJoin={() => joinVoiceChannel(selectedChannel)} onLeave={leaveVoiceChannel} onToggleMute={toggleSelfMute} onToggleDeaf={toggleSelfDeaf} onOpenProfile={(userId, role) => void openUserProfile(userId, role)} stream={streams[selectedChannel.id] ?? null} streamStatus={voiceSession?.channelId === selectedChannel.id ? streamStatus : 'idle'} streamError={voiceSession?.channelId === selectedChannel.id ? streamError : ''} streamMedia={voiceSession?.channelId === selectedChannel.id && !streamExpanded ? streamMedia : null} streamPreferences={streamPreferences} streamQuality={streamQuality} onStreamPreferencesChange={updateStreamPreferences} onOpenStreamSettings={() => openStreamSettings(selectedChannel.id)} onWatchStream={() => void watchStream()} onLeaveStream={leaveStream} onExpandStream={() => { setStreamCinema(false); setStreamExpanded(true) }} onFullscreenStream={() => { setStreamCinema(true); setStreamExpanded(true) }} streamAudioMuted={streamAudioMuted} onToggleStreamAudio={toggleStreamAudio}/> : channelChat : <div className="welcome-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h1>Начните с сервера</h1><p>Создайте место для команды, друзей или проекта. Каналы и разговоры приложатся.</p><button className="button button--primary button--large" onClick={() => setDialog('server')}><Icon name="add"/>Создать сервер</button></div>}
         {selectedServer && token && <MessageSearchPanel open={messagePanel === 'search'} api={api} token={token} serverId={selectedServer.id} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage}/>}
-        {selectedChannel && <PinnedMessagesPanel open={messagePanel === 'pins'} pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/>}
-        {messagePanel && <button className="message-panel-scrim" aria-label="Закрыть панель" onClick={() => setMessagePanel(null)}/>}
+        {selectedChannel && !(selectedChannel.kind === 'voice' && voiceChatOpen) && <PinnedMessagesPanel open={messagePanel === 'pins'} pins={pinnedMessages} loading={pinsLoading} canManage={!!canManage} onClose={() => setMessagePanel(null)} onOpenMessage={openMessage} onUnpin={(messageId) => toggleMessagePin(messageId, true)}/>}
+        {messagePanel && !(messagePanel === 'pins' && selectedChannel?.kind === 'voice' && voiceChatOpen) && <button className="message-panel-scrim" aria-label="Закрыть панель" onClick={() => setMessagePanel(null)}/>}
       </section>
 
       {selectedServer && workspaceLayout.membersOpen && <aside className="members-sidebar is-open">
@@ -2277,8 +2251,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <RecordingsDialog channels={channels} open={recordingsOpen} onClose={() => setRecordingsOpen(false)} records={recording.records} locals={recording.locals} serverId={selectedServerId} progress={recording.progress} voiceActive={!!voiceSession} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview} currentUserId={user?.id} onRemoveServer={recording.removeServer}/>
       <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
       <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} onRename={renameChannel} onRemove={deleteChannel}/>
-      <InviteUserDialog open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onSubmit={async (username) => { if (token && selectedServerId) { await api.invites.create(token, selectedServerId, username); notify('Приглашение отправлено', 'success') } }} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
-      <InvitesDialog open={dialog === 'invites'} onClose={() => setDialog(null)} invites={invites} onRespond={respondInvite}/>
+      <InviteUserDialog open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && avatarVersions.has(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
       <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>

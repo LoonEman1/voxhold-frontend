@@ -92,6 +92,7 @@ export interface Message {
   content: string
   created_at: number
   edited_at: number | null
+  revision?: number
 }
 
 export interface MessagePage {

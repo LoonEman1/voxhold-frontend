@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { Channel, ChannelKind, CreatedInviteLink, IncomingInvite, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
+import type { Channel, ChannelKind, CreatedInviteLink, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
 import { countryByCode } from '../lib/countries'
 import { formatDate, humanError } from '../lib/format'
 import { createWebInviteURL } from '../lib/inviteLinks'
@@ -8,7 +8,6 @@ import { Avatar } from './Avatar'
 import { AvatarEditor } from './AvatarEditor'
 import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
-import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 
@@ -107,79 +106,44 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
   )
 }
 
-export function InviteUserDialog({ open, onClose, server, onSubmit, onCreateLink }: AsyncDialogProps & {
+export function InviteUserDialog({ open, onClose, server, onCreateLink }: AsyncDialogProps & {
   server: Server | null
-  onSubmit(username: string): Promise<void>
   onCreateLink(input: { expires_in_seconds: number; max_uses: number | null; allow_registration: boolean }): Promise<CreatedInviteLink>
 }) {
-  const [mode, setMode] = useState<'direct' | 'link'>('direct')
-  const [username, setUsername] = useState('')
   const [error, setError] = useState('')
-  const [done, setDone] = useState(false)
   const [pending, setPending] = useState(false)
-  const [allowRegistration, setAllowRegistration] = useState(false)
   const [lifetime, setLifetime] = useState(24 * 60 * 60)
   const [maxUses, setMaxUses] = useState(25)
   const [generatedURL, setGeneratedURL] = useState('')
-  useEffect(() => { if (open) { setMode('direct'); setUsername(''); setError(''); setDone(false); setGeneratedURL(''); setAllowRegistration(false); setLifetime(24 * 60 * 60); setMaxUses(25) } }, [open])
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); setPending(true); setError('')
-    try { await onSubmit(username.trim()); setDone(true) } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
-  }
+  const [copied, setCopied] = useState(false)
+  useEffect(() => { if (open) { setError(''); setGeneratedURL(''); setCopied(false); setLifetime(24 * 60 * 60); setMaxUses(25) } }, [open])
   const createLink = async (event: FormEvent) => {
-    event.preventDefault(); setPending(true); setError('')
+    event.preventDefault()
+    if (pending) return
+    setPending(true); setError('')
     try {
-      const link = await onCreateLink({ expires_in_seconds: lifetime, max_uses: maxUses, allow_registration: allowRegistration })
+      const link = await onCreateLink({ expires_in_seconds: lifetime, max_uses: maxUses, allow_registration: true })
       setGeneratedURL(createWebInviteURL(link.token, `${window.location.origin}${window.location.pathname}`))
     } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
   }
-  const changeMode = (next: 'direct' | 'link') => { setMode(next); setDone(false); setGeneratedURL(''); setError('') }
-  return (
-    <Modal open={open} onClose={onClose} title={`Пригласить в ${server?.name ?? 'сервер'}`} eyebrow="СОБЕРИТЕ СВОИХ" size="medium">
-      <div className="auth-tabs invite-mode-tabs" role="tablist">
-        <button type="button" className={mode === 'direct' ? 'is-active' : ''} onClick={() => changeMode('direct')}>По имени</button>
-        <button type="button" className={mode === 'link' ? 'is-active' : ''} onClick={() => changeMode('link')}>По ссылке</button>
-      </div>
-      {mode === 'direct' && (done ? <div className="dialog-success"><span><Icon name="check" size={28}/></span><h3>Приглашение отправлено</h3><p>Оно появится во входящих у пользователя.</p><button className="button button--primary" onClick={onClose}>Готово</button></div> :
-      <form className="dialog-form" onSubmit={submit}>
-        <p>Введите точное имя пользователя Voxhold.</p>
-        <label><span>Имя пользователя</span><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="username" maxLength={32} required autoFocus /></label>
-        {error && <div className="form-error" role="alert">{error}</div>}
-        <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Отправить'}</button></div>
-      </form>)}
-      {mode === 'link' && (generatedURL ? <div className="dialog-form invite-link-result"><p>Ссылка откроет страницу этого сервера. Там приглашённый сможет запустить приложение или продолжить вход и регистрацию в браузере.</p><label><span>Ссылка-приглашение</span><input readOnly value={generatedURL} onFocus={(event) => event.currentTarget.select()}/></label>{error && <div className="form-error" role="alert">{error}</div>}<div className="dialog-actions"><button className="button button--ghost" type="button" onClick={() => setGeneratedURL('')}>Создать ещё</button><button className="button button--primary" type="button" onClick={() => void navigator.clipboard.writeText(generatedURL)}>Копировать</button></div></div> :
-      <form className="dialog-form" onSubmit={createLink}>
-        <label className="invite-option"><input type="checkbox" checked={allowRegistration} onChange={(event) => { const checked = event.target.checked; setAllowRegistration(checked); if (checked && lifetime > 24 * 60 * 60) setLifetime(24 * 60 * 60); if (checked && maxUses > 100) setMaxUses(1) }}/><span><b>Допускать незарегистрированных</b><small>По этой ссылке можно будет создать новый аккаунт.</small></span></label>
-        <label><span>Срок действия</span><select value={lifetime} onChange={(event) => setLifetime(Number(event.target.value))}><option value={60 * 60}>1 час</option><option value={6 * 60 * 60}>6 часов</option><option value={24 * 60 * 60}>1 сутки</option>{!allowRegistration && <option value={7 * 24 * 60 * 60}>7 дней</option>}{!allowRegistration && <option value={30 * 24 * 60 * 60}>30 дней</option>}</select></label>
-        <label><span>Количество использований</span><input type="number" min={1} max={allowRegistration ? 100 : 1000} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} required/></label>
-        <p>{allowRegistration ? 'Безопасный режим: максимум сутки и ограниченное число регистраций.' : 'Ссылка работает только для уже зарегистрированных пользователей.'}</p>
-        {error && <div className="form-error" role="alert">{error}</div>}
-        <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Создать ссылку'}</button></div>
-      </form>)}
-    </Modal>
-  )
-}
-
-export function InvitesDialog({ open, onClose, invites, onRespond }: AsyncDialogProps & { invites: IncomingInvite[]; onRespond(invite: IncomingInvite, action: 'accept' | 'decline'): Promise<void> }) {
-  const [pendingId, setPendingId] = useState<number | null>(null)
-  const [error, setError] = useState('')
-  const respond = async (invite: IncomingInvite, action: 'accept' | 'decline') => {
-    setPendingId(invite.id); setError('')
-    try { await onRespond(invite, action) } catch (caught) { setError(humanError(caught)) } finally { setPendingId(null) }
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(generatedURL); setCopied(true); setError('') }
+    catch { setError('Не удалось скопировать ссылку. Выделите её и скопируйте вручную.') }
   }
-  return (
-    <Modal open={open} onClose={onClose} title="Приглашения" eyebrow={`${invites.length} ВХОДЯЩИХ`} size="medium">
-      <div className="invite-list">
-        {invites.length === 0 ? <EmptyState icon="inbox" title="Здесь пока тихо">Новые приглашения появятся в этом окне.</EmptyState> : invites.map((invite) => (
-          <article className="invite-card" key={invite.id}>
-            <Avatar name={invite.server_name}/><div><h3>{invite.server_name}</h3><p><b>@{invite.inviter_username}</b> приглашает вас присоединиться</p><small>до {formatDate(invite.expires_at)}</small></div>
-            <div className="invite-card__actions"><button className="button button--primary button--small" onClick={() => void respond(invite, 'accept')} disabled={pendingId === invite.id}>Принять</button><button className="button button--ghost button--small" onClick={() => void respond(invite, 'decline')} disabled={pendingId === invite.id}>Отклонить</button></div>
-          </article>
-        ))}
-        {error && <div className="form-error" role="alert">{error}</div>}
-      </div>
-    </Modal>
-  )
+  return <Modal open={open} onClose={onClose} title={`Пригласить в ${server?.name ?? 'сервер'}`} eyebrow="ПРИГЛАШЕНИЕ ПО ССЫЛКЕ" size="medium">
+    {generatedURL ? <div className="dialog-form invite-link-result">
+      <p>Отправьте ссылку новому участнику: он сможет создать аккаунт и сразу присоединиться к этому инстансу.</p>
+      <label><span>Ссылка-приглашение</span><input readOnly value={generatedURL} onFocus={(event) => event.currentTarget.select()}/></label>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={() => { setGeneratedURL(''); setCopied(false) }}>Создать ещё</button><button className="button button--primary" type="button" onClick={() => void copyLink()}>{copied ? 'Скопировано' : 'Копировать'}</button></div>
+    </div> : <form className="dialog-form" onSubmit={createLink}>
+      <p>Новые участники регистрируются по ссылке. Пользователи с аккаунтом уже состоят в этом инстансе.</p>
+      <label><span>Срок действия</span><select value={lifetime} onChange={(event) => setLifetime(Number(event.target.value))}><option value={60 * 60}>1 час</option><option value={6 * 60 * 60}>6 часов</option><option value={24 * 60 * 60}>1 сутки</option></select></label>
+      <label><span>Количество использований</span><input type="number" min={1} max={100} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} required/></label>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Создать ссылку'}</button></div>
+    </form>}
+  </Modal>
 }
 
 export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false }: AsyncDialogProps & { profile: Profile | null; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {

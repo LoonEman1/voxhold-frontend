@@ -1,4 +1,84 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function openCallWorkspace(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('voxhold.theme.v1', 'dark')
+    localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
+    localStorage.setItem('voxhold.workspace-layout.v1', JSON.stringify({ channel_width: 252, members_width: 270, members_open: true }))
+    navigator.mediaDevices.getUserMedia = async () => {
+      const audio = new AudioContext()
+      const output = audio.createMediaStreamDestination()
+      const oscillator = audio.createOscillator()
+      oscillator.connect(output); oscillator.start()
+      return output.stream
+    }
+  })
+  const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
+  await page.routeWebSocket('**/api/v1/ws', (socket) => {
+    socket.onMessage((raw) => {
+      const event = JSON.parse(String(raw))
+      if (event.type === 'auth') {
+        socket.send(JSON.stringify({ type: 'ready', data: { user_id: 1, protocol_version: 6 } }))
+        socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: [1] }] } }))
+        socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants: [participant] } }))
+      }
+      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants: [participant] } }))
+      if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
+    })
+  })
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    let json: unknown = {}
+    if (path.endsWith('/me/servers')) json = [{ id: 1, name: 'FirstInstance', role: 'owner', created_by: 1, created_at: 1, joined_at: 1 }]
+    else if (path.endsWith('/instance')) json = { instance_id: 'fixture', name: 'FirstInstance', initialized: true, registration: 'invite_only', protocol_version: 1, created_at: 1 }
+    else if (path.endsWith('/me/profile')) json = { user_id: 1, username: 'Александр', about: '', country_code: null, created_at: 1 }
+    else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
+    else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: null }))
+    else if (path.endsWith('/recordings')) json = { recordings: [] }
+    else if (path.endsWith('/pins')) json = []
+    else if (path.endsWith('/messages')) json = { messages: [], pagination: { has_more: false, next_before_id: null } }
+    else if (path.endsWith('/invite-links')) json = { token: 'fixture-invite', expires_at: 9999999999, max_uses: 25, allow_registration: true }
+    else if (path.endsWith('/webrtc/config')) json = { ice_servers: [], ice_transport_policy: 'all' }
+    await route.fulfill({ json })
+  })
+  await page.goto('/')
+  await expect(page.locator('.voice-participant')).toBeVisible()
+}
+
+test('call tiles, registration links and docked pins work in the real workspace', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await openCallWorkspace(page)
+  const tile = (await page.locator('.voice-participant').boundingBox())!
+  expect(Math.abs(tile.width - tile.height)).toBeLessThan(2)
+  expect(tile.width).toBeLessThanOrEqual(300)
+  expect((await page.locator('.voice-participant .avatar').boundingBox())!.width).toBeGreaterThanOrEqual(80)
+  await expect(page.locator('.content-header').getByRole('button', { name: 'Чат канала' })).toHaveCount(0)
+  await expect(page.locator('.content-header').getByRole('button', { name: 'Приглашения', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Пригласить', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'По имени' })).toHaveCount(0)
+  const linkRequest = page.waitForRequest((request) => request.url().endsWith('/invite-links') && request.method() === 'POST')
+  await page.getByRole('button', { name: 'Создать ссылку' }).click()
+  expect((await linkRequest).postDataJSON().allow_registration).toBe(true)
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click()
+  await page.getByRole('button', { name: 'Подключиться к каналу', exact: true }).click()
+  await page.locator('.call-controls').getByRole('button', { name: 'Чат канала' }).click()
+  await page.locator('.voice-channel-chat').getByRole('button', { name: 'Закрепы', exact: true }).click()
+  await expect(page.locator('.voice-channel-chat .message-panel--docked')).toBeVisible()
+  await expect(page.locator('.message-panel-scrim')).toHaveCount(0)
+  const inside = await page.locator('.message-panel--docked').evaluate((node) => {
+    const bounds = node.getBoundingClientRect(), parent = node.closest('.voice-channel-chat')!.getBoundingClientRect()
+    return bounds.left >= parent.left && bounds.right <= parent.right + 1 && bounds.bottom <= parent.bottom + 1
+  })
+  expect(inside).toBe(true)
+  await page.screenshot({ path: 'node_modules/.cache/call-layout-desktop.png', animations: 'disabled' })
+  await page.locator('.voice-channel-chat').getByRole('button', { name: 'Чат', exact: true }).click()
+  await expect(page.locator('.voice-channel-chat .composer')).toBeVisible()
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.locator('.voice-channel-chat').getByRole('button', { name: 'Закрепы', exact: true }).click()
+  await expect(page.locator('.message-panel--docked')).toBeVisible()
+  expect(await page.locator('body').evaluate((node) => node.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: 'node_modules/.cache/call-layout-mobile.png', animations: 'disabled' })
+})
 
 for (const theme of ['dark', 'light']) {
   test(`${theme} theme keeps fixed avatar and recording geometry and readable recordings`, async ({ page }) => {
