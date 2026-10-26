@@ -51,7 +51,12 @@ jobs:
   client-performance:
     name: Client browser regressions
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      # Keep this version in sync with Playwright in package-lock.json.
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      options: --ipc=host
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -62,9 +67,7 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Test chat, microphone and video processing
+      - name: Test media, chat and recording regressions
         run: npm run test:e2e:performance
 
   container:
