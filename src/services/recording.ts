@@ -120,6 +120,7 @@ export class CallRecorder {
         new Promise<never>((_resolve, reject) => { timer = window.setTimeout(() => reject(new Error('Браузер блокирует звук записи. Нажмите запись ещё раз или проверьте разрешения звука.')), 5000) }),
       ])
     } finally { window.clearTimeout(timer) }
+    this.started = performance.now()
     this.recorder.start(2000)
   }
   setSources(audio: MediaStreamTrack[], stream: MediaStream | null) {
@@ -146,9 +147,14 @@ export class CallRecorder {
     this.compressor.disconnect(); this.destination.stream.getTracks().forEach((track) => track.stop()); void this.context.close().catch(() => undefined)
     await this.pending
     this.local = { ...this.local, duration: Math.min(86_400_000, Math.round(performance.now() - this.started)), finished: true }
-    try { await this.store.save(this.local) } catch { /* Already reported, preserve the in-memory tail. */ }
-    try { downloadBlob(await this.store.blob(this.local, this.tail), this.local.record) }
-    catch { this.warn('Автоскачивание не удалось. Используйте список записей, пока эта вкладка открыта.') }
+    if (!this.local.bytes && !this.tail.length) {
+      // Nothing was encoded: neither keep an empty entry nor download a 0-byte file.
+      try { await this.store.remove(this.local.record.id) } catch { /* Only empty metadata remains. */ }
+    } else {
+      try { await this.store.save(this.local) } catch { /* Already reported, preserve the in-memory tail. */ }
+      try { downloadBlob(await this.store.blob(this.local, this.tail), this.local.record) }
+      catch { this.warn('Автоскачивание не удалось. Используйте список записей, пока эта вкладка открыта.') }
+    }
     this.changed(); this.finish(this.local)
   }
   async download() { downloadBlob(await this.store.blob(this.local, this.tail), this.local.record) }

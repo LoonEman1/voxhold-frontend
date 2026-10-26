@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
-import { AvatarProvider, avatarChanged } from '../components/AvatarProvider'
+import { AvatarProvider } from '../components/AvatarProvider'
 import { CallControls } from '../components/CallControls'
 import { RecordingsDialog } from '../components/RecordingsDialog'
 import { useCallRecordings } from '../hooks/useCallRecordings'
@@ -26,7 +26,7 @@ import {
   ProfileDialog,
   ServerSettingsDialog,
 } from '../components/WorkspaceDialogs'
-import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
+import type { ActiveStream, Channel, ChannelKind, ChannelRead, IncomingInvite, InstanceMetadata, Message, PinnedMessage, Profile, RecordingStorage, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { humanError, relativeTime } from '../lib/format'
@@ -70,6 +70,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
   const [corsOrigins, setCorsOrigins] = useState<string[]>([])
   const [corsOriginsLoading, setCorsOriginsLoading] = useState(false)
+  const [recordingStorage, setRecordingStorage] = useState<RecordingStorage | null>(null)
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
@@ -271,6 +272,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const selectedServer = servers.find((server) => server.id === selectedServerId) ?? null
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId) ?? null
   const canManage = selectedServer?.role === 'owner' || selectedServer?.role === 'admin'
+  // Avatars are requested only for members whose list entry names a version.
+  const avatarVersions = useMemo(() => new Map(members.flatMap((member) => member.avatar_version ? [[member.user_id, member.avatar_version] as const] : [])), [members])
+  const setMemberAvatar = useCallback((userId: number, version: string | null) => {
+    setMembers((current) => current.map((member) => member.user_id === userId ? { ...member, avatar_version: version } : member))
+  }, [])
   const pinnedMessageIds = useMemo(() => new Set(pinnedMessages.map((pin) => pin.message.id)), [pinnedMessages])
 
   const handleError = useCallback((error: unknown, fallback = 'Не удалось выполнить действие') => {
@@ -746,7 +752,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         expire()
       },
       onRecordingUpdated: recordingMerge,
-      onAvatarUpdated: ({ user_id }) => avatarChanged(user_id),
+      onAvatarUpdated: ({ user_id, version }) => setMemberAvatar(user_id, version ?? null),
       onReady: () => {
         recordingSyncRef.current()
         syncLatestRef.current(); syncPinsRef.current()
@@ -1088,7 +1094,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     realtimeRef.current = client
     client.connect()
     return () => { client.close(); realtimeRef.current = null }
-  }, [recordingMerge, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
+  }, [recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
 
   useEffect(() => {
     if (selectedServerId && selectedChannelId && chatVisible) realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
@@ -1832,6 +1838,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       .then((payload) => setCorsOrigins(payload.origins))
       .catch((error: unknown) => handleError(error, 'Не удалось загрузить CORS-настройки'))
       .finally(() => setCorsOriginsLoading(false))
+    setRecordingStorage(null)
+    void api.recordings.storage(token)
+      .then(setRecordingStorage)
+      .catch((error: unknown) => handleError(error, 'Не удалось загрузить лимит записей'))
+  }
+
+  const saveRecordingQuota = async (quotaBytes: number) => {
+    if (!token || selectedServer?.role !== 'owner') throw new Error('Настройки доступны только владельцу')
+    const storage = await api.recordings.setQuota(token, quotaBytes)
+    setRecordingStorage(storage)
+    notify('Лимит записей сохранён', 'success')
   }
 
   const saveCorsOrigins = async (origins: string[]) => {
@@ -2171,9 +2188,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     selectChannel(channel.id)
     if (voiceSession?.channelId === channel.id && voiceStatus === 'connected') { if (!streamRole) void watchStream(); return }
     pendingWatch.current = channel.id
-    void joinVoiceChannel(channel)
+    // A rejected join must not auto-watch on some later connection to this room.
+    void joinVoiceChannel(channel).finally(() => { if (voiceSessionRef.current?.channelId !== channel.id) pendingWatch.current = null })
   }
-  const callControls = voiceSession && <CallControls connecting={voiceStatus !== 'connected'} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} recording={!!recording.activeId} recordBusy={recording.busy} canRecord={!!recording.activeId || (voiceStatus === 'connected' && !recording.records.some((item) => item.channel_id === voiceSession.channelId && item.status === 'recording'))} canShare={voiceStatus === 'connected' && !activeVoiceStream && !streamRole} chatOpen={voiceChatOpen} onMute={toggleSelfMute} onDeaf={toggleSelfDeaf} onRecord={() => { if (recording.activeId) void recording.stop(); else void recording.start() }} onRecordings={() => setRecordingsOpen(true)} onChat={() => { openActiveVoiceChannel(); setStreamExpanded(false); setVoiceChatOpen((value) => !value) }} onShare={() => openStreamSettings(voiceSession.channelId)} onLeave={leaveVoiceChannel}/>
+  const callControls = voiceSession && <CallControls connecting={voiceStatus !== 'connected'} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} recording={!!recording.activeId} recordBusy={recording.busy} canRecord={!!recording.activeId || (voiceStatus === 'connected' && !recording.records.some((item) => item.channel_id === voiceSession.channelId && item.status === 'recording'))} canShare={voiceStatus === 'connected' && !activeVoiceStream && !streamRole} chatOpen={voiceChatOpen} onMute={toggleSelfMute} onDeaf={toggleSelfDeaf} onRecord={() => { if (recording.activeId) void recording.stop(); else void recording.start() }} onRecordings={() => setRecordingsOpen(true)} onChat={() => {
+    // From another channel or the expanded player the button opens the room chat; in the room it toggles.
+    const inRoom = !streamExpanded && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId
+    openActiveVoiceChannel(); setStreamExpanded(false); setVoiceChatOpen((value) => inRoom ? !value : true)
+  }} onShare={() => openStreamSettings(voiceSession.channelId)} onLeave={leaveVoiceChannel}/>
   const channelChat = <ChatPanel channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
   const streamChannelIsOpen = !!voiceSession && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId && selectedChannel?.kind === 'voice'
   const canChangeViewedRole = !!selectedServer && selectedServer.role === 'owner' && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner'
@@ -2182,7 +2204,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   if (initialLoading) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div><span>Собираем ваши комнаты…</span></div>
 
   return (
-    <AvatarProvider api={api} token={token ?? ''}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()}>
+    <AvatarProvider api={api} token={token ?? ''} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()}>
       <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
           <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={openServerSettings} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
@@ -2257,14 +2279,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} onRename={renameChannel} onRemove={deleteChannel}/>
       <InviteUserDialog open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onSubmit={async (username) => { if (token && selectedServerId) { await api.invites.create(token, selectedServerId, username); notify('Приглашение отправлено', 'success') } }} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <InvitesDialog open={dialog === 'invites'} onClose={() => setDialog(null)} invites={invites} onRespond={respondInvite}/>
-      <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} onAvatar={async (file) => { if (!token || !user) return; if (file) await api.profile.uploadAvatar(token, file); else await api.profile.removeAvatar(token); avatarChanged(user.id) }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
+      <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} onAvatar={async (file) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
       <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>
       <StreamSettingsDialog open={dialog === 'streamSettings'} busy={streamStatus !== 'idle'} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/>
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
       {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)}/>}
       {confirmRequest && <ConfirmDialog open title={confirmRequest.title} description={confirmRequest.description} confirmLabel={confirmRequest.confirmLabel} onClose={() => setConfirmRequest(null)} onConfirm={confirmRequest.action}/>}
-      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} corsOrigins={corsOrigins} corsOriginsLoading={corsOriginsLoading} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics} onSaveCorsOrigins={saveCorsOrigins}/>
+      <ServerSettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} corsOrigins={corsOrigins} corsOriginsLoading={corsOriginsLoading} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics} onSaveCorsOrigins={saveCorsOrigins} recordingStorage={recordingStorage} onSaveRecordingQuota={saveRecordingQuota}/>
     </main></AvatarProvider>
   )
 }

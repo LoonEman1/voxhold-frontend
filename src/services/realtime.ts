@@ -53,7 +53,7 @@ interface Subscription {
 
 interface RealtimeOptions {
   onRecordingUpdated?: (record: ChannelRecording) => void
-  onAvatarUpdated?: (event: { user_id: number }) => void
+  onAvatarUpdated?: (event: { user_id: number; version?: string | null }) => void
   token: string
   baseUrl?: string
   onMessage: (message: Message) => void
@@ -306,7 +306,7 @@ export class RealtimeClient {
         } else if (payload.type === 'recording.updated' && payload.data) {
           this.options.onRecordingUpdated?.(payload.data as ChannelRecording)
         } else if (payload.type === 'avatar.updated' && payload.data) {
-          this.options.onAvatarUpdated?.(payload.data as { user_id: number })
+          this.options.onAvatarUpdated?.(payload.data as { user_id: number; version?: string | null })
         } else if (payload.type === 'message.created' && payload.data) {
           this.options.onMessage(payload.data as Message)
         } else if (payload.type === 'message.updated' && payload.data) {

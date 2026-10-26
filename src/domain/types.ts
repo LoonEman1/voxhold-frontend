@@ -15,6 +15,17 @@ export interface ChannelRecording {
   expires_at: number
 }
 
+/** Instance-wide server copy budget, managed by the instance owner. */
+export interface RecordingStorage {
+  quota_bytes: number
+  used_bytes: number
+  default_quota_bytes: number
+  min_quota_bytes: number
+  max_quota_bytes: number
+  max_file_bytes: number
+  retention_seconds: number
+}
+
 export interface User {
   id: EntityId
   username: string
@@ -157,6 +168,8 @@ export interface ServerMember {
   about: string
   country_code: string | null
   last_seen_at: number | null
+  /** ETag of the current avatar; null/absent means initials, with no request. */
+  avatar_version?: string | null
 }
 
 export interface ServerMemberChangedEvent {

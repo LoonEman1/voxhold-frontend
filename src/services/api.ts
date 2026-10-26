@@ -1,6 +1,7 @@
 import type {
   ApiErrorPayload,
   ChannelRecording,
+  RecordingStorage,
   AuthPayload,
   Channel,
   ChannelRead,
@@ -108,8 +109,9 @@ export function createApi(transport: Transport) {
         authorized(token, { path: '/api/v1/account', method: 'DELETE' }) as Promise<void>,
     },
     profile: {
-      avatar: (token: string, userId: number, signal?: AbortSignal) => authorized(token, { path: `/api/v1/users/${url(userId)}/avatar`, responseType: 'blob', cache: 'no-cache', signal }) as Promise<Blob>,
-      uploadAvatar: (token: string, file: File) => authorized(token, { path: '/api/v1/me/avatar', method: 'PUT', rawBody: file, contentType: file.type }) as Promise<void>,
+      // The version makes each URL immutable, so the HTTP cache needs no revalidation.
+      avatar: (token: string, userId: number, version: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/users/${url(userId)}/avatar?v=${url(version)}`, responseType: 'blob', signal }) as Promise<Blob>,
+      uploadAvatar: (token: string, file: File) => authorized(token, { path: '/api/v1/me/avatar', method: 'PUT', rawBody: file, contentType: file.type }) as Promise<{ etag: string }>,
       removeAvatar: (token: string) => authorized(token, { path: '/api/v1/me/avatar', method: 'DELETE' }) as Promise<void>,
       me: (token: string, signal?: AbortSignal) =>
         authorized(token, { path: '/api/v1/me/profile', signal }) as Promise<Profile>,
@@ -138,6 +140,8 @@ export function createApi(transport: Transport) {
         }) as Promise<void>,
     },
     recordings: {
+      storage: (token: string, signal?: AbortSignal) => authorized(token, { path: '/api/v1/instance/recording-storage', signal }) as Promise<RecordingStorage>,
+      setQuota: (token: string, quota_bytes: number) => authorized(token, { path: '/api/v1/instance/recording-storage', method: 'PUT', body: { quota_bytes } }) as Promise<RecordingStorage>,
       list: (token: string, serverId: number, signal?: AbortSignal) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/recordings`, signal }) as Promise<{ recordings: ChannelRecording[] }>,
       start: (token: string, serverId: number, channelId: number, mime_type: string) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/recordings`, method: 'POST', body: { mime_type } }) as Promise<ChannelRecording>,
       heartbeat: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}/heartbeat`, method: 'POST' }),

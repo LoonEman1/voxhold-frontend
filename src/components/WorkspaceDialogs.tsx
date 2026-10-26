@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { Channel, ChannelKind, CreatedInviteLink, IncomingInvite, Profile, Server, ServerRole } from '../domain/types'
+import type { Channel, ChannelKind, CreatedInviteLink, IncomingInvite, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
 import { countryByCode } from '../lib/countries'
 import { formatDate, humanError } from '../lib/format'
 import { createWebInviteURL } from '../lib/inviteLinks'
@@ -278,7 +278,12 @@ interface ServerSettingsDialogProps extends AsyncDialogProps {
   onDeleteAccount(): Promise<void>
   onDownloadDiagnostics(): Promise<void>
   onSaveCorsOrigins(origins: string[]): Promise<string[]>
+  recordingStorage?: RecordingStorage | null
+  onSaveRecordingQuota?(quotaBytes: number): Promise<void>
 }
+
+const GIB = 2 ** 30
+const gib = (bytes: number) => (bytes / GIB).toLocaleString('ru-RU', { maximumFractionDigits: 1 })
 
 export function ServerSettingsDialog({
   open,
@@ -290,9 +295,16 @@ export function ServerSettingsDialog({
   onDeleteAccount,
   onDownloadDiagnostics,
   onSaveCorsOrigins,
+  recordingStorage = null,
+  onSaveRecordingQuota,
 }: ServerSettingsDialogProps) {
   const [name, setName] = useState('')
   const [corsValue, setCorsValue] = useState('')
+  const [quotaValue, setQuotaValue] = useState('')
+  const [quotaPending, setQuotaPending] = useState(false)
+  useEffect(() => {
+    if (open && recordingStorage) setQuotaValue(String(Math.round(recordingStorage.quota_bytes / GIB)))
+  }, [open, recordingStorage])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [diagnosticsPending, setDiagnosticsPending] = useState(false)
@@ -334,10 +346,20 @@ export function ServerSettingsDialog({
       setCorsPending(false)
     }
   }
+  const saveRecordingQuota = async (event: FormEvent) => {
+    event.preventDefault()
+    if (quotaPending || !recordingStorage || !onSaveRecordingQuota) return
+    const value = Number(quotaValue)
+    const min = recordingStorage.min_quota_bytes / GIB, max = recordingStorage.max_quota_bytes / GIB
+    if (!Number.isInteger(value) || value < min || value > max) { setError(`Лимит записей — целое число от ${min} до ${max} ГБ`); return }
+    setQuotaPending(true); setError('')
+    try { await onSaveRecordingQuota(value * GIB) } catch (caught) { setError(humanError(caught)) } finally { setQuotaPending(false) }
+  }
   return (
     <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
       {owner && <form className="dialog-form settings-section" onSubmit={rename}><div><h3>Название</h3><p>Его увидят все участники пространства.</p></div><label><span>Название сервера</span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required /></label><button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button></form>}
       {owner && <form className="dialog-form settings-section" onSubmit={saveCorsOrigins}><div><h3>Доступ внешних клиентов</h3><p>Разрешите браузерным клиентам на других доменах обращаться к API и WebSocket этого инстанса.</p></div><label><span>Разрешённые origin</span><textarea rows={5} value={corsValue} onChange={(event) => setCorsValue(event.target.value)} disabled={corsOriginsLoading || corsPending} placeholder={corsOriginsLoading ? 'Загрузка…' : 'https://client.example.com\nhttp://localhost:5173'} spellCheck={false}/></label><small className="field-hint">По одному точному origin на строку: схема, домен и необязательный порт. Без пути и wildcard.</small><button className="button button--secondary align-self-end" disabled={corsOriginsLoading || corsPending}>{corsPending ? <span className="spinner"/> : 'Сохранить CORS'}</button></form>}
+      {owner && onSaveRecordingQuota && <form className="dialog-form settings-section" onSubmit={saveRecordingQuota}><div><h3>Хранилище записей</h3><p>Сколько места на сервере можно занять копиями записей звонков. Копия хранится 24 часа; файл больше 2 ГБ или сверх лимита остаётся только у записавшего.</p></div><label><span>Лимит, ГБ</span><input type="number" inputMode="numeric" step={1} min={recordingStorage ? recordingStorage.min_quota_bytes / GIB : 1} max={recordingStorage ? recordingStorage.max_quota_bytes / GIB : undefined} value={quotaValue} onChange={(event) => setQuotaValue(event.target.value)} disabled={!recordingStorage || quotaPending} placeholder={recordingStorage ? undefined : 'Загрузка…'}/></label><small className="field-hint">{recordingStorage ? `Занято ${gib(recordingStorage.used_bytes)} из ${gib(recordingStorage.quota_bytes)} ГБ · по умолчанию ${gib(recordingStorage.default_quota_bytes)} ГБ. Уменьшение не удаляет уже сохранённые копии — они исчезнут по истечении 24 часов.` : 'Загружаем текущий лимит…'}</small><button className="button button--secondary align-self-end" disabled={!recordingStorage || quotaPending}>{quotaPending ? <span className="spinner"/> : 'Сохранить лимит'}</button></form>}
       {owner && <div className="dialog-form settings-section"><div><h3>Диагностика клиентов</h3><p>HTTP, WebSocket и WebRTC-метрики автоматически хранятся на сервере 24 часа. Секреты, сообщения, SDP и ICE-адреса удаляются.</p></div><button className="button button--secondary align-self-end" type="button" disabled={diagnosticsPending} onClick={() => void downloadDiagnostics()}>{diagnosticsPending ? <span className="spinner"/> : 'Скачать JSON'}</button></div>}
       {!owner && <div className="danger-zone"><div><h3>Удалить аккаунт</h3><p>Профиль, настройки и доступ к этому инстансу будут удалены. Старые сообщения останутся обезличенными.</p></div>{confirming ? <div className="danger-confirm"><span>Удалить аккаунт без возможности восстановления?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить аккаунт'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить аккаунт</button>}</div>}
       {owner && <div className="instance-notice"><Icon name="lock"/><div><b>Владелец инстанса</b><p>Владелец не может удалить пространство или свой аккаунт из приложения.</p></div></div>}

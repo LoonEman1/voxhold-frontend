@@ -8,7 +8,6 @@ export interface TransportRequest {
   rawBody?: BodyInit
   contentType?: string
   responseType?: 'blob'
-  cache?: RequestCache
   signal?: AbortSignal
 }
 
@@ -59,7 +58,6 @@ export function createFetchTransport(baseUrl = ''): Transport {
         response = await fetch(`${normalizedBase}${path}`, {
           method,
           signal,
-          cache: request.cache,
           headers: {
             Accept: 'application/json',
             ...(rawBody !== undefined ? { 'Content-Type': request.contentType ?? 'application/octet-stream' } : body === undefined ? {} : { 'Content-Type': 'application/json' }),

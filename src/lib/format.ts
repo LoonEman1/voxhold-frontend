@@ -81,6 +81,19 @@ export function humanError(error: unknown): string {
     'server owner cannot be kicked': 'Владельца нельзя исключить из сервера',
     'cannot kick yourself': 'Нельзя исключить самого себя',
     'invalid or expired session': 'Сессия истекла. Войдите снова',
+    'recording not found': 'Запись не найдена или срок её хранения истёк',
+    'recording state changed or another recording is active': 'Состояние записи изменилось или в канале уже идёт запись',
+    'server recording storage limit reached; the local file is preserved': 'Хранилище записей на сервере заполнено; локальный файл сохранён',
+    'recording uploads are busy; try again': 'Сервер занят загрузкой других записей, попробуйте позже',
+    'recording downloads are busy; try again': 'Сервер занят выдачей других записей, попробуйте позже',
+    'recording operation failed': 'Не удалось выполнить операцию с записью',
+    'only the instance owner can manage recording storage': 'Лимит записей может менять только владелец',
+    'recording storage must be between 1 and 1024 gib': 'Лимит записей — от 1 до 1024 ГБ',
+    'use a jpeg, png, webp or gif image up to 5 mb and 16 megapixels': 'Нужно изображение JPEG, PNG, WebP или GIF до 5 МБ и 16 мегапикселей',
+    'avatar upload exceeds 5 mb': 'Максимальный размер аватара — 5 МБ',
+    'image processing is busy; try again': 'Сервер обрабатывает другие изображения, попробуйте позже',
+    'could not save avatar': 'Не удалось сохранить аватар',
+    'could not remove avatar': 'Не удалось удалить аватар',
   }
   return translations[error.message.toLowerCase()] ?? error.message
 }

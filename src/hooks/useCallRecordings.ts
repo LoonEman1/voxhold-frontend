@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { ChannelRecording } from '../domain/types'
-import type { VoxholdApi } from '../services/api'
+import { humanError } from '../lib/format'
+import { ApiError, type VoxholdApi } from '../services/api'
 import type { BrowserVoiceSession } from '../services/voice'
 import { CallRecorder, recordingMIME } from '../services/recording'
 import { downloadBlob, downloadFile, recordingFilename, RecordingStore, type LocalRecording } from '../services/recordingStore'
 
 const MAX_SERVER_BYTES = 2 ** 31
 type Voice = { serverId: number; channelId: number } | null
+// Busy upload slots (429) and dropped connections pass; quota/state errors do not.
+const transientUploadError = (error: unknown) => error instanceof ApiError && (error.status === 0 || error.status === 429 || error.status === 502 || error.status === 503 || error.status === 504)
+const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
+  const timer = window.setTimeout(resolve, ms)
+  signal.addEventListener('abort', () => { window.clearTimeout(timer); resolve() }, { once: true })
+})
+function startError(error: unknown) {
+  if (error instanceof ApiError && error.status === 404) return 'Подключитесь к голосовому каналу, чтобы начать запись'
+  if (error instanceof ApiError && error.status === 409) return 'В этом канале уже идёт запись'
+  return humanError(error)
+}
 export function useCallRecordings({ api, token, scope, serverId, voice, voiceMedia, stream, notify, mediaVersion }: {
   api: VoxholdApi; token: string | null; scope: string; serverId: number | null; voice: Voice
   voiceMedia: RefObject<BrowserVoiceSession | null>; stream: MediaStream | null
@@ -27,6 +39,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   const credentials = useRef(token); credentials.current = token
   const latestStream = useRef(stream); latestStream.current = stream
   const latestVoice = useRef(voice); latestVoice.current = voice
+  const latestRecords = useRef(records); latestRecords.current = records
   const uploadAbort = useRef<AbortController | null>(null)
   const starting = useRef(false)
   const merge = useCallback((record: ChannelRecording) => setRecords((current) => {
@@ -48,18 +61,20 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
     try {
       const local = await running.stop()
       if (local.error) { retained.current.set(record.id, running); volatileLocals.current.set(record.id, local) }
+      const empty = !local.bytes && !local.error
       const currentToken = credentials.current
       if (currentToken) {
         try {
-          merge(await api.recordings.stop(currentToken, record.id, local.bytes, local.duration, !!local.error || local.bytes > MAX_SERVER_BYTES))
+          merge(await api.recordings.stop(currentToken, record.id, local.bytes, local.duration, empty || !!local.error || local.bytes > MAX_SERVER_BYTES))
         } catch (error) {
           // Release the active indicator even when the server quota is full.
           try { merge(await api.recordings.stop(currentToken, record.id, 0, local.duration, true)) } catch { /* Lease clears stale indicators after disconnect. */ }
-          notify(error instanceof Error ? error.message : 'Серверная копия недоступна; локальный файл сохранён', 'error')
+          if (!empty) notify(humanError(error), 'error')
         }
       }
       await refreshLocal()
-      notify('Запись завершена. Файл передан в загрузки браузера.', 'success')
+      if (empty) notify('Запись остановлена до появления данных — файл не создан', 'error')
+      else notify('Запись завершена. Файл передан в загрузки браузера.', 'success')
     } finally { setActiveId(null); setBusy(false) }
   }, [api, merge, notify, refreshLocal])
   const stopRef = useRef(stop); stopRef.current = stop
@@ -132,8 +147,10 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
     } catch (error) {
       running?.dispose()
       if (!running && audio) void audio.close().catch(() => undefined)
+      // CallRecorder.start persists metadata before resuming audio; drop that empty entry.
+      if (running && record) await store.current?.remove(record.id).catch(() => undefined)
       if (record) try { merge(await api.recordings.stop(currentToken, record.id, 0, 0, true)) } catch { /* TTL lease. */ }
-      notify(error instanceof Error ? error.message : 'Не удалось начать запись', 'error')
+      notify(startError(error), 'error')
     } finally { starting.current = false; setBusy(false) }
   }
   // The upload can be paused by joining a call; the next attempt reads the server offset.
@@ -146,7 +163,8 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
       for (const local of locals) {
         if (controller.signal.aborted) break
         if (!local.finished || local.error || !local.bytes || local.bytes > MAX_SERVER_BYTES || local.record.expires_at * 1000 <= Date.now()) continue
-        if (records[local.record.id]?.status === 'ready') continue
+        // The local status survives reloads and covers servers whose list is not loaded.
+        if (local.record.status === 'ready' || latestRecords.current[local.record.id]?.status === 'ready') continue
         try {
           setProgress((value) => ({ ...value, [local.record.id]: 0 }))
           const currentToken = credentials.current
@@ -156,24 +174,35 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
           const blob = await opened.blob(local)
           let { offset } = await api.recordings.offset(currentToken, record.id, controller.signal)
           if (offset < 0 || offset > blob.size) throw new Error('Неверная позиция загрузки')
+          let failures = 0
           while (offset < blob.size) {
             if (controller.signal.aborted) return
             const chunk = blob.slice(offset, offset + (256 << 10))
-            const next = await api.recordings.append(currentToken, record.id, offset, chunk, controller.signal)
-            if (next.offset !== offset + chunk.size) throw new Error('Позиция загрузки изменилась; повторите загрузку')
-            offset = next.offset; setProgress((value) => ({ ...value, [record.id]: Math.round(offset / blob.size * 100) }))
+            try {
+              const next = await api.recordings.append(currentToken, record.id, offset, chunk, controller.signal)
+              if (next.offset !== offset + chunk.size) throw new Error('Позиция загрузки изменилась; повторите загрузку')
+              offset = next.offset; failures = 0
+              setProgress((value) => ({ ...value, [record.id]: Math.round(offset / blob.size * 100) }))
+            } catch (error) {
+              if (controller.signal.aborted || !transientUploadError(error) || ++failures > 5) throw error
+              await pause(1000 * 2 ** failures, controller.signal)
+              // A dropped response may still have been written: resume from the server's offset.
+              offset = (await api.recordings.offset(currentToken, record.id, controller.signal)).offset
+            }
           }
-          if (!controller.signal.aborted) merge(await api.recordings.complete(currentToken, record.id))
+          if (controller.signal.aborted) return
+          const completed = await api.recordings.complete(currentToken, record.id)
+          merge(completed)
+          await opened.save({ ...local, record: completed }).catch(() => undefined)
           setProgress((value) => ({ ...value, [record.id]: 'Сохранено на сервере' }))
         } catch (error) {
           if (controller.signal.aborted) break
-          setProgress((value) => ({ ...value, [local.record.id]: error instanceof Error ? error.message : 'Не удалось загрузить копию' }))
+          setProgress((value) => ({ ...value, [local.record.id]: humanError(error) }))
         }
       }
     })()
     return () => controller.abort()
-    // Server events/progress must not restart the sequential queue mid-chunk.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Server events/progress are read through refs so they never restart the queue mid-chunk.
   }, [voiceActive, scope, token, locals, retry, api, merge])
   const download = async (record: ChannelRecording) => {
     try {
@@ -182,7 +211,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
       if (held) await held.download()
       else if (saved && store.current) downloadBlob(await store.current.blob(saved), record)
       else if (credentials.current) downloadFile(await api.recordings.download(credentials.current, record.id), recordingFilename(record))
-    } catch (error) { notify(error instanceof Error ? error.message : 'Не удалось скачать запись', 'error') }
+    } catch (error) { notify(humanError(error), 'error') }
   }
   const removeLocal = async (id: string) => {
     if (recorder.current && activeId === id) return
