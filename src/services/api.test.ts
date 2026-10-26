@@ -8,6 +8,12 @@ function mockTransport(response: TransportResponse<unknown>) {
 }
 
 describe('Voxhold API client', () => {
+  it('uploads the original avatar with selected crop coordinates', async () => {
+    const { api, request } = mockTransport({ status: 200, data: { etag: 'new-version' } })
+    const file = new Blob(['original'], { type: 'image/png' }) as File
+    await api.profile.uploadAvatar('session', file, { x: 120, y: 80, size: 300 })
+    expect(request).toHaveBeenCalledWith({ token: 'session', path: '/api/v1/me/avatar?crop_x=120&crop_y=80&crop_size=300', method: 'PUT', rawBody: file, contentType: 'image/png' })
+  })
   it('discovers a backend instance without authentication', async () => {
     const payload = {
       instance_id: '0123456789abcdef0123456789abcdef',

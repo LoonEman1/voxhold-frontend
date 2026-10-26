@@ -5,6 +5,8 @@ import { formatDate, humanError } from '../lib/format'
 import { createWebInviteURL } from '../lib/inviteLinks'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
+import { AvatarEditor } from './AvatarEditor'
+import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
@@ -180,25 +182,25 @@ export function InvitesDialog({ open, onClose, invites, onRespond }: AsyncDialog
   )
 }
 
-export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar }: AsyncDialogProps & { profile: Profile | null; onAvatar?: (file: File | null) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false }: AsyncDialogProps & { profile: Profile | null; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const [about, setAbout] = useState('')
   const [country, setCountry] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [avatarPending, setAvatarPending] = useState(false)
   useEffect(() => { if (open) { setAbout(profile?.about ?? ''); setCountry(profile?.country_code ?? ''); setError('') } }, [open, profile])
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); setPending(true); setError('')
+    event.preventDefault(); if (pending || avatarPending) return; setPending(true); setError('')
     try { await onSubmit({ about: about.trim(), country_code: country }); onClose() } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
   }
   return (
     <Modal open={open} onClose={onClose} title="Ваш профиль" eyebrow="КАК ВАС ВИДЯТ ДРУГИЕ" size="medium">
-      <div className="profile-hero"><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></div>
-      {onAvatar && <div className="avatar-editor"><label className="button button--secondary">Загрузить аватар<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" disabled={pending} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; if (file.size > 5 * 1024 * 1024) { setError('Максимальный размер аватара — 5 МБ'); return } setPending(true); setError(''); void onAvatar(file).catch((caught) => setError(humanError(caught))).finally(() => setPending(false)) }}/></label><button className="button button--ghost" disabled={pending} onClick={() => { setPending(true); setError(''); void onAvatar(null).catch((caught) => setError(humanError(caught))).finally(() => setPending(false)) }}>Удалить</button><small>Квадратное кадрирование · 256×256 · JPEG, PNG, WebP, GIF до 5 МБ</small></div>}
+      <div className="profile-hero">{onAvatar ? open && <AvatarEditor key={profile?.user_id} userId={profile?.user_id} name={profile?.username ?? 'V'} hasAvatar={hasAvatar} disabled={pending} onSave={onAvatar} onBusyChange={setAvatarPending}><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></AvatarEditor> : <><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></>}</div>
       <form className="dialog-form" onSubmit={submit}>
         <label><span>О себе <small>{about.length}/512</small></span><textarea value={about} onChange={(e) => setAbout(e.target.value)} maxLength={512} rows={4} placeholder="Пара слов о себе, интересах или текущем проекте…" /></label>
         <label><span>Страна проживания</span><CountrySelect value={country} onChange={setCountry} /></label>
         {error && <div className="form-error" role="alert">{error}</div>}
-        <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
+        <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending || avatarPending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
       </form>
     </Modal>
   )
@@ -237,7 +239,6 @@ export function MemberProfileDialog({ open, onClose, profile, role, loading, err
           {canBan && <div className="member-kick-control">{confirmKick ? <><span>Забанить аккаунт {profile.username} на всём инстансе?</span><button className="button button--danger button--small" onClick={() => void ban()} disabled={pending}>{pending ? <span className="spinner"/> : 'Забанить'}</button><button className="button button--ghost button--small" onClick={() => setConfirmKick(false)} disabled={pending}>Отмена</button></> : <button className="button button--danger-outline button--small" onClick={() => setConfirmKick(true)}>Забанить аккаунт</button>}</div>}
           {manageError && <div className="form-error" role="alert">{manageError}</div>}
         </section>}
-        <div className="avatar-roadmap"><Icon name="sparkles" size={15}/><span>Здесь предусмотрено место под загружаемый аватар, когда backend добавит файловое хранилище.</span></div>
       </div>}
     </Modal>
   )

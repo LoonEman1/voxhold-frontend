@@ -69,6 +69,8 @@ jobs:
         run: npm ci
       - name: Test media, chat and recording regressions
         run: npm run test:e2e:performance
+      - name: Test themes, recording UI and avatar crop
+        run: npm run test:e2e:ui
 
   container:
     name: Build Docker image

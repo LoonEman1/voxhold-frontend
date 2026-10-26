@@ -27,6 +27,7 @@ import type {
 } from '../domain/types'
 import type { Transport, TransportRequest } from '../platform/transport'
 import { notifyUnauthorized } from './authEvents'
+import type { AvatarCrop } from '../lib/avatarCrop'
 
 export class ApiError extends Error {
   constructor(
@@ -111,7 +112,7 @@ export function createApi(transport: Transport) {
     profile: {
       // The version makes each URL immutable, so the HTTP cache needs no revalidation.
       avatar: (token: string, userId: number, version: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/users/${url(userId)}/avatar?v=${url(version)}`, responseType: 'blob', signal }) as Promise<Blob>,
-      uploadAvatar: (token: string, file: File) => authorized(token, { path: '/api/v1/me/avatar', method: 'PUT', rawBody: file, contentType: file.type }) as Promise<{ etag: string }>,
+      uploadAvatar: (token: string, file: File, crop?: AvatarCrop) => authorized(token, { path: `/api/v1/me/avatar${crop ? `?crop_x=${crop.x}&crop_y=${crop.y}&crop_size=${crop.size}` : ''}`, method: 'PUT', rawBody: file, contentType: file.type }) as Promise<{ etag: string }>,
       removeAvatar: (token: string) => authorized(token, { path: '/api/v1/me/avatar', method: 'DELETE' }) as Promise<void>,
       me: (token: string, signal?: AbortSignal) =>
         authorized(token, { path: '/api/v1/me/profile', signal }) as Promise<Profile>,

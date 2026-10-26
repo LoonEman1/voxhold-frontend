@@ -8,8 +8,8 @@ export function CallControls({ selfMute, selfDeaf, recording, recordBusy, canRec
     <button className={selfMute ? 'is-muted' : ''} disabled={connecting} onClick={onMute} title={selfMute ? 'Включить микрофон' : 'Выключить микрофон'} aria-label={selfMute ? 'Включить микрофон' : 'Выключить микрофон'}><Icon name={selfMute ? 'micOff' : 'mic'}/></button>
     <button className={selfDeaf ? 'is-muted' : ''} disabled={connecting} onClick={onDeaf} title={selfDeaf ? 'Включить звук' : 'Выключить звук'} aria-label={selfDeaf ? 'Включить звук' : 'Выключить звук'}><Icon name={selfDeaf ? 'headphonesOff' : 'headphones'}/></button>
     {canShare && <button onClick={onShare} title="Поделиться экраном" aria-label="Поделиться экраном"><Icon name="monitor"/></button>}
-    <button className={recording ? 'is-recording' : ''} disabled={recordBusy || !canRecord} onClick={onRecord} title={recording ? 'Остановить запись и скачать' : 'Записать экран и голоса · 720p'} aria-label={recording ? 'Остановить запись и скачать' : 'Начать запись'}><span className={`record-dot ${recording ? 'is-active' : ''}`}/></button>
-    <button onClick={onRecordings} title="Скачать записи" aria-label="Скачать записи"><Icon name="inbox"/></button>
+    <button className={recording ? 'is-recording' : ''} disabled={recordBusy || !canRecord} onClick={onRecord} aria-pressed={recording} title={recording ? 'Остановить запись и скачать' : 'Записать экран и голоса · 720p'} aria-label={recording ? 'Остановить запись и скачать' : 'Начать запись'}><span className={`record-dot ${recording ? 'is-active' : ''}`}/></button>
+    <button onClick={onRecordings} title="Список записей" aria-label="Список записей"><Icon name="inbox"/></button>
     <button className={chatOpen ? 'is-active' : ''} onClick={onChat} title="Чат канала" aria-label="Чат канала" aria-pressed={chatOpen}><Icon name="message"/></button>
     <button className="is-leave" onClick={onLeave} title="Отключиться" aria-label="Отключиться от звонка"><Icon name="logout"/></button>
   </div>

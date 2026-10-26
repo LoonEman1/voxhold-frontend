@@ -3,6 +3,7 @@ import type { SVGProps } from 'react'
 export type IconName =
   | 'add'
   | 'bell'
+  | 'camera'
   | 'check'
   | 'chevron'
   | 'close'
@@ -39,6 +40,7 @@ export type IconName =
 
 const paths: Record<IconName, React.ReactNode> = {
   add: <path d="M12 5v14M5 12h14" />,
+  camera: <><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="4"/></>,
   bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
   check: <path d="m5 12 4 4L19 6" />,
   chevron: <path d="m9 18 6-6-6-6" />,
