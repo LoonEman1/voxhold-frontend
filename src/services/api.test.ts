@@ -8,6 +8,11 @@ function mockTransport(response: TransportResponse<unknown>) {
 }
 
 describe('Voxhold API client', () => {
+  it('removes a server recording without deleting local browser data', async () => {
+    const { api, request } = mockTransport({ status: 200, data: { id: 'record', status: 'deleted' } })
+    await api.recordings.remove('session', 'record')
+    expect(request).toHaveBeenLastCalledWith({ token: 'session', path: '/api/v1/recordings/record', method: 'DELETE' })
+  })
   it('uploads and privately reads recording previews', async () => {
     const { api, request } = mockTransport({ status: 200, data: {} })
     const image = new Blob(['jpeg'], { type: 'image/jpeg' })

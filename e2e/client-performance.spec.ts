@@ -190,7 +190,35 @@ test('call controls stop and download, defer the server copy during a call, then
     const { RecordingStore } = await import('/src/services/recordingStore.ts'); const store = await RecordingStore.open('calls-fixture')
     try { return (await store.list()).length } finally { store.close() }
   })).toBe(0)
+  await page.getByRole('button', { name: 'Удалить с сервера', exact: true }).click()
+  await expect(page.getByText(/Удалить видео и превью с сервера/)).toBeVisible()
+  await page.getByRole('button', { name: 'Удалить запись с сервера', exact: true }).click()
+  await expect(page.locator('.recordings-list article')).toHaveCount(0)
+  await expect(page.locator('#ready')).toHaveText('0')
   expect(pageErrors).toEqual([])
+})
+
+test('server deletion preserves the local video and persists the marker across reloads', async ({ page }) => {
+  await page.goto('/e2e/fixtures/calls.html')
+  await page.getByRole('button', { name: 'Начать запись', exact: true }).click()
+  await page.waitForTimeout(2300)
+  const automatic = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Остановить запись и скачать', exact: true }).click(); await automatic
+  await page.getByRole('button', { name: 'Отключиться от звонка', exact: true }).click()
+  await expect(page.locator('#ready')).toHaveText('1')
+  await page.getByRole('button', { name: 'Записи', exact: true }).click()
+  await page.getByRole('button', { name: 'Удалить с сервера', exact: true }).click()
+  await page.getByRole('button', { name: 'Удалить запись с сервера', exact: true }).click()
+  await expect(page.getByText('В этом браузере · серверная копия недоступна')).toBeVisible()
+  const local = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Скачать', exact: true }).click(); await local
+  await page.reload()
+  await page.getByRole('button', { name: 'Записи', exact: true }).click()
+  await expect(page.getByText('В этом браузере · серверная копия недоступна')).toBeVisible()
+  expect(await page.evaluate(async () => {
+    const { RecordingStore } = await import('/src/services/recordingStore.ts'); const store = await RecordingStore.open('calls-fixture')
+    try { const locals = await store.list(); return locals.length === 1 && locals[0]?.record.status === 'deleted' && locals[0].bytes > 0 } finally { store.close() }
+  })).toBe(true)
 })
 
 test('storage exhaustion stops recording, downloads the recoverable file and preserves manual retry in this tab', async ({ page }) => {

@@ -27,6 +27,11 @@ function Fixture() {
   const offsets = useRef(new Map<string, number>())
   const api = useRef({ recordings: {
     list: async () => ({ recordings: Array.from(remoteRecords.current.values()) }),
+    get: async (_token: string, id: string) => remoteRecords.current.get(id)!,
+    remove: async (_token: string, id: string) => {
+      const record = { ...remoteRecords.current.get(id)!, status: 'deleted' as const, updated_at: Date.now()+2, preview_version: undefined }
+      remoteRecords.current.delete(id); previews.current.delete(id); setReady((value) => value-1); return record
+    },
     preview: async (_token: string, id: string) => previews.current.get(id)!,
     uploadPreview: async (_token: string, id: string, image: Blob) => {
       previews.current.set(id,image)
@@ -73,7 +78,7 @@ function Fixture() {
   return <main style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
     <header style={{ display: 'flex', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid #ffffff14' }}><b>🔊 {channel.name}</b><span>Серверных копий: <output id="ready">{ready}</output></span><button onClick={() => setList(true)}>Записи</button></header>
     <VoicePanel channel={channel} activeChannel={voice ? channel : null} participants={members.map((member) => ({ connection_id: String(member.user_id), user_id: member.user_id, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false, joined_at: 0 }))} members={members} currentUserId={1} speakingUserIds={[2]} connectionStatus={voice ? 'connected' : 'idle'} realtimeOnline selfMute={mute} selfDeaf={deaf} error="" onJoin={async () => setVoice({ serverId: 1, channelId: 1 })} onLeave={() => setVoice(null)} onToggleMute={() => setMute(!mute)} onToggleDeaf={() => setDeaf(!deaf)} onOpenProfile={() => {}} stream={{ channel_id: 1, publisher_user_id: 1, viewer_count: 4, mode: 'server', codec: 'h264', has_audio: false, server_id: 1, publisher_connection_id: '1', started_at_ms: Date.now() }} streamStatus="connected" streamError="" streamMedia={media} streamPreferences={DEFAULT_STREAM_PREFERENCES} onStreamPreferencesChange={() => {}} onOpenStreamSettings={() => {}} onWatchStream={() => {}} onLeaveStream={() => {}} onExpandStream={() => {}} controls={controls} recordingLabel={recording.activeId ? 'Александр' : undefined} chat={chat ? <aside className="voice-channel-chat"><header><b>Чат канала</b></header><ChatPanel channel={channel} messages={[{ id: 1, channel_id: 1, author: { user_id: 2, username: 'Мария' }, content: 'Всё слышно. Давайте запишем встречу.', created_at: Date.now() / 1000, edited_at: null }]} loading={false} loadingOlder={false} hasMore={false} currentUserId={1} canManage members={members} pinnedMessageIds={new Set()} channelReads={{}} onLoadOlder={done} onLoadNewer={done} onReturnToLatest={done} onReadThrough={() => {}} loadingNewer={false} hasNewer={false} focusedMessageId={null} onSend={done} onEdit={done} onDelete={done} onTogglePin={done} onOpenProfile={() => {}}/></aside> : null}/>
-    <RecordingsDialog open={list} onClose={() => setList(false)} records={recording.records} locals={recording.locals} serverId={1} progress={recording.progress} voiceActive={!!voice} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview}/>
+    <RecordingsDialog open={list} onClose={() => setList(false)} records={recording.records} locals={recording.locals} serverId={1} progress={recording.progress} voiceActive={!!voice} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview} currentUserId={1} onRemoveServer={recording.removeServer}/>
     <output id="notifications" style={{ position: 'fixed', left: 10, bottom: 2, fontSize: 10 }}>{notifications.join(' · ')}</output>
   </main>
 }

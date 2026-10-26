@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Channel, ChannelRecording } from '../domain/types'
 import { formatDuration, humanError } from '../lib/format'
 import type { LocalRecording } from '../services/recordingStore'
@@ -8,6 +8,7 @@ import { RecordingPreview, type PreviewLoader } from './RecordingPreview'
 
 function recordState(record: ChannelRecording, local: LocalRecording | undefined, size: number, progress: number | string | undefined) {
   const now = Date.now()
+  if (record.status === 'deleted') return 'В этом браузере · серверная копия недоступна'
   if (record.status === 'recording' && record.expires_at * 1000 > now && !local?.finished) return 'Идёт запись'
   if (record.status === 'ready' && record.expires_at * 1000 > now) return `На сервере до ${new Date(record.expires_at * 1000).toLocaleString()}`
   if (!local) return record.status === 'uploading' ? 'Загружается на сервер' : 'Серверная копия недоступна'
@@ -19,16 +20,20 @@ function recordState(record: ChannelRecording, local: LocalRecording | undefined
   return progress ?? 'В этом браузере · ожидает загрузки'
 }
 
-export function RecordingsDialog({ open, onClose, records, locals, serverId, progress, voiceActive, onDownload, onRemoveLocal, onRetry, loadPreview, channels = [] }: {
+export function RecordingsDialog({ open, onClose, records, locals, serverId, progress, voiceActive, onDownload, onRemoveLocal, onRetry, onRemoveServer, currentUserId, loadPreview, channels = [] }: {
   open: boolean; onClose: () => void; records: ChannelRecording[]; locals: LocalRecording[]; serverId: number | null
   progress: Record<string, number | string>; voiceActive: boolean
   onDownload: (record: ChannelRecording) => Promise<void>; onRemoveLocal: (id: string) => Promise<void>; onRetry: () => void
   channels?: Channel[]
   loadPreview?: PreviewLoader
+  currentUserId?: number
+  onRemoveServer?: (record: ChannelRecording) => Promise<void>
 }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [confirmServerRemove, setConfirmServerRemove] = useState<string | null>(null)
   const [error, setError] = useState('')
+  useEffect(() => { if (!open) { setConfirmRemove(null); setConfirmServerRemove(null) } }, [open])
   const run = async (id: string, action: () => Promise<void>) => {
     setBusy(id); setError('')
     try { await action() } catch (caught) { setError(humanError(caught)) } finally { setBusy(null) }
@@ -52,6 +57,7 @@ export function RecordingsDialog({ open, onClose, records, locals, serverId, pro
       // Interrupted entries without data must stay removable too.
       const removable = !!local && (local.finished || !live)
       const percent = progress[record.id]
+      const canRemoveServer = !!onRemoveServer && record.owner_user_id === currentUserId && !live && (record.status === 'ready' || record.status === 'uploading') && record.expires_at * 1000 > Date.now()
       return <article key={record.id} className="recordings-row">
         <RecordingPreview record={record} load={loadPreview} localReady={!!local?.finished}/>
         <div className="recordings-row__details">
@@ -60,6 +66,7 @@ export function RecordingsDialog({ open, onClose, records, locals, serverId, pro
         <small className={`recordings-row__status${live ? ' is-live' : ''}`}>{live && <i className="record-dot is-active"/>}{recordState(record, local, size, percent)}</small>
         {typeof percent === 'number' && !serverReady && <progress className="recordings-row__progress" max={100} value={percent} aria-label="Загрузка записи на сервер"/>}
         <div className="recordings-row__actions"><button className="button button--secondary button--small" disabled={!available || busy !== null} onClick={() => void run(record.id, () => onDownload(record))}>{busy === record.id ? 'Подождите…' : partial ? 'Скачать часть' : 'Скачать'}</button>{removable && <button className="button button--ghost button--small" disabled={busy !== null} title="Удалить только копию в этом браузере" onClick={() => { if (!serverReady && confirmRemove !== record.id) { setConfirmRemove(record.id); return } setConfirmRemove(null); void run(record.id, () => onRemoveLocal(record.id)) }}>{confirmRemove === record.id ? 'Удалить единственную копию?' : 'Удалить локальную'}</button>}{confirmRemove === record.id && <button className="button button--ghost button--small" onClick={() => setConfirmRemove(null)}>Отмена</button>}</div>
+        {canRemoveServer && (confirmServerRemove === record.id ? <div className="recordings-row__delete-confirm"><p>Удалить видео и превью с сервера для всех участников? Локальные копии в браузерах останутся.</p><div><button className="button button--danger-outline button--small" disabled={busy !== null} onClick={() => void run(record.id, async () => { await onRemoveServer!(record); setConfirmServerRemove(null) })}>Удалить запись с сервера</button><button className="button button--ghost button--small" disabled={busy !== null} onClick={() => setConfirmServerRemove(null)}>Отмена</button></div></div> : <button className="recordings-row__remove-server" disabled={busy !== null} onClick={() => { setConfirmRemove(null); setConfirmServerRemove(record.id) }}><Icon name="trash" size={13}/>Удалить с сервера</button>)}
         </div>
       </article>
     }) : <div className="recordings-empty"><Icon name="inbox" size={28}/><b>Записей пока нет</b><p>Начните запись кнопкой с кружком в панели звонка.</p></div>}</div>

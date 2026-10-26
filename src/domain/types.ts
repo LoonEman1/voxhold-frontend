@@ -6,7 +6,7 @@ export interface ChannelRecording {
   channel_id: number
   owner_user_id: number
   owner_username: string
-  status: 'recording' | 'uploading' | 'ready' | 'local_only' | 'failed'
+  status: 'recording' | 'uploading' | 'ready' | 'local_only' | 'failed' | 'deleted'
   mime_type: 'video/webm' | 'video/mp4'
   size_bytes: number
   duration_ms: number

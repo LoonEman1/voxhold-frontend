@@ -13,6 +13,17 @@ const local = (value: ChannelRecording, patch: Partial<LocalRecording> = {}): Lo
 const renderDialog = (records: ChannelRecording[], locals: LocalRecording[], onRemoveLocal = vi.fn(async () => undefined)) => render(<RecordingsDialog open onClose={vi.fn()} records={records} locals={locals} serverId={1} progress={{}} voiceActive={false} onDownload={vi.fn(async () => undefined)} onRemoveLocal={onRemoveLocal} onRetry={vi.fn()}/>)
 
 describe('recordings list', () => {
+  it('restricts server removal to the recorder and requires a separate confirmation', () => {
+    const value = record('owner-record'), remove = vi.fn(async () => undefined)
+    const view = render(<RecordingsDialog open onClose={vi.fn()} records={[value]} locals={[]} serverId={1} progress={{}} voiceActive={false} currentUserId={3} onDownload={vi.fn(async () => undefined)} onRemoveLocal={vi.fn(async () => undefined)} onRetry={vi.fn()} onRemoveServer={remove}/> )
+    expect(screen.queryByRole('button', { name: 'Удалить с сервера' })).toBeNull()
+    view.rerender(<RecordingsDialog open onClose={vi.fn()} records={[value]} locals={[]} serverId={1} progress={{}} voiceActive={false} currentUserId={2} onDownload={vi.fn(async () => undefined)} onRemoveLocal={vi.fn(async () => undefined)} onRetry={vi.fn()} onRemoveServer={remove}/> )
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить с сервера' }))
+    expect(remove).not.toHaveBeenCalled()
+    expect(screen.getByText(/Удалить видео и превью/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить запись с сервера' }))
+    expect(remove).toHaveBeenCalledWith(value)
+  })
   it('hides other members\' records that have nothing to download', () => {
     renderDialog([record('a'.repeat(32), { status: 'local_only' }), record('b'.repeat(32), { status: 'uploading' })], [])
     expect(screen.getAllByRole('article')).toHaveLength(1)

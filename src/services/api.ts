@@ -141,6 +141,8 @@ export function createApi(transport: Transport) {
         }) as Promise<void>,
     },
     recordings: {
+      get: (token: string, id: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}`, signal }) as Promise<ChannelRecording>,
+      remove: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}`, method: 'DELETE' }) as Promise<ChannelRecording>,
       storage: (token: string, signal?: AbortSignal) => authorized(token, { path: '/api/v1/instance/recording-storage', signal }) as Promise<RecordingStorage>,
       setQuota: (token: string, quota_bytes: number) => authorized(token, { path: '/api/v1/instance/recording-storage', method: 'PUT', body: { quota_bytes } }) as Promise<RecordingStorage>,
       list: (token: string, serverId: number, signal?: AbortSignal) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/recordings`, signal }) as Promise<{ recordings: ChannelRecording[] }>,
