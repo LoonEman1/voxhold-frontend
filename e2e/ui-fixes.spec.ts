@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openCallWorkspace(page: Page) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -14,15 +14,16 @@ async function openCallWorkspace(page: Page) {
     }
   })
   const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
+  const participants = options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
     socket.onMessage((raw) => {
       const event = JSON.parse(String(raw))
       if (event.type === 'auth') {
         socket.send(JSON.stringify({ type: 'ready', data: { user_id: 1, protocol_version: 6 } }))
-        socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: [1] }] } }))
-        socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants: [participant] } }))
+        socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: participants.map((item) => item.user_id) }] } }))
+        socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants } }))
       }
-      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants: [participant] } }))
+      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } }))
       if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
     })
   })
@@ -36,14 +37,61 @@ async function openCallWorkspace(page: Page) {
     else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: null }))
     else if (path.endsWith('/recordings')) json = { recordings: [] }
     else if (path.endsWith('/pins')) json = []
+    else if (path.endsWith('/messages/sync')) json = { messages: [], deleted_ids: [], cursor: 0, reset: true, has_more: false, has_older: false }
     else if (path.endsWith('/messages')) json = { messages: [], pagination: { has_more: false, next_before_id: null } }
     else if (path.endsWith('/invite-links')) json = { token: 'fixture-invite', expires_at: 9999999999, max_uses: 25, allow_registration: true }
     else if (path.endsWith('/webrtc/config')) json = { ice_servers: [], ice_transport_policy: 'all' }
     await route.fulfill({ json })
   })
   await page.goto('/')
-  await expect(page.locator('.voice-participant')).toBeVisible()
+  await expect(page.locator('.voice-participant')).toHaveCount(participants.length)
 }
+
+test('participant volume updates in an open menu and the same menu opens on room cards', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await openCallWorkspace(page, { withPeers: true })
+  const menu = page.getByRole('menu')
+  const slider = menu.getByRole('slider', { name: 'Громкость пользователя' })
+  const sidebarMaria = page.locator('.channel-voice-users button').filter({ hasText: 'Мария' })
+  const mariaCard = page.locator('.voice-participant').filter({ hasText: 'Мария' })
+
+  await sidebarMaria.click({ button: 'right' })
+  await expect(slider).toHaveValue('100')
+  await slider.press('Home')
+  await expect(slider).toHaveValue('0')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('0%')
+  await slider.press('End')
+  await expect(slider).toHaveValue('200')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('200%')
+  await slider.press('ArrowLeft')
+  await expect(slider).toHaveValue('195')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('195%')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('voxhold.voice.userVolumes.v1') ?? '{}')['2'])).toBe(195)
+
+  await page.keyboard.press('Escape')
+  await mariaCard.click({ button: 'right' })
+  await expect(menu.locator('.context-menu__title')).toHaveText('Мария')
+  await expect(slider).toHaveValue('195')
+  await expect(menu.getByRole('menuitem', { name: 'Просмотреть профиль' })).toBeVisible()
+  await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await slider.press('ArrowLeft')
+  await expect(slider).toHaveValue('190')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('190%')
+
+  await page.locator('.voice-participant').filter({ hasText: 'ОченьДлинноеИмяУчастника' }).click({ button: 'right' })
+  await expect(slider).toHaveValue('100')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('100%')
+  await mariaCard.click({ button: 'right' })
+  await expect(slider).toHaveValue('190')
+  await page.locator('.voice-participant').filter({ hasText: 'Александр' }).click({ button: 'right' })
+  await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toHaveCount(0)
+  expect(errors).toEqual([])
+})
 
 test('call tiles, registration links and docked pins work in the real workspace', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 })
