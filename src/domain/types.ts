@@ -383,6 +383,23 @@ export interface CreatedInviteLink extends InviteLinkPreview {
   created_at: number
 }
 
+export interface ActiveInviteLink {
+  id: EntityId
+  server_id: EntityId
+  created_by: EntityId
+  creator_username: string
+  expires_at: number
+  max_uses: number | null
+  use_count: number
+  allow_registration: boolean
+  created_at: number
+}
+
+export interface InviteLinkPage {
+  invite_links: ActiveInviteLink[]
+  pagination: { next_before_id: number | null; has_more: boolean }
+}
+
 export interface ApiErrorPayload {
   error?: string
 }

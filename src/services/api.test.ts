@@ -149,6 +149,15 @@ describe('Voxhold API client', () => {
     })
   })
 
+  it('lists and revokes managed invite links with authorization and a cursor', async () => {
+    const { api, request } = mockTransport({ status: 204, data: null })
+    const signal = new AbortController().signal
+    await api.inviteLinks.list('session', 4, 23, signal)
+    await api.inviteLinks.revoke('session', 4, 23)
+    expect(request).toHaveBeenNthCalledWith(1, { token: 'session', path: '/api/v1/servers/4/invite-links?limit=50&before_id=23', signal })
+    expect(request).toHaveBeenNthCalledWith(2, { token: 'session', path: '/api/v1/servers/4/invite-links/23', method: 'DELETE' })
+  })
+
   it('builds cursor pagination and authorization', async () => {
     const { api, request } = mockTransport({
       status: 200,

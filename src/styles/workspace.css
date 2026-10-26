@@ -587,3 +587,19 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .message-pending--failed { opacity: 1; }
 .message-pending button { color: var(--cyan); background: none; border: 0; cursor: pointer; }
 .members-sidebar__scroll .member-group { margin: 0; padding: 12px 0 8px; }
+
+.invite-dialog__tabs { margin-bottom: 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.invite-links { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.invite-links__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.invite-links__heading p, .invite-links__note, .invite-links__empty { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.invite-links__list { display: flex; flex-direction: column; gap: 12px; max-height: min(52vh, 440px); overflow-y: auto; }
+.invite-links__row { flex-shrink: 0; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.invite-links__row > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.invite-links__row > header b { color: var(--text); font-size: 14px; }
+.invite-links__row > header span { color: var(--muted); font-size: 11px; }
+.invite-links__row dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.invite-links__row dt { color: var(--muted); font-size: 11px; }
+.invite-links__row dd { margin: 3px 0 0; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.invite-links__confirm p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.invite-links__confirm > div { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 480px) { .invite-links__row dl { grid-template-columns: 1fr; } .invite-links__heading { align-items: flex-start; } }

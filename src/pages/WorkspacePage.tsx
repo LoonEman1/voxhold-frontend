@@ -1994,6 +1994,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }, { volume: true })
   }
 
+  const listInviteLinks = useCallback((beforeId?: number, signal?: AbortSignal) => {
+    if (!token || !selectedServerId) throw new Error('Сервер не выбран')
+    return api.inviteLinks.list(token, selectedServerId, beforeId, signal)
+  }, [api, token, selectedServerId])
+
+  const revokeInviteLink = useCallback(async (id: number) => {
+    if (!token || !selectedServerId) throw new Error('Сервер не выбран')
+    await api.inviteLinks.revoke(token, selectedServerId, id)
+    notify('Ссылка закрыта', 'success')
+  }, [api, token, selectedServerId, notify])
+
   const returnToLatest = async () => {
     if (!selectedServerId || !selectedChannelId) return
     setMessageTarget(null); setFocusedMessageId(null)
@@ -2162,7 +2173,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       {recordingsOpen && <Suspense fallback={<div className="app-loader" role="status">Загружаем…</div>}> <RecordingsDialog channels={channels} open={recordingsOpen} onClose={() => setRecordingsOpen(false)} records={recording.records} locals={recording.locals} serverId={selectedServerId} progress={recording.progress} voiceActive={!!voiceSession} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview} currentUserId={user?.id} onRemoveServer={recording.removeServer}/> </Suspense>}
       <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
       <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} onRename={renameChannel} onRemove={deleteChannel}/>
-      <InviteUserDialog open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
+      <InviteUserDialog onListLinks={listInviteLinks} onRevokeLink={revokeInviteLink} open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && avatarVersions.has(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
       {dialog === 'voiceSettings' && <Suspense fallback={<div className="app-loader" role="status">Загружаем…</div>}> <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/> </Suspense>}

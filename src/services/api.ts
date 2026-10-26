@@ -11,6 +11,7 @@ import type {
   InstanceMetadata,
   InviteLinkPreview,
   CreatedInviteLink,
+  InviteLinkPage,
   CorsOriginsPayload,
   Message,
   MessageContext,
@@ -255,6 +256,13 @@ export function createApi(transport: Transport) {
         authorized(token, { path: `/api/v1/me/server-invites/${url(inviteId)}/decline`, method: 'POST' }) as Promise<void>,
     },
     inviteLinks: {
+      list: (token: string, serverId: number, beforeId?: number, signal?: AbortSignal) => {
+        const query = new URLSearchParams({ limit: '50' })
+        if (beforeId !== undefined) query.set('before_id', String(beforeId))
+        return authorized(token, { path: `/api/v1/servers/${url(serverId)}/invite-links?${query}`, signal }) as Promise<InviteLinkPage>
+      },
+      revoke: (token: string, serverId: number, linkId: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/invite-links/${url(linkId)}`, method: 'DELETE' }) as Promise<void>,
       create: (
         token: string,
         serverId: number,
