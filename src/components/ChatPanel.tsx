@@ -44,6 +44,13 @@ function sameDay(left: number, right: number) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
+function readViewport(container: HTMLDivElement): ChatViewport | undefined {
+  const rect = container.getBoundingClientRect()
+  const row = [...container.querySelectorAll<HTMLElement>('[data-message-id]')].find((element) => element.getBoundingClientRect().bottom > rect.top + 2)
+  if (!row) return
+  return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
+}
+
 export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
   const [draft, setDraft] = useState('')
@@ -60,6 +67,7 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
   const viewportCallback = useRef(onViewport)
   viewportCallback.current = onViewport
   const viewportToRestore = useRef(initialViewport)
+  const restoreFrame = useRef<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const topSentinelRef = useRef<HTMLDivElement>(null)
   const bottomSentinelRef = useRef<HTMLDivElement>(null)
@@ -111,6 +119,10 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
     })
   }
 
+  // Each effect setup (including StrictMode replay) starts its own channel
+  // positioning pass. A replay must not leave a cancelled restore half done.
+  useLayoutEffect(() => { previousChannel.current = null }, [channelId])
+
   useLayoutEffect(() => {
     const container = scrollRef.current
     if (!container) return
@@ -156,10 +168,22 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
       const index = saved ? messages.findIndex((message) => message.id === saved.messageId) : -1
       if (saved && !saved.following && index >= 0) {
         virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' })
-        requestAnimationFrame(() => {
+        let attempts = 0, stable = 0
+        const restore = () => {
+          // An index command keeps reconciling for several frames. Cancel it
+          // before applying the saved intra-row offset, otherwise it can undo
+          // the offset again after ResizeObserver measures the restored rows.
+          virtualizer.cancelScroll()
           const row = container.querySelector<HTMLElement>(`[data-message-id="${saved.messageId}"]`)
-          if (row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - saved.offset
-        })
+          if (row) {
+            const delta = row.getBoundingClientRect().top - container.getBoundingClientRect().top - saved.offset
+            if (Math.abs(delta) < 0.5) stable++
+            else { stable = 0; container.scrollTop += delta }
+          }
+          if (++attempts < 12 && stable < 3) restoreFrame.current = requestAnimationFrame(restore)
+          else restoreFrame.current = null
+        }
+        restoreFrame.current = requestAnimationFrame(restore)
       } else if (virtualized) virtualizer.scrollToEnd()
       else container.scrollTop = container.scrollHeight
       pendingChannelScroll.current = null
@@ -265,12 +289,14 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
     if (!container) return
     const callback = viewportCallback.current
     const save = () => {
-      const rect = container.getBoundingClientRect()
-      const row = [...container.querySelectorAll<HTMLElement>('[data-message-id]')].find((element) => element.getBoundingClientRect().bottom > rect.top)
-      if (row) callback?.({ messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 })
+      const value = readViewport(container)
+      if (value) callback?.(value)
     }
+    const cancelRestore = () => { if (restoreFrame.current !== null) cancelAnimationFrame(restoreFrame.current); restoreFrame.current = null }
     container.addEventListener('scroll', save, { passive: true })
-    return () => { container.removeEventListener('scroll', save) }
+    container.addEventListener('wheel', cancelRestore, { passive: true })
+    container.addEventListener('pointerdown', cancelRestore)
+    return () => { cancelRestore(); container.removeEventListener('scroll', save); container.removeEventListener('wheel', cancelRestore); container.removeEventListener('pointerdown', cancelRestore) }
   }, [channelId])
 
   const submit = async (event?: FormEvent) => {
