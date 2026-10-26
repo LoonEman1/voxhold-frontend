@@ -1,5 +1,20 @@
 export type EntityId = number
 
+export interface ChannelRecording {
+  id: string
+  server_id: number
+  channel_id: number
+  owner_user_id: number
+  owner_username: string
+  status: 'recording' | 'uploading' | 'ready' | 'local_only' | 'failed'
+  mime_type: 'video/webm' | 'video/mp4'
+  size_bytes: number
+  duration_ms: number
+  created_at: number
+  updated_at: number
+  expires_at: number
+}
+
 export interface User {
   id: EntityId
   username: string

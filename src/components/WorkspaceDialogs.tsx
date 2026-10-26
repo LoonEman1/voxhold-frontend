@@ -180,7 +180,7 @@ export function InvitesDialog({ open, onClose, invites, onRespond }: AsyncDialog
   )
 }
 
-export function ProfileDialog({ open, onClose, profile, onSubmit }: AsyncDialogProps & { profile: Profile | null; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar }: AsyncDialogProps & { profile: Profile | null; onAvatar?: (file: File | null) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const [about, setAbout] = useState('')
   const [country, setCountry] = useState('')
   const [error, setError] = useState('')
@@ -192,7 +192,8 @@ export function ProfileDialog({ open, onClose, profile, onSubmit }: AsyncDialogP
   }
   return (
     <Modal open={open} onClose={onClose} title="Ваш профиль" eyebrow="КАК ВАС ВИДЯТ ДРУГИЕ" size="medium">
-      <div className="profile-hero"><Avatar name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></div>
+      <div className="profile-hero"><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></div>
+      {onAvatar && <div className="avatar-editor"><label className="button button--secondary">Загрузить аватар<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" disabled={pending} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; if (file.size > 5 * 1024 * 1024) { setError('Максимальный размер аватара — 5 МБ'); return } setPending(true); setError(''); void onAvatar(file).catch((caught) => setError(humanError(caught))).finally(() => setPending(false)) }}/></label><button className="button button--ghost" disabled={pending} onClick={() => { setPending(true); setError(''); void onAvatar(null).catch((caught) => setError(humanError(caught))).finally(() => setPending(false)) }}>Удалить</button><small>Квадратное кадрирование · 256×256 · JPEG, PNG, WebP, GIF до 5 МБ</small></div>}
       <form className="dialog-form" onSubmit={submit}>
         <label><span>О себе <small>{about.length}/512</small></span><textarea value={about} onChange={(e) => setAbout(e.target.value)} maxLength={512} rows={4} placeholder="Пара слов о себе, интересах или текущем проекте…" /></label>
         <label><span>Страна проживания</span><CountrySelect value={country} onChange={setCountry} /></label>
@@ -223,7 +224,7 @@ export function MemberProfileDialog({ open, onClose, profile, role, loading, err
     <Modal open={open} onClose={onClose} title="Профиль участника" eyebrow="ВИЗИТНАЯ КАРТОЧКА" size="medium">
       {loading ? <div className="profile-view-loading"><span className="spinner"/><p>Загружаем профиль…</p></div> : error ? <div className="profile-view-error"><Icon name="close"/><p>{error}</p></div> : profile && <div className="member-profile-card">
         <div className="member-profile-cover"><i/><i/><i/></div>
-        <div className="member-profile-avatar-slot" aria-label="Место для будущей фотографии профиля"><Avatar name={profile.username} size="large"/></div>
+        <div className="member-profile-avatar-slot" aria-label="Фотография профиля"><Avatar userId={profile.user_id} name={profile.username} size="large"/></div>
         <div className="member-profile-head"><div><h3>{profile.username}</h3><span>@{profile.username}</span></div><span className={`role-badge role-badge--${role}`}>{roleMeta[role].label}</span></div>
         <dl className="profile-facts">
           <div><dt>В Voxhold с</dt><dd>{formatDate(profile.created_at)}</dd></div>

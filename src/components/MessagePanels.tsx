@@ -104,7 +104,7 @@ export function MessageSearchPanel({ open, api, token, serverId, onClose, onOpen
           <div className="search-results-count">Найдено сообщений: {messages.length}{hasMore ? '+' : ''}</div>
           {messages.map((message) => <button className="search-result" key={message.id} onClick={() => onOpenMessage(message.channel_id, message.id)}>
             <div className="search-result__meta"><span><Icon name="hash" size={12}/>{message.channel_name}</span><time>{formatDate(message.created_at)} · {formatTime(message.created_at)}</time></div>
-            <div className="search-result__author"><Avatar name={message.author.username} size="small"/><b>{message.author.username}</b>{message.edited_at && <small>изменено</small>}</div>
+            <div className="search-result__author"><Avatar userId={message.author.user_id} name={message.author.username} size="small"/><b>{message.author.username}</b>{message.edited_at && <small>изменено</small>}</div>
             <p>{message.content}</p>
           </button>)}
           {hasMore && <button className="load-older" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? <span className="spinner"/> : 'Показать ещё'}</button>}
@@ -145,7 +145,7 @@ export function PinnedMessagesPanel({ open, pins, loading, canManage, onClose, o
       <div className="message-panel__scroll">
         {loading ? <div className="panel-loading"><span className="spinner"/>Загружаем закрепы…</div> : error ? <div className="panel-error" role="alert">{error}</div> : pins.length === 0 ? <EmptyState icon="pin" title="Закрепов пока нет">Администратор может сохранить здесь важное сообщение.</EmptyState> : pins.map((pin) => <article className="pinned-card" key={pin.message.id}>
           <button className="pinned-card__content" onClick={() => onOpenMessage(pin.message.channel_id, pin.message.id)}>
-            <div className="pinned-card__author"><Avatar name={pin.message.author.username} size="small"/><span><b>{pin.message.author.username}</b><small>{formatDate(pin.message.created_at)} · {formatTime(pin.message.created_at)}</small></span></div>
+            <div className="pinned-card__author"><Avatar userId={pin.message.author.user_id} name={pin.message.author.username} size="small"/><span><b>{pin.message.author.username}</b><small>{formatDate(pin.message.created_at)} · {formatTime(pin.message.created_at)}</small></span></div>
             <p>{pin.message.content}</p>
             <small className="pinned-card__by"><Icon name="pin" size={12}/> Закрепил {pin.pinned_by.username}</small>
           </button>

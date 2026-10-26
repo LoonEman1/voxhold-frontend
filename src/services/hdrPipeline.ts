@@ -1,5 +1,6 @@
 import type { StreamCodec, StreamRendition } from '../domain/types'
 import type { HDRCaptureProbe } from './hdrCapabilities'
+import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 export interface StreamPublishPipeline {
   stream: MediaStream
@@ -28,7 +29,7 @@ interface TrackGeneratorLike {
   track?: MediaStreamTrack
 }
 
-type TrackProcessorConstructor = new (options: { track: MediaStreamTrack }) => TrackProcessorLike
+type TrackProcessorConstructor = new (options: { track: MediaStreamTrack; maxBufferSize?: number }) => TrackProcessorLike
 type TrackGeneratorConstructor = new (options?: { kind: 'video' }) => TrackGeneratorLike
 type Canvas2DTarget = HTMLCanvasElement | OffscreenCanvas
 
@@ -112,7 +113,7 @@ function waitForRenderableVideo(video: HTMLVideoElement, timeoutMs = 5_000) {
 }
 
 function createSRGBContext(canvas: Canvas2DTarget) {
-  const target = canvas as Canvas2DTarget & {
+  const target = canvas as unknown as {
     getContext: (
       contextId: '2d',
       options?: CanvasRenderingContext2DSettings,
@@ -158,6 +159,43 @@ function contentHintOf(source: MediaStreamTrack) {
   return source.contentHint === 'motion' ? 'motion' : 'detail'
 }
 
+async function createWorkerSDRPipeline(capture: MediaStream, codec: StreamCodec, onFailure: ((error: Error) => void) | undefined, idleRefreshMs: number): Promise<StreamPublishPipeline | null> {
+  const { Processor, Generator } = frameTransformConstructors()
+  if (!Processor || !Generator || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof VideoFrame === 'undefined') return null
+  const source = capture.getVideoTracks()[0]!
+  const processorTrack = source.clone()
+  let output: MediaStreamTrack | undefined
+  let worker: Worker | undefined
+  let closed = false
+  const close = () => { if (closed) return; closed = true; worker?.terminate(); processorTrack.stop(); output?.stop() }
+  try {
+    const processor = new Processor({ track: processorTrack, maxBufferSize: 1 })
+    const generator = new Generator({ kind: 'video' })
+    output = generator.track ?? generator as unknown as MediaStreamTrack
+    output.contentHint = contentHintOf(source)
+    worker = new Worker(new URL('./sdrTransform.worker.ts', import.meta.url), { type: 'module' })
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error('SDR worker startup timed out')), 1_500)
+      worker!.onerror = () => { window.clearTimeout(timeout); reject(new Error('SDR worker could not start')) }
+      worker!.onmessage = ({ data }) => {
+        window.clearTimeout(timeout)
+        if (data.type === 'ready') resolve()
+        else reject(new Error(data.reason || 'SDR worker could not start'))
+      }
+      try {
+        worker!.postMessage({ readable: processor.readable, writable: generator.writable, idleRefreshMs }, [processor.readable, generator.writable] as unknown as Transferable[])
+      } catch (error) { window.clearTimeout(timeout); reject(error) }
+    })
+    worker.onmessage = ({ data }) => { if (!closed && data.type === 'error') onFailure?.(new Error(data.reason || 'SDR worker stopped')) }
+    worker.onerror = () => { if (!closed) onFailure?.(new Error('SDR worker stopped')) }
+    clientDiagnostics.record('media', 'stream_processing_path', 'info', { path: 'worker_conversion' })
+    return { stream: new MediaStream([output, ...capture.getAudioTracks()]), renditions: buildSDRStreamRenditions(codec), close }
+  } catch {
+    close()
+    return null
+  }
+}
+
 function createFrameDrivenSDRPipeline(
   capture: MediaStream,
   codec: StreamCodec,
@@ -177,7 +215,7 @@ function createFrameDrivenSDRPipeline(
   if (!context) return null
 
   const processorTrack = source.clone()
-  const processor = new Processor({ track: processorTrack })
+  const processor = new Processor({ track: processorTrack, maxBufferSize: 1 })
   const generator = new Generator({ kind: 'video' })
   const sdrTrack = generator.track ?? generator as unknown as MediaStreamTrack
   sdrTrack.contentHint = contentHintOf(source)
@@ -190,6 +228,7 @@ function createFrameDrivenSDRPipeline(
   // repeated frames; repeated frames advance by the elapsed wall time.
   let lastTimestamp = Number.NEGATIVE_INFINITY
   let lastEmittedAt = 0
+  let writing = false
 
   const reportFailure = (value: unknown) => {
     if (closed || failureReported) return
@@ -200,10 +239,12 @@ function createFrameDrivenSDRPipeline(
   // VideoFrame snapshots the canvas synchronously and the writer queues
   // writes in call order, so captured and repeated frames never reorder.
   const emit = (timestamp: number, duration?: number) => {
+    if (writing) return Promise.resolve()
+    writing = true
     const output = new VideoFrame(canvas, { timestamp, duration, alpha: 'discard' })
     lastTimestamp = timestamp
     lastEmittedAt = performance.now()
-    return writer.write(output).finally(() => output.close())
+    return writer.write(output).finally(() => { output.close(); writing = false })
   }
 
   const pump = async () => {
@@ -265,11 +306,18 @@ export async function createSDRPublishPipeline(
   options: SDRPipelineOptions = {},
 ): Promise<StreamPublishPipeline> {
   const idleRefreshMs = options.idleRefreshMs ?? IDLE_REFRESH_MS
+  const sourceTrack = capture.getVideoTracks()[0]
+  if (!sourceTrack) throw new Error('Источник экрана не предоставил видеодорожку')
+  const workerPipeline = await createWorkerSDRPipeline(capture, codec, onFailure, idleRefreshMs)
+  if (workerPipeline) return workerPipeline
   // A frame-driven transform is independent of page visibility. Unlike
   // requestVideoFrameCallback/requestAnimationFrame, it continues to receive
   // the active getDisplayMedia track while the publisher opens another tab.
   const frameDriven = createFrameDrivenSDRPipeline(capture, codec, onFailure, idleRefreshMs)
-  if (frameDriven) return frameDriven
+  if (frameDriven) {
+    clientDiagnostics.record('media', 'stream_processing_path', 'info', { path: 'compatibility_frame_transform' })
+    return frameDriven
+  }
 
   if (typeof document === 'undefined') throw new Error('SDR-преобразование доступно только в браузере')
   const source = capture.getVideoTracks()[0]
@@ -361,6 +409,7 @@ export async function createSDRPublishPipeline(
   video.addEventListener('error', videoError)
 
   const stream = new MediaStream([sdrTrack, ...capture.getAudioTracks()])
+  clientDiagnostics.record('media', 'stream_processing_path', 'info', { path: 'compatibility_canvas' })
   return {
     stream,
     renditions: buildSDRStreamRenditions(codec),

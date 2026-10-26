@@ -1,5 +1,6 @@
 import { noiseGateOpenLevel, normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
+import voiceGateURL from './voiceGate.worklet.ts?worker&url'
 
 export interface VoiceInputChain {
   raw: MediaStream
@@ -11,6 +12,7 @@ export interface VoiceInputChain {
   gain: GainNode | null
   analyser: AnalyserNode | null
   meterTimer: number | null
+  worklet?: AudioWorkletNode | null
 }
 
 export interface BrowserVoiceInputOptions {
@@ -101,6 +103,7 @@ export class BrowserVoiceInput {
     this.chain = chain
     chain.track.enabled = this.enabled
     clientDiagnostics.record('media', 'voice_input_ready', 'info', {
+      processing_path: chain.worklet ? 'audio_worklet' : chain.context ? 'compatibility' : 'raw',
       sample_rate: chain.track.getSettings?.().sampleRate ?? null,
       selected_input: !!normalized.inputDeviceId,
     })
@@ -135,6 +138,7 @@ export class BrowserVoiceInput {
         this.noiseGateOpen = true
       }
       if (this.chain?.gain) this.chain.gain.gain.value = next.inputVolume / 100
+      this.chain?.worklet?.port.postMessage({ type: 'threshold', value: this.noiseGateThresholdPercent === null ? 0 : noiseGateOpenLevel(this.noiseGateThresholdPercent) })
       if (!this.chain || !needsNewInput(previous, next)) return
       await this.replaceChain(next)
     })
@@ -272,11 +276,31 @@ export class BrowserVoiceInput {
       try {
         context = new AudioContext({ latencyHint: 'interactive' })
         const source = context.createMediaStreamSource(raw)
+        // The graph stays alive while muted. Gate decisions and the meter run
+        // on the audio rendering thread, independently of page visibility.
+        let worklet: AudioWorkletNode | null = null
+        if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+          try {
+            await context.audioWorklet.addModule(voiceGateURL)
+            worklet = new AudioWorkletNode(context, 'voxhold-voice-gate', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
+            worklet.port.postMessage({ type: 'threshold', value: preferences.noiseSuppressionMode === 'threshold' ? noiseGateOpenLevel(preferences.noiseGateThreshold) : 0 })
+            worklet.port.onmessage = ({ data }) => {
+              if (!this.closed && typeof data.level === 'number') {
+                const gain = this.preferences?.noiseSuppressionMode === 'threshold' ? 1 : (this.preferences?.inputVolume ?? 100) / 100
+                this.options.onLevel?.(this.enabled ? Math.min(1, data.level * gain) : 0)
+              }
+            }
+          } catch {
+            worklet?.disconnect()
+            worklet = null
+            clientDiagnostics.record('media', 'voice_worklet_fallback', 'warn')
+          }
+        }
         const gating = preferences.noiseSuppressionMode === 'threshold'
-        const gate = gating ? context.createGain() : null
-        const gateAnalyser = gating ? context.createAnalyser() : null
+        const gate = gating && !worklet ? context.createGain() : null
+        const gateAnalyser = gating && !worklet ? context.createAnalyser() : null
         const gain = context.createGain()
-        const analyser = context.createAnalyser()
+        const analyser = worklet ? null : context.createAnalyser()
         const destination = context.createMediaStreamDestination()
         if (gate) {
           // Starts closed so background noise never leaks before the first
@@ -289,21 +313,21 @@ export class BrowserVoiceInput {
           source.connect(gateAnalyser)
         }
         gain.gain.value = preferences.inputVolume / 100
-        analyser.fftSize = 256
-        analyser.smoothingTimeConstant = 0.72
-        source.connect(gate ?? gain)
+        if (analyser) { analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.72 }
+        source.connect(worklet ?? gate ?? gain)
+        if (worklet) worklet.connect(gain)
         if (gate) gate.connect(gain)
-        gain.connect(analyser)
-        analyser.connect(destination)
+        gain.connect(analyser ?? destination)
+        analyser?.connect(destination)
         if (context.state === 'suspended') await context.resume()
 
         const track = destination.stream.getAudioTracks()[0]
         if (!track) throw new Error('Не удалось подготовить аудиодорожку')
         const chain: VoiceInputChain = {
           raw, stream: destination.stream, track, context, gate, gateAnalyser,
-          gain, analyser, meterTimer: null,
+          gain, analyser, meterTimer: null, worklet,
         }
-        this.startMeter(chain)
+        if (!worklet) this.startMeter(chain)
         return chain
       } catch (error) {
         void context?.close().catch(() => undefined)
@@ -314,7 +338,7 @@ export class BrowserVoiceInput {
   }
 
   private startMeter(chain: VoiceInputChain) {
-    if (!chain.analyser || !this.options.onLevel) return
+    if (!chain.analyser || (!this.options.onLevel && !chain.gate)) return
     const values = new Uint8Array(chain.analyser.fftSize)
     const gateValues = chain.gateAnalyser ? new Uint8Array(chain.gateAnalyser.fftSize) : null
     chain.meterTimer = window.setInterval(() => {
@@ -349,6 +373,12 @@ export class BrowserVoiceInput {
   private disposeChain(chain: VoiceInputChain | null) {
     if (!chain) return
     if (chain.meterTimer !== null) window.clearInterval(chain.meterTimer)
+    if (chain.worklet) {
+      chain.worklet.port.postMessage({ type: 'close' })
+      chain.worklet.port.onmessage = null
+      chain.worklet.port.close()
+      chain.worklet.disconnect()
+    }
     chain.raw.getAudioTracks().forEach((track) => {
       track.removeEventListener('ended', this.rawTrackEndedHandler)
       track.stop()

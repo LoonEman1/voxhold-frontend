@@ -48,6 +48,25 @@ jobs:
       - name: Build
         run: npm run build
 
+  client-performance:
+    name: Client browser regressions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test chat, microphone and video processing
+        run: npm run test:e2e:performance
+
   container:
     name: Build Docker image
     if: github.event_name == 'pull_request'
@@ -123,7 +142,7 @@ jobs:
   publish:
     name: Publish Docker image
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, client-performance]
     runs-on: ubuntu-latest
 
     permissions:

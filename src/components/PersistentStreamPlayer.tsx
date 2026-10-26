@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
 import type { StreamQualityStats } from '../services/stream'
@@ -9,6 +9,7 @@ import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
 interface PersistentStreamPlayerProps {
+  callControls?: ReactNode
   mode: 'mini' | 'expanded'
   stream: ActiveStream | null
   role: 'publisher' | 'viewer'
@@ -28,7 +29,7 @@ interface PersistentStreamPlayerProps {
 /** Cinema controls fade out after this long without input. */
 export const CINEMA_IDLE_MS = 2_500
 
-export function PersistentStreamPlayer({ mode, stream, role, status, media, channelName, preferences, quality, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false }: PersistentStreamPlayerProps) {
+export function PersistentStreamPlayer({ mode, stream, role, status, media, channelName, preferences, quality, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false, callControls }: PersistentStreamPlayerProps) {
   const playerRef = useRef<HTMLElement>(null)
   const [uiHidden, setUIHidden] = useState(false)
   const [idle, setIdle] = useState(false)
@@ -203,9 +204,11 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
           <input type="range" min="0" max="100" step="1" value={preferences.playbackVolume} aria-label="Громкость трансляции" onChange={(event) => updateVolume(Number(event.target.value))}/>
         </label> : <span/>}
         <button type="button" onClick={() => void restoreUI()} title="Выйти из полноэкранного режима (Esc или F)"><Icon name="minimize" size={16}/><span>Выйти из полного экрана</span></button>
+        {callControls}
       </div>}
     </div>
     <footer>
+      {callControls}
       <StreamQualitySummary stats={quality}/>
       {!isPublisher && <label className={`stream-volume ${stream?.has_audio ? '' : 'is-disabled'}`}>
         <Icon name="volume"/>

@@ -1,4 +1,5 @@
 import { clientDiagnostics } from '../platform/clientDiagnostics'
+import { readPeerStats } from './peerStats'
 
 export interface InboundVideoSample {
   timestamp: number
@@ -222,7 +223,7 @@ export async function sampleInboundVideoStats(
   peer: RTCPeerConnection,
 ): Promise<InboundVideoSample | null> {
   if (typeof peer.getStats !== 'function') return null
-  const report = await peer.getStats()
+  const report = await readPeerStats(peer)
   let result: InboundVideoSample | null = null
   report.forEach((raw) => {
     if (result) return

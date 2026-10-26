@@ -5,6 +5,10 @@ export interface TransportRequest {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   token?: string | null
   body?: unknown
+  rawBody?: BodyInit
+  contentType?: string
+  responseType?: 'blob'
+  cache?: RequestCache
   signal?: AbortSignal
 }
 
@@ -14,6 +18,7 @@ export interface TransportResponse<T> {
 }
 
 export interface Transport {
+  resolveURL?(path: string): string
   request<T>(request: TransportRequest): Promise<TransportResponse<T>>
 }
 
@@ -44,8 +49,9 @@ export function createFetchTransport(baseUrl = ''): Transport {
   const normalizedBase = baseUrl.replace(/\/$/, '')
 
   return {
+    resolveURL: (path) => `${normalizedBase}${path}`,
     async request<T>(request: TransportRequest) {
-      const { path, method = 'GET', token, body, signal } = request
+      const { path, method = 'GET', token, body, rawBody, signal } = request
       const startedAt = performance.now()
       const route = path.split('?')[0] || '/'
       let response: Response
@@ -53,12 +59,13 @@ export function createFetchTransport(baseUrl = ''): Transport {
         response = await fetch(`${normalizedBase}${path}`, {
           method,
           signal,
+          cache: request.cache,
           headers: {
             Accept: 'application/json',
-            ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            ...(rawBody !== undefined ? { 'Content-Type': request.contentType ?? 'application/octet-stream' } : body === undefined ? {} : { 'Content-Type': 'application/json' }),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
         })
       } catch (error) {
         clientDiagnostics.record('http', 'request_failed', signal?.aborted ? 'debug' : 'error', {
@@ -82,7 +89,7 @@ export function createFetchTransport(baseUrl = ''): Transport {
       }
 
       const contentType = response.headers.get('content-type') ?? ''
-      const data = contentType.includes('application/json')
+      const data = response.ok && request.responseType === 'blob' ? await response.blob() as T : contentType.includes('application/json')
         ? ((await response.json()) as T)
         : null
 

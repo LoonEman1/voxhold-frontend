@@ -46,6 +46,34 @@ function renderPlayer(mode: 'mini' | 'expanded') {
 }
 
 describe('PersistentStreamPlayer', () => {
+  it.each(['mini', 'expanded'] as const)('preserves %s playback when the workspace rerenders for voice state changes', async (mode) => {
+    const media = {} as MediaStream
+    const props = {
+      mode, stream, role: 'viewer' as const, status: 'connected' as const,
+      media, channelName: 'Общий', preferences: DEFAULT_STREAM_PREFERENCES,
+      onPreferencesChange: vi.fn(), onExpand: vi.fn(), onCollapse: vi.fn(), onLeave: vi.fn(),
+    }
+    const { container, rerender } = render(<PersistentStreamPlayer {...props}/>)
+    await act(async () => undefined)
+    const video = container.querySelector('video')!
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
+    play.mockClear()
+    const attachments: unknown[] = []
+    Object.defineProperty(video, 'srcObject', {
+      configurable: true,
+      get: () => media,
+      set: (value) => { attachments.push(value) },
+    })
+
+    for (let index = 0; index < 6; index += 1) {
+      rerender(<PersistentStreamPlayer {...props} onLeave={() => props.onLeave()}/> )
+    }
+
+    expect(container.querySelector('video')).toBe(video)
+    expect(attachments).toEqual([])
+    expect(play).not.toHaveBeenCalled()
+  })
+
   it('expands and leaves from the mini player', () => {
     const handlers = renderPlayer('mini')
 

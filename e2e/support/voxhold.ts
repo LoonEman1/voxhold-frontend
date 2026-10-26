@@ -115,13 +115,13 @@ export async function joinVoice(page: Page, channelName: string) {
   const channel = page.locator('.channel-row__main').filter({ hasText: channelName }).first()
   await expect(channel).toBeVisible()
   await channel.click()
-  await page.locator('.voice-room__intro > button.button--primary').click()
-  await expect(page.locator('.voice-orbit')).toHaveClass(/is-connected/)
+  await page.getByRole('button', { name: /Подключиться к каналу|Перейти в канал/ }).click()
+  await expect(page.locator('.voice-stage-layout')).toHaveAttribute('data-voice-state', 'connected')
 }
 
 export async function startServerStream(page: Page) {
-  await page.locator('.voice-controls .voice-control').nth(2).click()
-  const dialog = page.locator('.modal').filter({ has: page.locator('.stream-settings-grid') })
+  await page.getByRole('button', { name: 'Поделиться экраном', exact: true }).click()
+  const dialog = page.getByRole('dialog').filter({ has: page.locator('.stream-settings-grid') })
   await expect(dialog).toBeVisible()
   await dialog.locator('select').first().selectOption('server')
   await dialog.locator('.stream-dialog-actions .button--primary').click()
@@ -129,7 +129,7 @@ export async function startServerStream(page: Page) {
 }
 
 export async function watchServerStream(page: Page) {
-  const watch = page.locator('.stream-panel > button.button--primary')
+  const watch = page.getByRole('button', { name: 'Смотреть трансляцию', exact: true })
   await expect(watch).toBeVisible()
   await watch.click()
   await expect(page.locator('.stream-panel video')).toBeVisible()

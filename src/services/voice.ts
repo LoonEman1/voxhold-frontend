@@ -5,6 +5,8 @@ import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
 import { BrowserVoiceInput } from './voiceInput'
+import { readPeerStats } from './peerStats'
+import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
 
 export { inputConstraints } from './voiceInput'
 export { BrowserVoiceInput } from './voiceInput'
@@ -102,6 +104,21 @@ function toBrowserCandidate(candidate: VoiceICECandidate): RTCIceCandidateInit {
  * peer while keeping the already granted microphone.
  */
 export class BrowserVoiceSession {
+  private readonly recordingListeners = new Set<() => void>()
+  recordingAudioTracks() {
+    if (this.closed) return []
+    const own = this.options.input.currentTrack()
+    return [...(own ? [own] : []), ...Array.from(this.remoteOutputs.values(), (output) => output.track)]
+  }
+  subscribeRecordingAudio(listener: () => void) {
+    this.recordingListeners.add(listener)
+    return () => { this.recordingListeners.delete(listener) }
+  }
+  private readonly qualityTracker = new MediaQualityTracker()
+  private readonly mediaAttemptId = mediaAttemptID()
+  private readonly startedAt = performance.now()
+  private connectedOnce = false
+  private recoveryStartedAt: number | null = null
   private peer: RTCPeerConnection | null = null
   private inputSender: RTCRtpSender | null = null
   private readonly remoteOutputs = new Map<string, VoiceRemoteOutput>()
@@ -160,6 +177,7 @@ export class BrowserVoiceSession {
     this.selfDeaf = selfDeaf
     this.preferences = normalizeVoicePreferences(preferences)
     clientDiagnostics.record('webrtc', 'voice_starting', 'info', {
+      media_attempt_id: this.mediaAttemptId,
       self_mute: selfMute,
       self_deaf: selfDeaf,
       bitrate_kbps: this.preferences.bitrateKbps,
@@ -210,6 +228,7 @@ export class BrowserVoiceSession {
       audio.srcObject = media
       const output = { stream: media, track: remoteTrack, audio }
       this.remoteOutputs.set(remoteTrack.id, output)
+      this.recordingListeners.forEach((listener) => listener())
       document.body.append(audio)
       clientDiagnostics.record('media', 'voice_remote_track_added', 'info', {
         track_id: remoteTrack.id,
@@ -235,12 +254,18 @@ export class BrowserVoiceSession {
     }
 
     peer.onconnectionstatechange = () => {
+      const connected = peer.connectionState === 'connected'
+      if (this.connectedOnce && (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') && this.recoveryStartedAt === null) this.recoveryStartedAt = performance.now()
       clientDiagnostics.record('webrtc', 'voice_connection_state', peer.connectionState === 'failed' ? 'error' : 'info', {
+        media_attempt_id: this.mediaAttemptId,
+        connection_ms: connected && !this.connectedOnce ? Math.round(performance.now() - this.startedAt) : null,
+        recovery_ms: connected && this.recoveryStartedAt !== null ? Math.round(performance.now() - this.recoveryStartedAt) : null,
         connection_state: peer.connectionState,
         ice_connection_state: peer.iceConnectionState,
         ice_gathering_state: peer.iceGatheringState,
         signaling_state: peer.signalingState,
       })
+      if (connected) { this.connectedOnce = true; this.recoveryStartedAt = null }
       if (peer.connectionState === 'connected') void this.sampleStats()
       if (!this.closed) this.options.onConnectionStateChange(peer.connectionState)
     }
@@ -269,6 +294,7 @@ export class BrowserVoiceSession {
     nextTrack.enabled = !this.selfMute
     try {
       await sender.replaceTrack(nextTrack)
+      this.recordingListeners.forEach((listener) => listener())
       clientDiagnostics.record('media', 'voice_input_sender_replaced', 'info')
     } catch (error) {
       if (!this.closed) {
@@ -402,11 +428,12 @@ export class BrowserVoiceSession {
     if (!peer || this.closed || this.statsSampling || typeof peer.getStats !== 'function') return
     this.statsSampling = true
     try {
-      const report = await peer.getStats()
+      const report = await readPeerStats(peer)
       clientDiagnostics.record('media', 'voice_rtp_stats', 'info', {
         connection_state: peer.connectionState,
         remote_track_count: this.remoteOutputs.size,
-        reports: audioRTPDiagnostics(report),
+        reports: audioRTPDiagnostics(report).slice(0, 4),
+        quality: this.qualityTracker.sample(report),
         outputs: Array.from(this.remoteOutputs.values(), ({ track, audio }) => ({
           track_id: track.id,
           track_muted: track.muted,
@@ -416,7 +443,7 @@ export class BrowserVoiceSession {
           playback_ready_state: audio.readyState,
           playback_time: Math.round(audio.currentTime * 10) / 10,
           volume: audio.volume,
-        })),
+        })).slice(0, 4),
       })
     } catch (error) {
       clientDiagnostics.record('media', 'voice_stats_failed', 'debug', {
@@ -430,6 +457,7 @@ export class BrowserVoiceSession {
   private removeRemoteOutput(trackId: string, output: VoiceRemoteOutput) {
     if (this.remoteOutputs.get(trackId) !== output) return
     this.remoteOutputs.delete(trackId)
+    this.recordingListeners.forEach((listener) => listener())
     this.detachRemoteAnalyser(trackId)
     output.audio.pause()
     output.audio.srcObject = null
@@ -454,11 +482,12 @@ export class BrowserVoiceSession {
   }
 
   private async applyOutputDevice(deviceId: string, target?: HTMLAudioElement) {
-    if (!BrowserVoiceSession.outputSelectionSupported() || !deviceId) return
+    if (!BrowserVoiceSession.outputSelectionSupported()) return
     const outputs = target
       ? [target]
       : Array.from(this.remoteOutputs.values(), ({ audio }) => audio)
     await Promise.all(outputs.map(async (audio) => {
+      if ((audio.sinkId ?? '') === deviceId) return
       try {
         await audio.setSinkId(deviceId)
       } catch (error) {
@@ -552,13 +581,21 @@ export class BrowserVoiceSession {
   }
 
   setState(selfMute: boolean, selfDeaf: boolean) {
+    const muteChanged = this.selfMute !== selfMute
+    const deafChanged = this.selfDeaf !== selfDeaf
     this.selfMute = selfMute
     this.selfDeaf = selfDeaf
-    this.options.input.setState(!selfMute)
-    if (selfMute) this.options.onInputLevel?.(0)
+    if (muteChanged) {
+      this.options.input.setState(!selfMute)
+      if (selfMute) this.options.onInputLevel?.(0)
+      else this.options.input.resume()
+    }
+    // A microphone toggle (including its server acknowledgement) must not
+    // restart remote playback or touch the receive side of the session.
+    if (!deafChanged) return
     this.remoteOutputs.forEach((output) => {
       output.audio.muted = selfDeaf
-      if (!selfDeaf) this.playRemoteAudio(output, 'undeaf')
+      if (!selfDeaf && output.audio.paused) this.playRemoteAudio(output, 'undeaf')
     })
   }
 
@@ -577,6 +614,8 @@ export class BrowserVoiceSession {
   close() {
     if (this.closed) return
     this.closed = true
+    this.recordingListeners.forEach((listener) => listener())
+    this.recordingListeners.clear()
     if (this.unsubscribeInput) this.unsubscribeInput()
     this.unsubscribeInput = null
     if (typeof document !== 'undefined') {

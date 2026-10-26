@@ -10,6 +10,24 @@ describe('client diagnostics', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('batches synchronous storage work and persists pending events on disposal', () => {
+    vi.useFakeTimers()
+    const writes = vi.spyOn(Storage.prototype, 'setItem')
+    const diagnostics = new ClientDiagnostics()
+    writes.mockClear()
+    for (let index = 0; index < 20; index += 1) diagnostics.record('media', 'quality', 'info', { index })
+    expect(writes).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(250)
+    expect(writes).toHaveBeenCalledOnce()
+    diagnostics.record('media', 'quality', 'info', { index: 21 })
+    diagnostics.dispose()
+    expect(writes).toHaveBeenCalledTimes(2)
+    expect(sessionStorage.getItem('voxhold.diagnostics.pending.v1')).toContain('21')
+    vi.advanceTimersByTime(1000)
+    expect(writes).toHaveBeenCalledTimes(2)
   })
 
   it('redacts signaling and user content recursively', () => {

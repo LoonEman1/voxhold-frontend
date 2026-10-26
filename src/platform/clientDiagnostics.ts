@@ -119,32 +119,76 @@ export class ClientDiagnostics {
   private flushing = false
   private timer: number | null = null
   private listenersInstalled = false
+  private persistenceTimer: number | null = null
+  private readonly cleanupListeners: Array<() => void> = []
+  private performanceObserver: PerformanceObserver | null = null
+  private longTaskCount = 0
+  private longTaskMs = 0
+
+  private persistPending() {
+    if (this.persistenceTimer !== null) window.clearTimeout(this.persistenceTimer)
+    this.persistenceTimer = null
+    storeJSON(EVENTS_STORAGE_KEY, this.pending)
+  }
+
+  private schedulePersistence() {
+    if (typeof window === 'undefined' || this.persistenceTimer !== null) return
+    this.persistenceTimer = window.setTimeout(() => this.persistPending(), 250)
+  }
 
   configure(baseURL: string) {
     this.baseURL = baseURL.replace(/\/$/, '')
     if (typeof window === 'undefined' || this.listenersInstalled) return
     this.listenersInstalled = true
-    this.timer = window.setInterval(() => { void this.flush() }, FLUSH_INTERVAL_MS)
-    window.addEventListener('online', () => { void this.flush() })
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') void this.flush(true)
-    })
-    window.addEventListener('error', (event) => {
+    this.timer = window.setInterval(() => {
+      if (this.longTaskCount > 0) {
+        this.record('client', 'main_thread_load', 'info', { long_task_count: this.longTaskCount, long_task_ms: Math.round(this.longTaskMs), interval_ms: FLUSH_INTERVAL_MS })
+        this.longTaskCount = 0
+        this.longTaskMs = 0
+      }
+      void this.flush()
+    }, FLUSH_INTERVAL_MS)
+    const online = () => { void this.flush() }
+    const hidden = () => { if (document.visibilityState === 'hidden') { this.persistPending(); void this.flush(true) } }
+    const pageHide = () => { this.persistPending(); void this.flush(true) }
+    const error = (event: ErrorEvent) => {
       this.record('client', 'uncaught_error', 'error', {
         error_name: event.error instanceof Error ? event.error.name : 'Error',
         source: event.filename ? event.filename.split('/').pop() : '',
         line: event.lineno,
         column: event.colno,
       })
-    })
-    window.addEventListener('unhandledrejection', (event) => {
+    }
+    const rejection = (event: PromiseRejectionEvent) => {
       this.record('client', 'unhandled_rejection', 'error', {
         error_name: event.reason instanceof Error ? event.reason.name : typeof event.reason,
       })
+    }
+    window.addEventListener('online', online)
+    window.addEventListener('pagehide', pageHide)
+    document.addEventListener('visibilitychange', hidden)
+    window.addEventListener('error', error)
+    window.addEventListener('unhandledrejection', rejection)
+    this.cleanupListeners.push(() => {
+      window.removeEventListener('online', online)
+      window.removeEventListener('pagehide', pageHide)
+      document.removeEventListener('visibilitychange', hidden)
+      window.removeEventListener('error', error)
+      window.removeEventListener('unhandledrejection', rejection)
     })
+    if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      try {
+        this.performanceObserver = new PerformanceObserver((list) => {
+          if (document.visibilityState !== 'visible') return
+          for (const entry of list.getEntries()) { this.longTaskCount += 1; this.longTaskMs += entry.duration }
+        })
+        this.performanceObserver.observe({ type: 'longtask' })
+      } catch { this.performanceObserver?.disconnect(); this.performanceObserver = null }
+    }
     this.record('client', 'session_started', 'info', {
       online: navigator.onLine,
       language: navigator.language,
+      browser: /YaBrowser\//.test(navigator.userAgent) ? 'yandex' : /Edg\//.test(navigator.userAgent) ? 'edge' : /Firefox\//.test(navigator.userAgent) ? 'firefox' : /Chrome\//.test(navigator.userAgent) ? 'chrome' : /Safari\//.test(navigator.userAgent) ? 'safari' : 'other',
     })
   }
 
@@ -175,7 +219,7 @@ export class ClientDiagnostics {
     if (this.pending.length > MAX_PENDING_EVENTS) {
       this.pending.splice(0, this.pending.length - MAX_PENDING_EVENTS)
     }
-    storeJSON(EVENTS_STORAGE_KEY, this.pending)
+    this.schedulePersistence()
     if (this.pending.length >= MAX_BATCH_EVENTS) void this.flush()
   }
 
@@ -202,12 +246,12 @@ export class ClientDiagnostics {
       if (!response.ok) {
         if (response.status === 400 || response.status === 413) {
           this.pending.splice(0, events.length)
-          storeJSON(EVENTS_STORAGE_KEY, this.pending)
+          this.persistPending()
         }
         return
       }
       this.pending.splice(0, events.length)
-      storeJSON(EVENTS_STORAGE_KEY, this.pending)
+      this.persistPending()
       if (this.pending.length > 0) queueMicrotask(() => { void this.flush() })
     } catch {
       // Pending events stay in sessionStorage and are retried when online.
@@ -219,6 +263,11 @@ export class ClientDiagnostics {
   dispose() {
     if (this.timer !== null) window.clearInterval(this.timer)
     this.timer = null
+    this.persistPending()
+    this.cleanupListeners.splice(0).forEach((cleanup) => cleanup())
+    this.performanceObserver?.disconnect()
+    this.performanceObserver = null
+    this.listenersInstalled = false
   }
 }
 

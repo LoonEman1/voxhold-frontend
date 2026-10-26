@@ -17,7 +17,7 @@ interface VoiceSettingsDialogProps {
   open: boolean
   preferences: VoicePreferences
   devices: MediaDeviceInfo[]
-  inputLevel: number
+  getInputLevel: () => number
   voiceActive: boolean
   loadingDevices: boolean
   onClose: () => void
@@ -25,10 +25,21 @@ interface VoiceSettingsDialogProps {
   onRefreshDevices: (requestPermission: boolean) => Promise<void>
 }
 
-export function VoiceSettingsDialog({ open, preferences, devices, inputLevel, voiceActive, loadingDevices, onClose, onChange, onRefreshDevices }: VoiceSettingsDialogProps) {
+export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel, voiceActive, loadingDevices, onClose, onChange, onRefreshDevices }: VoiceSettingsDialogProps) {
   const [recording, setRecording] = useState<ShortcutField | null>(null)
   const [previewLevel, setPreviewLevel] = useState(0)
   const [previewError, setPreviewError] = useState('')
+  const [inputLevel, setInputLevel] = useState(0)
+
+  // Keep the live meter local to the visible dialog. Raw microphone samples
+  // must not re-render the workspace and its stream players every 90 ms.
+  useEffect(() => {
+    if (!open || !voiceActive) return
+    const sample = () => setInputLevel(getInputLevel())
+    sample()
+    const timer = window.setInterval(sample, 90)
+    return () => window.clearInterval(timer)
+  }, [open, voiceActive, getInputLevel])
   const previewGainRef = useRef<GainNode | null>(null)
   const inputs = useMemo(() => devices.filter((device) => device.kind === 'audioinput'), [devices])
   const outputs = useMemo(() => devices.filter((device) => device.kind === 'audiooutput'), [devices])

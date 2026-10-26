@@ -7,6 +7,8 @@ import { cloneRTCConfiguration } from './webrtcConfig'
 import { DecodeWatchdog, sampleInboundVideoStats } from './mediaRecovery'
 import { detectHDRCapabilities, probeCapturedHDRTrack, rememberHDRCaptureProbe } from './hdrCapabilities'
 import { tunePublisherRemoteDescription } from './sdpTuning'
+import { readPeerStats } from './peerStats'
+import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
 
 /**
  * Viewers trade a little latency for smooth playback: without a target the
@@ -244,12 +246,13 @@ function monitorPeerDiagnostics(
   peer: RTCPeerConnection,
   context: Record<string, unknown>,
 ) {
+  const quality = new MediaQualityTracker()
   let sampling = false
   const sample = async () => {
     if (sampling || peer.connectionState === 'closed' || typeof peer.getStats !== 'function') return
     sampling = true
     try {
-      const report = await peer.getStats()
+      const report = await readPeerStats(peer)
       const reports: Array<Record<string, unknown>> = []
       report.forEach((raw) => {
         const stats = raw as MediaRTPDiagnosticStats
@@ -280,6 +283,7 @@ function monitorPeerDiagnostics(
       clientDiagnostics.record('media', 'stream_rtp_stats', 'info', {
         ...context,
         connection_state: peer.connectionState,
+        quality: quality.sample(report),
         reports,
       })
     } catch (error) {
@@ -315,7 +319,7 @@ function monitorVideoQuality(
     if (sampling || peer.connectionState === 'closed') return
     sampling = true
     try {
-      const report = await peer.getStats()
+      const report = await readPeerStats(peer)
       let video: VideoRTPStats | undefined
       report.forEach((value) => {
         const candidate = value as VideoRTPStats
@@ -390,6 +394,11 @@ function wirePeer(
   diagnosticContext: Record<string, unknown> = {},
 ) {
   const remote = new MediaStream()
+  diagnosticContext = { ...diagnosticContext, media_attempt_id: mediaAttemptID() }
+  clientDiagnostics.record('webrtc', 'stream_connection_attempt', 'info', diagnosticContext)
+  const startedAt = performance.now()
+  let connectedOnce = false
+  let recoveryStartedAt: number | null = null
   peer.ontrack = (event) => {
     const receiver = event.receiver as (RTCRtpReceiver & { jitterBufferTarget?: number | null }) | undefined
     if (receiver && 'jitterBufferTarget' in receiver) {
@@ -438,12 +447,18 @@ function wirePeer(
     callbacks.onRemoteStream?.(remote)
   }
   peer.onconnectionstatechange = () => {
+    const connected = peer.connectionState === 'connected'
+    const recovering = peer.connectionState === 'disconnected' || peer.connectionState === 'failed'
+    if (recovering && connectedOnce && recoveryStartedAt === null) recoveryStartedAt = performance.now()
     clientDiagnostics.record('webrtc', 'stream_connection_state', peer.connectionState === 'failed' ? 'error' : 'info', {
       ...diagnosticContext,
       connection_state: peer.connectionState,
       ice_connection_state: peer.iceConnectionState,
       signaling_state: peer.signalingState,
+      connection_ms: connected && !connectedOnce ? Math.round(performance.now() - startedAt) : null,
+      recovery_ms: connected && recoveryStartedAt !== null ? Math.round(performance.now() - recoveryStartedAt) : null,
     })
+    if (connected) { connectedOnce = true; recoveryStartedAt = null }
     callbacks.onConnectionStateChange(peer.connectionState)
     onConnectionState?.(peer.connectionState)
   }

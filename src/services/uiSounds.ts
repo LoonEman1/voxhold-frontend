@@ -58,6 +58,7 @@ export class UISoundPlayer {
       const master = context.createGain()
       master.gain.value = spec.gain * Math.min(1, volumePercent / 100)
       master.connect(context.destination)
+      let remaining = spec.tones.length
       for (const tone of spec.tones) {
         const oscillator = context.createOscillator()
         const envelope = context.createGain()
@@ -71,6 +72,12 @@ export class UISoundPlayer {
         envelope.gain.exponentialRampToValueAtTime(0.0001, end)
         oscillator.connect(envelope)
         envelope.connect(master)
+        oscillator.onended = () => {
+          oscillator.disconnect()
+          envelope.disconnect()
+          remaining -= 1
+          if (remaining === 0) master.disconnect()
+        }
         oscillator.start(begin)
         oscillator.stop(end + 0.02)
       }
