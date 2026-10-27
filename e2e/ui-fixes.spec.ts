@@ -47,7 +47,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
     else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
     else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: options.channelMemberIds ?? [1, 2, 3] }
     else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: now - 5 * 60 }))
-    else if (path.endsWith('/recordings')) json = { recordings: [] }
+    else if (path.endsWith('/recordings')) json = { recordings: [], quota_bytes: 8 * 2 ** 30, max_file_bytes: 2 ** 31, retention_seconds: 86400 }
     else if (path.endsWith('/pins')) json = []
     else if (path.endsWith('/messages/sync')) json = { messages: [], deleted_ids: [], cursor: 0, reset: true, has_more: false, has_older: false }
     else if (path.endsWith('/messages')) json = { messages: [], pagination: { has_more: false, next_before_id: null } }
@@ -702,4 +702,40 @@ test('two tabs serialize rotation and share explicit logout',async({page,context
   await page.getByRole('button',{name:'Logout'}).click()
   await expect(second.getByText('logged-out',{exact:true})).toBeVisible()
   await second.close()
+})
+
+for (const role of ['owner', 'member'] as const) {
+  test(`${role} sees the configured recording storage quota`, async ({ page }) => {
+    await openCallWorkspace(page, { role })
+    await page.getByRole('button', { name: 'Список записей' }).click()
+    await expect(page.locator('.recordings-hint')).toContainText('Лимит хранилища на сервере — 8 ГБ')
+    await expect(page.locator('.recordings-hint')).not.toContainText('до 2 ГБ')
+  })
+}
+
+test('publisher mixer reveals on hover and restores the selected volume after mute', async ({ page }) => {
+  await page.goto('/e2e/fixtures/channel-access.html')
+  const tile = page.locator('.call-stream-tile')
+  const control = tile.locator('.stream-volume-control')
+  const slider = control.getByRole('slider', { name: 'Исходящая громкость трансляции' })
+  await expect(slider).toBeHidden()
+  await control.hover()
+  await expect(slider).toBeVisible()
+  await slider.fill('37')
+  await expect(control.locator('output')).toHaveText('37%')
+  await control.getByRole('button', { name: 'Выключить звук трансляции' }).click()
+  await expect(slider).toHaveValue('0')
+  await control.getByRole('button', { name: 'Включить звук трансляции' }).click()
+  await expect(slider).toHaveValue('37')
+  await page.screenshot({ path: 'node_modules/.cache/stream-volume-hover.png', animations: 'disabled' })
+  await tile.getByRole('button', { name: 'Развернуть: Вы показываете экран' }).click()
+  const player = page.getByRole('dialog')
+  await player.locator('.stream-volume-control').hover()
+  await expect(player.getByRole('slider')).toHaveValue('37')
+  await page.setViewportSize({ width: 375, height: 812 })
+  await player.getByRole('button', { name: 'Выключить звук трансляции' }).click()
+  await expect(player.getByRole('slider')).toHaveValue('0')
+  await player.getByRole('button', { name: 'Включить звук трансляции' }).click()
+  await expect(player.getByRole('slider')).toHaveValue('37')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })

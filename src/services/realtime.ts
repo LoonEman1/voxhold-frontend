@@ -94,7 +94,7 @@ interface RealtimeOptions {
   onStreamUpdated?: (stream: ActiveStream) => void
   onStreamStopped?: (event: StreamStopped) => void
   onStreamWatching?: (event: StreamWatching) => void
-  onStreamLeft?: (event: StreamStopped) => void
+  onStreamLeft?: (event: StreamStopped, requestId?: string) => void
   onStreamSnapshot?: (snapshot: StreamSnapshot) => void
   onStreamViewerJoined?: (viewer: StreamViewer) => void
   onStreamViewerLeft?: (viewer: StreamViewer) => void
@@ -388,7 +388,7 @@ export class RealtimeClient {
         } else if (payload.type === 'stream.watching' && payload.data) {
           this.options.onStreamWatching?.(payload.data as StreamWatching)
         } else if (payload.type === 'stream.left' && payload.data) {
-          this.options.onStreamLeft?.(payload.data as StreamStopped)
+          this.options.onStreamLeft?.(payload.data as StreamStopped, payload.request_id)
         } else if (payload.type === 'stream.snapshot' && payload.data) {
           this.options.onStreamSnapshot?.(payload.data as StreamSnapshot)
         } else if (payload.type === 'stream.viewer_joined' && payload.data) {

@@ -330,6 +330,19 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .stream-volume input { width: 100%; accent-color: var(--lime); }
 .stream-volume output { color: var(--text); font-size: .72rem; text-align: right; }
 .stream-volume.is-disabled { opacity: .5; }
+.stream-volume-control { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; color: var(--text); }
+.stream-volume-control__toggle { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: inherit; font: inherit; font-size: .75rem; cursor: pointer; }
+.stream-volume-control.is-muted > button { color: var(--coral); }
+.stream-volume-control.is-compact > button { width: 32px; height: 32px; min-height: 32px; padding: 0; }
+.stream-volume-control__mixer { position: absolute; z-index: 5; top: 50%; left: calc(100% - 1px); display: flex; align-items: center; gap: 8px; width: 160px; height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 0 9px 9px 0; background: var(--surface); box-shadow: 0 6px 20px #0003; transform: translateY(-50%) scaleX(0); transform-origin: left center; opacity: 0; visibility: hidden; transition: transform .16s ease, opacity .16s ease, visibility .16s; }
+.stream-volume-control:hover > .stream-volume-control__mixer, .stream-volume-control:focus-within > .stream-volume-control__mixer { transform: translateY(-50%) scaleX(1); opacity: 1; visibility: visible; }
+.stream-volume-control__mixer input { min-width: 0; width: 100%; accent-color: var(--lime); }
+.stream-volume-control__mixer output { min-width: 31px; font-size: 11px; text-align: right; }
+.stream-mini-player__actions .stream-volume-control__mixer, .call-stream-tile__actions .stream-volume-control__mixer { left: auto; right: calc(100% - 1px); border-radius: 9px 0 0 9px; transform-origin: right center; }
+.stream-cinema-controls .stream-volume-control { color: white; }
+.stream-cinema-controls .stream-volume-control__toggle, .stream-cinema-controls .stream-volume-control__mixer { background: #171816; border-color: #ffffff40; }
+@media (prefers-reduced-motion: reduce) { .stream-volume-control__mixer { transition: none; } }
+@media (max-width: 620px) { .stream-volume-control__toggle > span { display: none; } .stream-volume-control__mixer { width: 138px; } }
 
 .stream-mini-player { position: fixed; z-index: 80; right: 18px; bottom: 18px; display: grid; width: min(370px, calc(100vw - 36px)); grid-template-columns: minmax(0, 1fr) 45px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 14px; background: #111210; box-shadow: 0 20px 65px rgba(0,0,0,.55); animation: stream-mini-in .2s ease-out; }
 .stream-mini-player__preview { position: relative; display: block; width: 100%; min-width: 0; aspect-ratio: 16 / 9; overflow: hidden; padding: 0; border: 0; color: white; background: #050605; cursor: pointer; text-align: left; }

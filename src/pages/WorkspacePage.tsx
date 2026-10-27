@@ -39,6 +39,7 @@ import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, capturedAudioIncludesOwnPlayback, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
+import { StreamAudioGain } from '../services/streamAudioGain'
 import { capturedHDRProbe, detectHDRCapabilities, streamWatchCapabilities } from '../services/hdrCapabilities'
 import { createHDRPublishPipeline, createSDRPublishPipeline, type StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
@@ -101,6 +102,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [dialog, setDialog] = useState<Dialog>(null)
   const [messagePanel, setMessagePanel] = useState<MessagePanel>(null)
   const [messageTarget, setMessageTarget] = useState<MessageTarget | null>(null)
+  const [messageFocusVersion, setMessageFocusVersion] = useState(0)
   const [focusedMessageId, setFocusedMessageId] = useState<number | null>(null)
   const [onlineByServer, setOnlineByServer] = useState<Record<number, number[]>>({})
   const [channelReads, setChannelReads] = useState<Record<number, Record<number, ChannelRead>>>({})
@@ -160,16 +162,18 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const voicePreferencesRef = useRef(voicePreferences)
   const pushToTalkHeldRef = useRef(false)
   const voiceRequestIdsRef = useRef(new Map<string, 'join' | 'state' | 'media' | 'leave'>())
-  const streamRequestIdsRef = useRef(new Map<string, 'start' | 'watch' | 'media' | 'leave'>())
+  const streamAttemptRef = useRef(0)
+  const streamRequestIdsRef = useRef(new Map<string, { kind: 'start' | 'watch' | 'media' | 'leave'; attempt: number }>())
   const streamRoleRef = useRef<'publisher' | 'viewer' | null>(streamRole)
   const streamPreferencesRef = useRef(streamPreferences)
   const streamCaptureRef = useRef<MediaStream | null>(null)
+  const streamAudioGainRef = useRef<StreamAudioGain | null>(null)
   const streamPipelineRef = useRef<StreamPublishPipeline | null>(null)
   const serverStreamRef = useRef<BrowserServerStreamSession | null>(null)
   const p2pStreamPublisherRef = useRef<BrowserP2PStreamPublisher | null>(null)
   const p2pStreamViewerRef = useRef<BrowserP2PStreamViewer | null>(null)
   const streamDynamicRangeRef = useRef<StreamDynamicRange>('sdr')
-  const pendingStreamRewatchRef = useRef<{ forceSDR: boolean } | null>(null)
+  const pendingStreamRewatchRef = useRef<{ forceSDR: boolean; requestId?: string } | null>(null)
   const streamWatchActionRef = useRef<(forceSDR: boolean, rewatch: boolean, restoring?: boolean) => void>(() => undefined)
 	const streamStartActionRef = useRef<(restoring?: boolean) => void>(() => undefined)
   const streamsRef = useRef(streams)
@@ -445,7 +449,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const trackStreamRequest = useCallback((requestId: string | null, kind: 'start' | 'watch' | 'media' | 'leave') => {
     if (!requestId) return false
     if (streamRequestIdsRef.current.size >= 256) streamRequestIdsRef.current.clear()
-    streamRequestIdsRef.current.set(requestId, kind)
+    streamRequestIdsRef.current.set(requestId, { kind, attempt: streamAttemptRef.current })
     return true
   }, [])
 
@@ -474,6 +478,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [])
 
   const closeStreamLocally = useCallback(() => {
+    streamAttemptRef.current++
+    streamAudioGainRef.current?.close()
+    streamAudioGainRef.current = null
     streamPipelineRef.current?.close()
     streamPipelineRef.current = null
     serverStreamRef.current?.close()
@@ -506,6 +513,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * the "unexpected signalling offline" path, not a user leave.
    */
   const detachMediaPeers = useCallback(() => {
+    streamAttemptRef.current++
+    streamAudioGainRef.current?.close()
+    streamAudioGainRef.current = null
     streamPipelineRef.current?.close()
     streamPipelineRef.current = null
     serverStreamRef.current?.close()
@@ -1063,9 +1073,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           closeStreamLocally()
         }
       },
-      onStreamLeft: () => {
+      onStreamLeft: (_event, requestId) => {
         if (recoveryRef.current?.staleConnectionId()) return
         const pendingRewatch = pendingStreamRewatchRef.current
+        if (pendingRewatch?.requestId && requestId !== pendingRewatch.requestId) return
+        const request = requestId ? streamRequestIdsRef.current.get(requestId) : undefined
+        if (request && request.attempt !== streamAttemptRef.current) return
+        if (requestId) streamRequestIdsRef.current.delete(requestId)
         pendingStreamRewatchRef.current = null
         closeStreamLocally()
         if (pendingRewatch) {
@@ -1096,7 +1110,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         })
         closeStreamLocally()
         if (rewatch) {
-          window.setTimeout(() => streamWatchActionRef.current(false, true), 1_000)
+          const attempt = streamAttemptRef.current
+          window.setTimeout(() => {
+            if (streamAttemptRef.current === attempt) streamWatchActionRef.current(false, true)
+          }, 1_000)
           return
         }
         setStreamError(streamCloseMessage(event.reason))
@@ -1116,12 +1133,20 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onError: (event) => {
         if (!event.request_id) return
-        const streamKind = streamRequestIdsRef.current.get(event.request_id)
+        const request = streamRequestIdsRef.current.get(event.request_id)
         streamRequestIdsRef.current.delete(event.request_id)
+        if (request && request.attempt !== streamAttemptRef.current) return
+        const streamKind = request?.kind
         if (streamKind === 'leave' && pendingStreamRewatchRef.current) {
+          const pendingRewatch = pendingStreamRewatchRef.current
           pendingStreamRewatchRef.current = null
-          setStreamError(streamRealtimeError(event.message))
           closeStreamLocally()
+          // Older servers can remove the dead viewer before processing leave.
+          // That response acknowledges the desired state just like stream.left.
+          if (event.message === 'stream is not active on this connection') {
+            clientDiagnostics.record('media', 'stream_rewatch_after_closed_session', 'info')
+            queueMicrotask(() => streamWatchActionRef.current(pendingRewatch.forceSDR, true))
+          } else setStreamError(streamRealtimeError(event.message))
           return
         }
         if (streamKind && streamKind !== 'leave') {
@@ -1255,6 +1280,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     streamPreferencesRef.current = next
     setStreamPreferences(next)
     saveStreamPreferences(next)
+    streamAudioGainRef.current?.setVolume(next.publishVolume)
   }
 
   const openStreamSettings = (channelId = voiceSessionRef.current?.channelId) => {
@@ -1339,6 +1365,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       // A reused capture may still carry a mute from the previous stream.
       capture.getAudioTracks().forEach((track) => { track.enabled = true })
       setStreamAudioMuted(false)
+      streamAttemptRef.current++
       streamRoleRef.current = 'publisher'
       setStreamRole('publisher')
       setStreamStatus('signaling')
@@ -1377,6 +1404,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         publishStream = pipeline.stream
         if (preferences.mode === 'server') renditions = pipeline.renditions
       }
+      const audioGain = new StreamAudioGain(publishStream, preferences.publishVolume)
+      streamAudioGainRef.current = audioGain
+      publishStream = audioGain.stream
+      await audioGain.resume()
+      if (streamAudioGainRef.current !== audioGain || streamRoleRef.current !== 'publisher') return
       setStreamMedia(publishStream)
 
       const ended = () => {
@@ -1466,6 +1498,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
     if (!rewatch && !restoring) { streamRewatchBudgetRef.current = new RetryBudget(2, 2 * 60_000); setStreamCinema(false); setStreamExpanded(true) }
     setStreamError('')
+    streamAttemptRef.current++
     streamRoleRef.current = 'viewer'
     setStreamRole('viewer')
     setStreamStatus('signaling')
@@ -1511,7 +1544,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           }
           serverStreamRef.current?.close()
           serverStreamRef.current = null
-          if (!trackStreamRequest(client?.leaveStream() ?? null, 'leave')) {
+          const requestId = client?.leaveStream() ?? null
+          if (pendingStreamRewatchRef.current) pendingStreamRewatchRef.current.requestId = requestId ?? undefined
+          if (!trackStreamRequest(requestId, 'leave')) {
             pendingStreamRewatchRef.current = null
             failStream(new Error('Realtime-соединение недоступно для восстановления трансляции'))
           }
@@ -1844,6 +1879,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     if (channel.kind === 'voice') setVoiceChatOpen(true)
     setMessageTarget({ channelId, messageId })
+    setMessageFocusVersion((value) => value + 1)
     setFocusedMessageId(messageId)
     setSelectedChannelId(channelId)
     setMessagePanel(null)
@@ -2214,12 +2250,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     // A rejected join must not auto-watch on some later connection to this room.
     void joinVoiceChannel(channel).finally(() => { if (voiceSessionRef.current?.channelId !== channel.id) pendingWatch.current = null })
   }
-  const callControls = voiceSession && <CallControls connecting={voiceStatus !== 'connected'} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} recording={!!recording.activeId} recordBusy={recording.busy} canRecord={!!recording.activeId || (voiceStatus === 'connected' && !recording.records.some((item) => item.channel_id === voiceSession.channelId && item.status === 'recording'))} canShare={voiceStatus === 'connected' && !activeVoiceStream && !streamRole} chatOpen={voiceChatOpen} onMute={toggleSelfMute} onDeaf={toggleSelfDeaf} onRecord={() => { if (recording.activeId) void recording.stop(); else void recording.start() }} onRecordings={() => setRecordingsOpen(true)} onChat={() => {
+  const callControls = voiceSession && <CallControls connecting={voiceStatus !== 'connected'} selfMute={voiceSession.selfMute} selfDeaf={voiceSession.selfDeaf} recording={!!recording.activeId} recordBusy={recording.busy} canRecord={!!recording.activeId || (voiceStatus === 'connected' && !recording.records.some((item) => item.channel_id === voiceSession.channelId && item.status === 'recording'))} canShare={voiceStatus === 'connected' && !activeVoiceStream && !streamRole} chatOpen={voiceChatOpen} onMute={toggleSelfMute} onDeaf={toggleSelfDeaf} onRecord={() => { if (recording.activeId) void recording.stop(); else void recording.start() }} onRecordings={() => { recordingSyncRef.current(); setRecordingsOpen(true) }} onChat={() => {
     // From another channel or the expanded player the button opens the room chat; in the room it toggles.
     const inRoom = !streamExpanded && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId
     openActiveVoiceChannel(); setStreamExpanded(false); setVoiceChatOpen((value) => inRoom ? !value : true)
   }} onShare={() => openStreamSettings(voiceSession.channelId)} onLeave={leaveVoiceChannel}/>
-  const channelChat = <ChatPanel key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value); notificationCenter.contextChanged() }} onSend={sendMessage} onSetReaction={setMessageReaction} onLoadReactors={loadMessageReactors} onForward={(message) => { if (selectedServerId) setForwardSource({ serverId: selectedServerId, message }) }} onOpenMessage={(id) => { if (selectedChannelId) void openMessage(selectedChannelId, id) }} isMessageDeleted={(id) => !!selectedChannelId && historyStore.isDeleted(selectedChannelId, id)} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
+  const channelChat = <ChatPanel key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusVersion={messageFocusVersion} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value); notificationCenter.contextChanged() }} onSend={sendMessage} onSetReaction={setMessageReaction} onLoadReactors={loadMessageReactors} onForward={(message) => { if (selectedServerId) setForwardSource({ serverId: selectedServerId, message }) }} onOpenMessage={(id) => { if (selectedChannelId) void openMessage(selectedChannelId, id) }} isMessageDeleted={(id) => !!selectedChannelId && historyStore.isDeleted(selectedChannelId, id)} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
   const streamChannelIsOpen = !!voiceSession && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId && selectedChannel?.kind === 'voice'
   const canChangeViewedRole = !!selectedServer && selectedServer.role === 'owner' && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner'
   const canBanViewedMember = !!selectedServer && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner' && (selectedServer.role === 'owner' || (selectedServer.role === 'admin' && viewedProfileRole === 'member'))
@@ -2252,7 +2288,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
           <div className="content-header__actions">
             {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
-            {selectedServer && <button className="header-action" onMouseEnter={() => { void loadRecordingsDialog().catch(() => undefined) }} onFocus={() => { void loadRecordingsDialog().catch(() => undefined) }} onClick={() => setRecordingsOpen(true)} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
+            {selectedServer && <button className="header-action" onMouseEnter={() => { void loadRecordingsDialog().catch(() => undefined) }} onFocus={() => { void loadRecordingsDialog().catch(() => undefined) }} onClick={() => { recordingSyncRef.current(); setRecordingsOpen(true) }} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
             {chatVisible && selectedChannel?.kind === 'text' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
             <button className="header-action theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/><span>{theme === 'dark' ? 'Светлая' : 'Тёмная'}</span></button>
             {selectedServer && canManage && <button className="header-action" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
@@ -2298,7 +2334,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         onLeave={leaveStream}
       />}
 
-      {recordingsOpen && <Suspense fallback={<ModalLoading title="Записи сервера" eyebrow="ЗАПИСИ ЗВОНКОВ" onClose={() => setRecordingsOpen(false)}/>}> <RecordingsDialog channels={channels} open={recordingsOpen} onClose={() => setRecordingsOpen(false)} records={recording.records} locals={recording.locals} serverId={selectedServerId} progress={recording.progress} voiceActive={!!voiceSession} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview} currentUserId={user?.id} onRemoveServer={recording.removeServer}/> </Suspense>}
+      {recordingsOpen && <Suspense fallback={<ModalLoading title="Записи сервера" eyebrow="ЗАПИСИ ЗВОНКОВ" onClose={() => setRecordingsOpen(false)}/>}> <RecordingsDialog limits={recordingStorage ?? recording.limits} channels={channels} open={recordingsOpen} onClose={() => setRecordingsOpen(false)} records={recording.records} locals={recording.locals} serverId={selectedServerId} progress={recording.progress} voiceActive={!!voiceSession} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview} currentUserId={user?.id} onRemoveServer={recording.removeServer}/> </Suspense>}
       <MessageNotifications center={notificationCenter} userId={user?.id ?? 0}/>
       {notificationChannel && token && <Suspense fallback={null}><ChannelNotificationsDialog key={notificationChannel.id} open channel={notificationChannel} api={api} token={token} liveSettings={notificationSettings} onSaved={(value) => { notificationCenter.setSettings(value); setNotificationSettings(value) }} onClose={() => setNotificationChannel(null)} onPreviewSound={() => uiSounds.play('message_notification', voicePreferencesRef.current.uiSoundVolume || 50, voicePreferencesRef.current.outputDeviceId)}/></Suspense>}
       {forwardSource && token && <Suspense fallback={<ModalLoading title="Переслать сообщение" onClose={() => setForwardSource(null)}/>}><ForwardMessageDialog key={`${forwardSource.serverId}:${forwardSource.message.id}`} source={forwardSource} servers={servers} members={members} api={api} token={token} onClose={() => setForwardSource(null)} onForward={forwardMessage}/></Suspense>}

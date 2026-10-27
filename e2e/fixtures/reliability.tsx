@@ -12,6 +12,7 @@ import '../../src/styles/workspace.css'
 
 const makeMessage = (id: number, channelId: number): Message => ({ id, channel_id: channelId, content: `История ${id}`, revision: 1, author: { user_id: 1, username: 'Alice' }, created_at: 1_700_000_000 + id, edited_at: null })
 const histories = new Map([1, 2].map((channel) => [channel, Array.from({ length: 500 }, (_, index) => makeMessage(index + 1 + (channel - 1) * 1000, channel))]))
+histories.get(1)![499] = { ...histories.get(1)![499]!, reply: { message_id: 490, author: { user_id: 1, username: 'Alice' }, content: 'История 490', deleted: false } }
 const keys = new Map<string, Message>()
 const changed = new Map<number, number[]>()
 let cursor = 0, loseFirstReply = true
@@ -46,6 +47,13 @@ async function respond(request: TransportRequest): Promise<unknown> {
   if (path.pathname.endsWith('/read')) return { server_id: 1, channel_id: Number(path.pathname.split('/')[6]), user_id: 1, last_read_message_id: (request.body as { last_read_message_id: number }).last_read_message_id, updated_at: 1 }
   const channelId = Number(path.pathname.match(/\/channels\/(\d+)/)?.[1])
   const messages = histories.get(channelId)
+  const contextMatch = path.pathname.match(/messages\/(\d+)\/context$/)
+  if (messages && contextMatch) {
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    const target = Number(contextMatch[1]), index = messages.findIndex((m) => m.id === target)
+    const first = Math.max(0, index - 25)
+    return { messages: messages.slice(first, index + 26), target_index: index - first, target_message_id: target }
+  }
   if (messages && path.pathname.endsWith('/messages/sync')) {
     const after = path.searchParams.get('after')
     if (after !== null) await new Promise((resolve) => setTimeout(resolve, 500))
