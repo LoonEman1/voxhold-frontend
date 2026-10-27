@@ -7,6 +7,8 @@ interface UseMediaPlaybackOptions {
   role: 'publisher' | 'viewer'
   /** Initial desired mute state; autoplay-blocked viewers fall back to muted video. */
   muted: boolean
+  recovering?: boolean
+  onRecoveryRequired?: () => void
   context?: Record<string, unknown>
 }
 
@@ -27,6 +29,10 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
   // render just because an inline context object changed identity.
   const contextRef = useRef(options.context)
   contextRef.current = options.context
+  const recoveryRef = useRef(options.onRecoveryRequired)
+  recoveryRef.current = options.onRecoveryRequired
+  const interrupted = useRef(false)
+  useEffect(() => { if (options.recovering) interrupted.current = true }, [options.recovering])
 
   const attach = useCallback((value: MediaStream | null) => {
     setMedia(value)
@@ -51,13 +57,30 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
     let stallCount = 0
     let stallMs = 0
     let frameCallback: number | null = null
+    let progressAt = performance.now()
+    let lastPlaybackTime = video.currentTime
+    let repairAttempted = false
+    let recoveryRequested = false
+    let disposed = false
+    let waiting = true
+    const presented = () => {
+      progressAt = performance.now()
+      waiting = false
+      interrupted.current = false
+      repairAttempted = false
+      recoveryRequested = false
+      firstFrame()
+      if (stalledAt !== null) { stallMs += performance.now() - stalledAt; stalledAt = null }
+      if (stateRef.current !== 'audio_blocked') setState('playing')
+      frameCallback = video.requestVideoFrameCallback(presented)
+    }
     const firstFrame = () => {
       if (firstFrameMs !== null) return
       firstFrameMs = Math.round(performance.now() - startedAt)
       clientDiagnostics.record('media', 'stream_first_frame', 'info', { ...contextRef.current, role: options.role, first_frame_ms: firstFrameMs })
     }
-    const loadedData = () => { if (typeof video.requestVideoFrameCallback !== 'function') firstFrame() }
-    if (typeof video.requestVideoFrameCallback === 'function') frameCallback = video.requestVideoFrameCallback(firstFrame)
+    const loadedData = () => { if (typeof video.requestVideoFrameCallback !== 'function') { firstFrame(); waiting = false; progressAt = performance.now() } }
+    if (typeof video.requestVideoFrameCallback === 'function') frameCallback = video.requestVideoFrameCallback(presented)
     const resetHiddenStall = () => { if (document.visibilityState !== 'visible') stalledAt = null }
     document.addEventListener('visibilitychange', resetHiddenStall)
 
@@ -68,12 +91,17 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
       if (stateRef.current !== 'failed') setState('playing')
     }
     const markStalled = () => {
+      waiting = true
       if (video.readyState < 3) {
         setState('stalled')
         if (firstFrameMs !== null && stalledAt === null && document.visibilityState === 'visible') { stalledAt = performance.now(); stallCount += 1 }
       }
     }
-    const onTrackEnded = () => setState('stalled')
+    const onTrackEnded = () => { waiting = true; setState('stalled') }
+    const onTrackUnmuted = () => {
+      waiting = true
+      if (video.paused) void video.play().catch(() => undefined)
+    }
     const markFailed = () => setState('failed')
     video.addEventListener('loadedmetadata', markPlaying)
     video.addEventListener('loadeddata', loadedData)
@@ -82,9 +110,42 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
     video.addEventListener('waiting', markStalled)
     video.addEventListener('stalled', markStalled)
     video.addEventListener('error', markFailed)
-    for (const track of tracks) track.addEventListener('ended', onTrackEnded)
+    for (const track of tracks) {
+      track.addEventListener('ended', onTrackEnded)
+      track.addEventListener('mute', onTrackEnded)
+      track.addEventListener('unmute', onTrackUnmuted)
+    }
+    const timer = options.role === 'viewer' ? window.setInterval(() => {
+      if (document.visibilityState !== 'visible') { progressAt = performance.now(); return }
+      if (typeof video.requestVideoFrameCallback !== 'function' && video.currentTime > lastPlaybackTime) {
+        progressAt = performance.now(); waiting = false; interrupted.current = false
+        repairAttempted = false; recoveryRequested = false
+      }
+      lastPlaybackTime = video.currentTime
+      // A static screen with a healthy player is not a network failure. Arm
+      // repair after a transport interruption, track mute, missing first frame,
+      // stalled event or an unexpectedly paused element.
+      if (!waiting && !interrupted.current && !video.paused && video.readyState >= 3) return
+      const silentMs = performance.now() - progressAt
+      if (silentMs < 10_000 || recoveryRequested) return
+      if (!repairAttempted) {
+        repairAttempted = true
+        setState('stalled')
+        clientDiagnostics.record('media', 'stream_player_repair', 'warn', { ...contextRef.current, paused: video.paused, ready_state: video.readyState })
+        // Rebind the same live media without stopping tracks or the publisher.
+        video.srcObject = null
+        video.srcObject = media
+        void video.play().catch(() => undefined)
+      } else if (silentMs >= 20_000) {
+        recoveryRequested = true
+        clientDiagnostics.record('media', 'stream_player_recovery_requested', 'warn', contextRef.current)
+        if (!disposed) recoveryRef.current?.()
+      }
+    }, 2_000) : null
 
     return () => {
+      disposed = true
+      if (timer !== null) window.clearInterval(timer)
       if (stalledAt !== null) stallMs += performance.now() - stalledAt
       clientDiagnostics.record('media', 'stream_playback_summary', 'info', { ...contextRef.current, role: options.role, duration_ms: Math.round(performance.now() - startedAt), first_frame_ms: firstFrameMs, stall_count: stallCount, stall_ms: Math.round(stallMs) })
       document.removeEventListener('visibilitychange', resetHiddenStall)
@@ -96,7 +157,11 @@ export function useMediaPlayback(options: UseMediaPlaybackOptions) {
       video.removeEventListener('waiting', markStalled)
       video.removeEventListener('stalled', markStalled)
       video.removeEventListener('error', markFailed)
-      for (const track of tracks) track.removeEventListener('ended', onTrackEnded)
+      for (const track of tracks) {
+        track.removeEventListener('ended', onTrackEnded)
+        track.removeEventListener('mute', onTrackEnded)
+        track.removeEventListener('unmute', onTrackUnmuted)
+      }
       if (video.srcObject === media) video.srcObject = null
     }
   }, [media, options.role])

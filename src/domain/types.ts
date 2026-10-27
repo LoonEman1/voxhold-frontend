@@ -159,6 +159,7 @@ export interface PresenceUpdate {
   server_id: EntityId
   user_id: EntityId
   status: 'online' | 'offline'
+  last_seen_at?: number
 }
 
 export interface Profile {

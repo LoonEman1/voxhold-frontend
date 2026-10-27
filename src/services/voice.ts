@@ -1,3 +1,4 @@
+import { voiceTrackOwners } from './voiceTrackOwners'
 import type { VoiceICECandidate } from '../domain/types'
 import { normalizeVoicePreferences, type VoicePreferences } from './voiceSettings'
 import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
@@ -126,6 +127,8 @@ export class BrowserVoiceSession {
   // msid, which lets us attribute remote audio levels to room participants.
   private readonly midOwners = new Map<string, string>()
   private readonly trackOwners = new Map<string, string>()
+  private readonly remoteTransceivers = new Map<string, RTCRtpTransceiver>()
+  private levelsSampling = false
   private analysis: { context: AudioContext; sink: GainNode } | null = null
   private readonly remoteAnalysers = new Map<string, VoiceRemoteAnalyser>()
   // Per-user loudness multiplier keyed by the server connection id (0..2).
@@ -215,7 +218,10 @@ export class BrowserVoiceSession {
     }
 
     peer.ontrack = ({ track: remoteTrack, transceiver }) => {
-      if (this.closed || remoteTrack.kind !== 'audio' || this.remoteOutputs.has(remoteTrack.id)) return
+      if (this.closed || remoteTrack.kind !== 'audio') return
+      if (transceiver) this.remoteTransceivers.set(remoteTrack.id, transceiver)
+      this.refreshRemoteOwners()
+      if (this.remoteOutputs.has(remoteTrack.id)) return
       const connectionId = transceiver?.mid != null ? this.midOwners.get(transceiver.mid) : undefined
       if (connectionId) this.trackOwners.set(remoteTrack.id, connectionId)
       const media = new MediaStream([remoteTrack])
@@ -250,6 +256,7 @@ export class BrowserVoiceSession {
         // Keep the default output when the selected device disappeared.
       })
       this.attachRemoteAnalyser(remoteTrack.id, media)
+      this.ensureLevelTimer()
       this.playRemoteAudio(output, 'track_added')
     }
 
@@ -303,22 +310,29 @@ export class BrowserVoiceSession {
     }
   }
 
-  // The relayed offer names each remote participant track "audio-<connectionId>"
-  // inside its msid line. Pairing that track id with the m-line mid lets ontrack
-  // attribute incoming audio to a specific room participant.
   private rememberOfferTracks(sdp: string) {
-    let mid: string | null = null
-    for (const rawLine of sdp.split(/\r?\n/)) {
-      const line = rawLine.trim()
-      if (line.startsWith('a=mid:')) {
-        mid = line.slice('a=mid:'.length).trim() || null
-      } else if (line.startsWith('a=msid:')) {
-        const trackId = line.slice('a=msid:'.length).trim().split(/\s+/)[1] ?? ''
-        if (mid !== null && trackId.startsWith('audio-')) {
-          this.midOwners.set(mid, trackId.slice('audio-'.length))
-        }
-      }
-    }
+    this.midOwners.clear()
+    voiceTrackOwners(sdp).forEach((owner, mid) => this.midOwners.set(mid, owner))
+  }
+
+  // Receivers may keep a browser-generated track ID when an existing m-line
+  // starts sending or is reused. Refresh ownership after EVERY accepted offer,
+  // even when the browser does not deliver another track event.
+  private refreshRemoteOwners() {
+    this.peer?.getTransceivers?.().forEach((transceiver) => {
+      this.remoteTransceivers.set(transceiver.receiver.track.id, transceiver)
+    })
+    this.remoteTransceivers.forEach((transceiver, trackId) => {
+      const owner = transceiver.mid !== null ? this.midOwners.get(transceiver.mid) : undefined
+      const previous = this.trackOwners.get(trackId)
+      if (owner) this.trackOwners.set(trackId, owner)
+      else this.trackOwners.delete(trackId)
+      const output = this.remoteOutputs.get(trackId)
+      if (output) output.audio.volume = this.remoteAudioVolume(owner)
+      if (output && owner !== previous) clientDiagnostics.record('media', 'voice_remote_track_owner', 'debug', {
+        track_id: trackId, mid: transceiver.mid, mapped: !!owner,
+      })
+    })
   }
 
   private attachRemoteAnalyser(trackId: string, media: MediaStream) {
@@ -361,22 +375,42 @@ export class BrowserVoiceSession {
 
   private ensureLevelTimer() {
     if (this.levelTimer !== null || !this.options.onRemoteLevels) return
-    this.levelTimer = window.setInterval(() => {
-      if (this.closed) return
-      const levels: VoiceRemoteLevel[] = []
-      this.remoteAnalysers.forEach((entry, trackId) => {
-        const connectionId = this.trackOwners.get(trackId)
-        if (!connectionId) return
+    this.levelTimer = window.setInterval(() => { void this.sampleRemoteLevels() }, 200)
+  }
+
+  private async sampleRemoteLevels() {
+    if (this.closed || this.levelsSampling) return
+    this.levelsSampling = true
+    const values = new Map<string, number>()
+    try {
+      // Receiver audioLevel works even when a separate AudioContext is suspended
+      // by autoplay policy. Keep Web Audio as the feature-detected fallback.
+      if (this.peer && typeof this.peer.getStats === 'function') {
+        const report = await readPeerStats(this.peer, 150)
+        report.forEach((raw) => {
+          const stats = raw as AudioRTPDiagnosticStats
+          if (stats.type !== 'inbound-rtp' || (stats.kind !== 'audio' && stats.mediaType !== 'audio') || typeof stats.audioLevel !== 'number') return
+          if (stats.trackIdentifier) values.set(stats.trackIdentifier, Math.min(1, Math.max(0, stats.audioLevel) * 4.5))
+        })
+      }
+    } catch { /* The analyser can still meter audio when getStats is unavailable. */ }
+    finally { this.levelsSampling = false }
+    if (this.closed) return
+    const levels: VoiceRemoteLevel[] = []
+    this.remoteOutputs.forEach((output, trackId) => {
+      const connectionId = this.trackOwners.get(trackId)
+      if (!connectionId) return
+      let level = values.get(trackId)
+      const entry = this.remoteAnalysers.get(trackId)
+      if (level === undefined && entry && this.analysis?.context.state === 'running') {
         entry.analyser.getByteTimeDomainData(entry.values)
         let energy = 0
-        for (const value of entry.values) {
-          const normalized = (value - 128) / 128
-          energy += normalized * normalized
-        }
-        levels.push({ connectionId, level: Math.min(1, Math.sqrt(energy / entry.values.length) * 4.5) })
-      })
-      this.options.onRemoteLevels?.(levels)
-    }, 120)
+        for (const value of entry.values) energy += ((value - 128) / 128) ** 2
+        level = Math.min(1, Math.sqrt(energy / entry.values.length) * 4.5)
+      }
+      levels.push({ connectionId, level: this.selfDeaf || output.track.muted || output.track.readyState === 'ended' ? 0 : level ?? 0 })
+    })
+    this.options.onRemoteLevels?.(levels)
   }
 
   private playRemoteAudio(output: VoiceRemoteOutput, reason: string) {
@@ -457,6 +491,8 @@ export class BrowserVoiceSession {
   private removeRemoteOutput(trackId: string, output: VoiceRemoteOutput) {
     if (this.remoteOutputs.get(trackId) !== output) return
     this.remoteOutputs.delete(trackId)
+    this.remoteTransceivers.delete(trackId)
+    this.trackOwners.delete(trackId)
     this.recordingListeners.forEach((listener) => listener())
     this.detachRemoteAnalyser(trackId)
     output.audio.pause()
@@ -537,8 +573,12 @@ export class BrowserVoiceSession {
         sdp_bytes: sdp.length,
         pending_ice_count: this.pendingRemoteCandidates.length,
       })
+      const previousOwners = new Map(this.midOwners)
       this.rememberOfferTracks(sdp)
-      await peer.setRemoteDescription({ type: 'offer', sdp })
+      try { await peer.setRemoteDescription({ type: 'offer', sdp }) }
+      catch (error) { this.midOwners.clear(); previousOwners.forEach((owner, mid) => this.midOwners.set(mid, owner)); throw error }
+      if (this.closed) return
+      this.refreshRemoteOwners()
       const candidates = this.pendingRemoteCandidates.splice(0)
       for (const candidate of candidates) {
         if (remoteDescriptionAcceptsCandidate(peer, candidate)) {
@@ -638,7 +678,9 @@ export class BrowserVoiceSession {
     Array.from(this.remoteAnalysers.keys()).forEach((trackId) => this.detachRemoteAnalyser(trackId))
     this.remoteAnalysers.clear()
     this.trackOwners.clear()
+    this.remoteTransceivers.clear()
     this.midOwners.clear()
+    this.options.onRemoteLevels?.([])
     void this.analysis?.context.close().catch(() => undefined)
     this.analysis = null
     // Deliberately NOT stopping the shared input: it is owned by

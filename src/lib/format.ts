@@ -14,9 +14,9 @@ export function formatDate(unixSeconds: number): string {
   }).format(new Date(unixSeconds * 1000))
 }
 
-export function relativeTime(unixSeconds: number | null): string {
+export function relativeTime(unixSeconds: number | null, now = Date.now()): string {
   if (!unixSeconds) return 'не в сети'
-  const difference = unixSeconds * 1000 - Date.now()
+  const difference = unixSeconds * 1000 - now
   const minutes = Math.round(difference / 60_000)
   if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute')
   const hours = Math.round(minutes / 60)

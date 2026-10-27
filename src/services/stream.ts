@@ -616,6 +616,8 @@ export class BrowserServerStreamSession {
     }
   }
 
+  recoverPlayback() { this.watchdog?.recoverPlayback() }
+
   acceptOffer(sdp: string) {
     const operation = this.offerQueue.then(async () => {
       if (this.closed) return

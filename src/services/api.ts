@@ -164,6 +164,8 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      members: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/members`, signal }) as Promise<{ user_ids: number[] }>,
       list: (token: string, serverId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels`, signal }) as Promise<Channel[]>,
       create: (token: string, serverId: number, name: string, kind: ChannelKind) =>

@@ -99,6 +99,38 @@ describe('channel history and reconnect', () => {
 })
 
 describe('outgoing message acknowledgement', () => {
+  it('does not refill an evicted outbox history from a late request and can immediately load it again', async () => {
+    const late = deferred<MessageSyncPage>()
+    const fresh = deferred<MessageSyncPage>()
+    const { store, sync, create } = setup(vi.fn(() => late.promise))
+    create.mockRejectedValueOnce(new Error('offline'))
+    await store.send(1, 2, 'pending')
+    const loading = store.sync(1, 2)
+    for (let channel = 3; channel <= 15; channel++) store.subscribe(1, channel, () => {})()
+    const release = store.subscribe(1, 2, () => {})
+    sync.mockReturnValueOnce(fresh.promise)
+    const reloaded = store.sync(1, 2)
+    late.resolve(page([message(1)])); await loading
+    expect(store.snapshot(2).messages).toHaveLength(0)
+    expect(store.snapshot(2).loading).toBe(true)
+    fresh.resolve(page([message(50)])); await reloaded
+    expect(store.snapshot(2).messages.map((item) => item.id)).toEqual([50])
+    expect(store.snapshot(2).pending).toHaveLength(1)
+    release()
+  })
+  it('acknowledges a saved outgoing message older than the visible history window', async () => {
+    const reply = deferred<Message>()
+    const { store, create, sync } = setup()
+    create.mockReturnValueOnce(reply.promise)
+    const sending = store.send(1, 2, 'old reply')
+    const id = store.snapshot(2).pending[0]!.id
+    sync.mockResolvedValueOnce(page([message(100)]))
+    await store.sync(1, 2)
+    store.receive({ ...message(1), client_message_id: id })
+    reply.reject(new Error('reply lost')); await sending
+    expect(store.snapshot(2).pending).toEqual([])
+    expect(store.snapshot(2).messages.map((item) => item.id)).toEqual([100])
+  })
   it('preserves a failed outbox when its history falls out of the LRU cache', async () => {
     const { store, create } = setup()
     create.mockRejectedValueOnce(new Error('offline'))

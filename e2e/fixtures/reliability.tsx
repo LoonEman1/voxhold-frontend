@@ -38,6 +38,7 @@ async function respond(request: TransportRequest): Promise<unknown> {
   if (path.pathname === '/api/v1/me/servers') return [{ id: 1, name: 'Fixture', role: 'owner', created_by: 1, created_at: 1, joined_at: 1 }]
   if (path.pathname === '/api/v1/me/profile') return { user_id: 1, username: 'Alice', about: '', country_code: null, created_at: 1, last_seen_at: null, updated_at: null }
   if (path.pathname === '/api/v1/instance') return { instance_id: 'fixture', name: 'Fixture', initialized: true, protocol_version: 1, registration: 'invite_only', created_at: 1 }
+  if (/\/channels\/\d+\/members$/.test(path.pathname)) return { user_ids: Array.from({ length: 2500 }, (_, i) => i + 1) }
   if (path.pathname.endsWith('/members')) return Array.from({ length: 2500 }, (_, index) => ({ user_id: index + 1, username: index ? `Участник ${index + 1}` : 'Alice', role: index ? 'member' : 'owner', joined_at: 1, created_at: 1, about: '', country_code: null, last_seen_at: null }))
   if (path.pathname === '/api/v1/servers/1/channels') return [1, 2].map((id) => ({ id, server_id: 1, name: `канал-${id}`, kind: 'text', position: id, created_by: 1, created_at: 1, last_message_id: histories.get(id)!.at(-1)!.id }))
   if (path.pathname.endsWith('/recordings')) return { recordings: [] }

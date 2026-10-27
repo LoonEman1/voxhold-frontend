@@ -22,6 +22,7 @@ interface Entry {
   state: ChannelHistoryState
   listeners: Set<() => void>
   controller: AbortController
+  historyController: AbortController
   tombstones: Set<number>
   live: Map<number, { version: number; message: Message }>
   version: number
@@ -48,7 +49,7 @@ export class ChannelHistoryStore {
   entry(serverId: number, channelId: number): Entry {
     let entry = this.entries.get(channelId)
     if (!entry) {
-      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), tombstones: new Set(), live: new Map(), version: 0, syncAgain: false, contextGeneration: 0, forceSnapshot: false }
+      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), live: new Map(), version: 0, syncAgain: false, contextGeneration: 0, forceSnapshot: false }
       this.entries.set(channelId, entry)
     }
     return entry
@@ -79,11 +80,15 @@ export class ChannelHistoryStore {
       if (entry.listeners.size) continue
       if (entry.state.pending.length) {
         // Outbox entries survive LRU eviction, without retaining their history.
+        entry.historyController.abort()
+        entry.historyController = new AbortController()
+        entry.contextGeneration++
+        entry.sync = undefined
         entry.state = { ...initial(), pending: entry.state.pending }
         entry.viewport = undefined; entry.live.clear(); entry.tombstones.clear()
         retained--; continue
       }
-      entry.controller.abort(); this.entries.delete(id)
+      entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id)
       retained--
     }
   }
@@ -107,7 +112,10 @@ export class ChannelHistoryStore {
     const current = entry.state
     const pending = message.client_message_id && message.author.user_id === this.userId ? current.pending.filter((item) => item.id !== message.client_message_id) : current.pending
     const last = current.messages.at(-1)?.id ?? 0
-    if (current.messages.length && message.id < current.messages[0]!.id) return
+    if (current.messages.length && message.id < current.messages[0]!.id) {
+      if (pending !== current.pending) this.update(message.channel_id, { pending })
+      return
+    }
     if (!current.messages.some((item) => item.id === message.id) && (current.hasNewer || (current.messages.length >= MAX_CHANNEL_MESSAGES && entry.viewport?.following === false)) && message.id > last) {
       this.update(message.channel_id, { hasNewer: true, pending }); return
     }
@@ -125,6 +133,7 @@ export class ChannelHistoryStore {
   sync(serverId: number, channelId: number): Promise<void> {
     const entry = this.entry(serverId, channelId)
     if (entry.sync) { entry.syncAgain = true; return entry.sync }
+    const controller = entry.historyController
     const run = async () => {
       do {
         entry.syncAgain = false
@@ -134,14 +143,20 @@ export class ChannelHistoryStore {
           const generation = entry.contextGeneration
           const after = entry.forceSnapshot ? undefined : entry.state.cursor ?? undefined
           entry.forceSnapshot = false
-          const page = await this.api.messages.sync(this.token, serverId, channelId, after, entry.controller.signal)
-          if (this.closed || entry.controller.signal.aborted) return
+          const page = await this.api.messages.sync(this.token, serverId, channelId, after, controller.signal)
+          if (this.closed || controller.signal.aborted) return
           this.applySync(channelId, entry, page, version, generation)
           more = page.has_more
         } while (more)
       } while (entry.syncAgain)
     }
-    const promise = run().finally(() => { entry.sync = undefined; if (this.entries.get(channelId) === entry) this.update(channelId, { loading: false }); this.trim() })
+    const promise = run().finally(() => {
+      if (entry.sync === promise) {
+        entry.sync = undefined
+        if (this.entries.get(channelId) === entry) this.update(channelId, { loading: false })
+        this.trim()
+      }
+    })
     entry.sync = promise
     if (entry.state.cursor === null && entry.state.messages.length === 0) this.update(channelId, { loading: true })
     return promise
@@ -174,7 +189,7 @@ export class ChannelHistoryStore {
     const entry = this.entry(serverId, channelId), generation = ++entry.contextGeneration
     this.update(channelId, { loading: true })
     try {
-      const page = await this.api.messages.context(this.token, serverId, channelId, messageId, 25, 25, entry.controller.signal)
+      const page = await this.api.messages.context(this.token, serverId, channelId, messageId, 25, 25, entry.historyController.signal)
       if (entry.controller.signal.aborted || generation !== entry.contextGeneration) return
       const { messages } = this.merge(entry, page.messages, true)
       this.update(channelId, { messages, nextBeforeId: messages[0]?.id ?? null, hasMore: page.target_index >= 25, hasNewer: page.messages.length - page.target_index - 1 >= 25 })
@@ -186,11 +201,11 @@ export class ChannelHistoryStore {
     const generation = entry.contextGeneration
     this.update(channelId, { loadingOlder: true })
     try {
-      const page = await this.api.messages.list(this.token, serverId, channelId, entry.state.nextBeforeId, entry.controller.signal)
+      const page = await this.api.messages.list(this.token, serverId, channelId, entry.state.nextBeforeId, entry.historyController.signal)
       if (generation !== entry.contextGeneration || entry.controller.signal.aborted) return
       const { messages, truncated } = this.merge(entry, page.messages, false, true)
       this.update(channelId, { messages, hasMore: page.pagination.has_more, nextBeforeId: page.pagination.next_before_id, hasNewer: entry.state.hasNewer || truncated })
-    } finally { if (this.entries.get(channelId) === entry) this.update(channelId, { loadingOlder: false }); this.trim() }
+    } finally { if (generation === entry.contextGeneration && this.entries.get(channelId) === entry) this.update(channelId, { loadingOlder: false }); this.trim() }
   }
   async newer(serverId: number, channelId: number) {
     const entry = this.entry(serverId, channelId), pivot = entry.state.messages.at(-1)
@@ -198,12 +213,12 @@ export class ChannelHistoryStore {
     const generation = entry.contextGeneration
     this.update(channelId, { loadingNewer: true })
     try {
-      const page = await this.api.messages.context(this.token, serverId, channelId, pivot.id, 1, 50, entry.controller.signal)
+      const page = await this.api.messages.context(this.token, serverId, channelId, pivot.id, 1, 50, entry.historyController.signal)
       if (generation !== entry.contextGeneration || entry.controller.signal.aborted) return
       const { messages, truncated } = this.merge(entry, page.messages)
       this.update(channelId, { messages, hasNewer: page.messages.length - page.target_index - 1 >= 50, ...(truncated ? { hasMore: true, nextBeforeId: messages[0]!.id } : {}) })
       if (!entry.state.hasNewer) await this.sync(serverId, channelId)
-    } finally { if (this.entries.get(channelId) === entry) this.update(channelId, { loadingNewer: false }); this.trim() }
+    } finally { if (generation === entry.contextGeneration && this.entries.get(channelId) === entry) this.update(channelId, { loadingNewer: false }); this.trim() }
   }
   async latest(serverId: number, channelId: number) {
     const entry = this.entry(serverId, channelId)
@@ -241,8 +256,8 @@ export class ChannelHistoryStore {
   }
   removeServer(serverId: number) {
     for (const [id, entry] of this.entries) if (entry.serverId === serverId) {
-      this.update(id, initial()); entry.controller.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())
+      this.update(id, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())
     }
   }
-  close() { this.closed = true; this.entries.forEach((entry) => entry.controller.abort()); this.entries.clear() }
+  close() { this.closed = true; this.entries.forEach((entry) => { entry.controller.abort(); entry.historyController.abort() }); this.entries.clear() }
 }

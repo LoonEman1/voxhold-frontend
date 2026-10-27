@@ -4,6 +4,7 @@ import { countryByCode } from '../lib/countries'
 import { formatDate, humanError } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
+import { MemberPresence, usePresenceClock } from './MemberPresence'
 import { AvatarEditor } from './AvatarEditor'
 import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
@@ -131,7 +132,8 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
+export function MemberProfileDialog({ online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
+  const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
   const [manageError, setManageError] = useState('')
@@ -153,6 +155,7 @@ export function MemberProfileDialog({ open, onClose, profile, role, loading, err
         <div className="member-profile-cover"><i/><i/><i/></div>
         <div className="member-profile-avatar-slot" aria-label="Фотография профиля"><Avatar userId={profile.user_id} name={profile.username} size="large"/></div>
         <div className="member-profile-head"><div><h3>{profile.username}</h3><span>@{profile.username}</span></div><span className={`role-badge role-badge--${role}`}>{roleMeta[role].label}</span></div>
+        <div className="member-profile-presence"><MemberPresence online={online} lastSeenAt={profile.last_seen_at} now={now}/></div>
         <dl className="profile-facts">
           <div><dt>В Voxhold с</dt><dd>{formatDate(profile.created_at)}</dd></div>
           <div><dt>Страна проживания</dt><dd>{country ? <><CountryFlag code={country.code}/> {country.name}</> : 'Не указана'}</dd></div>

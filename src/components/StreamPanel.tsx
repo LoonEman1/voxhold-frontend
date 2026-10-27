@@ -11,6 +11,7 @@ import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
 interface StreamPanelProps {
+  onPlaybackRecovery?: () => void
   stream: ActiveStream | null
   currentUserId: number
   /** Display name of the publisher, resolved from the member list. */
@@ -32,7 +33,7 @@ interface StreamPanelProps {
   onToggleAudio?: () => void
 }
 
-export function StreamPanel({ stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality: qualityOverride, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
+export function StreamPanel({ onPlaybackRecovery, stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality: qualityOverride, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
   const quality = useStreamQuality(qualityOverride)
   const pendingPublisher = !stream && !!media
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
@@ -40,6 +41,8 @@ export function StreamPanel({ stream, currentUserId, publisherName, voiceActive,
   const { videoRef, state: playbackState, attach, enableAudio } = useMediaPlayback({
     role: isPublisher ? 'publisher' : 'viewer',
     muted: !!isPublisher || preferences.playbackVolume === 0,
+    recovering: status === 'signaling',
+    onRecoveryRequired: onPlaybackRecovery,
     context: { player: 'channel' },
   })
 
@@ -67,7 +70,7 @@ export function StreamPanel({ stream, currentUserId, publisherName, voiceActive,
   const watching = !isPublisher && (!!media || status !== 'idle')
   const liveLabel = isPublisher
     ? audioMuted ? 'Ваш предпросмотр · звук выключен' : 'Ваш предпросмотр'
-    : playbackState === 'playing' ? 'В эфире' : 'Подключение…'
+    : playbackState === 'stalled' ? 'Восстанавливаем трансляцию…' : playbackState === 'playing' ? 'В эфире' : 'Подключение…'
   const rangeLabel = quality?.dynamicRange === 'hdr10' ? 'HDR10' : quality?.dynamicRange === 'hlg' ? 'HLG' : quality?.dynamicRange === 'sdr' ? 'SDR' : ''
   const title = isPublisher
     ? 'Вы показываете экран'

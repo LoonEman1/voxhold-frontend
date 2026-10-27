@@ -11,6 +11,7 @@ import { StreamPanel } from './StreamPanel'
 export type VoiceConnectionStatus = 'idle' | 'requesting' | 'signaling' | 'connected'
 
 interface VoicePanelProps {
+  onPlaybackRecovery?: () => void
   controls?: ReactNode
   chat?: ReactNode
   recordingLabel?: string
@@ -63,7 +64,7 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel }: VoicePanelProps) {
+export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel }: VoicePanelProps) {
   const activeHere = activeChannel?.id === channel.id
   const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
@@ -83,7 +84,7 @@ export function VoicePanel({ channel, activeChannel, participants, members, curr
       {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
       <div className="voice-stage-content">
       {/* The stream is the main content of the room while it runs. */}
-      <StreamPanel stream={stream} currentUserId={currentUserId} publisherName={publisherName} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>
+      <StreamPanel onPlaybackRecovery={onPlaybackRecovery} stream={stream} currentUserId={currentUserId} publisherName={publisherName} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>
 
       <section className="voice-participants">
         {participants.length ? <div className="voice-participant-grid">{participants.map((participant) => {

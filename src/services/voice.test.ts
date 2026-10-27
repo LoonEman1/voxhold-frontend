@@ -173,6 +173,45 @@ describe('BrowserVoiceSession', () => {
     }
   })
 
+  it('meters a reused receiver with a browser track ID, refreshes its owner and clears silent speakers without AudioContext', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('AudioContext', undefined)
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const levels = vi.fn()
+    const session = new BrowserVoiceSession({ input, onAnswer: vi.fn(), onICECandidate: vi.fn(), onConnectionStateChange: vi.fn(), onError: vi.fn(), onRemoteLevels: levels })
+    await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+    const peer = FakePeerConnection.latest!
+    const track = new FakeTrack()
+    const transceiver = { mid: null as string | null, receiver: { track } }
+    let level = .1
+    Object.assign(peer, {
+      getTransceivers: () => [transceiver],
+      getStats: vi.fn(async () => new Map([['audio', { type: 'inbound-rtp', kind: 'audio', trackIdentifier: track.id, audioLevel: level }]]) as unknown as RTCStatsReport),
+    })
+    peer.ontrack?.({ track, transceiver } as unknown as RTCTrackEvent)
+    transceiver.mid = '0'
+    const offer = (owner: string) => `v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=msid:voice audio-${owner}\r\n`
+    try {
+      await session.acceptOffer(offer('alice'))
+      session.setRemoteGain('alice', .3)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([{ connectionId: 'alice', level: .45 }])
+      const output = document.querySelector<HTMLAudioElement>('.voice-audio-output')!
+      expect(output.volume).toBe(.3)
+      await session.acceptOffer(offer('bob'))
+      expect(output.volume).toBe(1)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([{ connectionId: 'bob', level: .45 }])
+      level = 0
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([{ connectionId: 'bob', level: 0 }])
+      await session.acceptOffer('v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=recvonly\r\n')
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([])
+    } finally { session.close(); input.close(); vi.useRealTimers() }
+  })
+
   it('stops remote outputs exactly once and never touches the shared input', async () => {
     const input = new BrowserVoiceInput()
     await input.start(DEFAULT_VOICE_PREFERENCES)

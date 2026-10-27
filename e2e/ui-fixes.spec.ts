@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openCallWorkspace(page: Page, options: { withPeers?: boolean; role?: 'owner' | 'admin' | 'member' } = {}) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -15,7 +15,9 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
   })
   const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
   const participants = options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
+  let emit = (_type: string, _data: unknown) => {}
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
+    emit = (type, data) => socket.send(JSON.stringify({ type, data }))
     socket.onMessage((raw) => {
       const event = JSON.parse(String(raw))
       if (event.type === 'auth') {
@@ -43,7 +45,8 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
     else if (path.endsWith('/instance')) json = { instance_id: 'fixture', name: 'FirstInstance', initialized: true, registration: 'invite_only', protocol_version: 1, created_at: 1 }
     else if (path.endsWith('/me/profile')) json = { user_id: 1, username: 'Александр', about: '', country_code: null, created_at: 1 }
     else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
-    else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: null }))
+    else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: options.channelMemberIds ?? [1, 2, 3] }
+    else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: now - 5 * 60 }))
     else if (path.endsWith('/recordings')) json = { recordings: [] }
     else if (path.endsWith('/pins')) json = []
     else if (path.endsWith('/messages/sync')) json = { messages: [], deleted_ids: [], cursor: 0, reset: true, has_more: false, has_older: false }
@@ -70,6 +73,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
   })
   await page.goto('/')
   await expect(page.locator('.voice-participant')).toHaveCount(participants.length)
+  return { emit }
 }
 
 for (const role of ['owner', 'admin'] as const) {
@@ -255,4 +259,30 @@ test('avatar camera menu supports moving, zooming, server crop upload and remova
   expect(bodyBytes).toBe(file.length)
   await trigger.click(); await page.getByRole('button', { name: 'Удалить аватар' }).click()
   await expect.poll(() => removed).toBe(true)
+})
+
+test('member tabs follow server access, retain all users and show live last-seen with clear presence', async ({ page }) => {
+  const { emit } = await openCallWorkspace(page, { channelMemberIds: [1, 3] })
+  const sidebar = page.locator('.members-sidebar')
+  await expect(sidebar.locator('.member-row')).toHaveCount(2)
+  await expect(sidebar.locator('.role-dot')).toHaveCount(0)
+  await expect(sidebar.locator('.member-row').filter({ hasText: 'ОченьДлинноеИмяУчастника' })).toContainText('Был в сети 5 минут назад')
+  await expect(sidebar.locator('time')).toHaveAttribute('title', /Последний раз в сети:/)
+  await sidebar.getByRole('tab', { name: 'Все участники' }).click()
+  await expect(sidebar.locator('.member-row')).toHaveCount(3)
+  emit('presence.updated', { server_id: 1, user_id: 2, status: 'online', last_seen_at: Math.floor(Date.now() / 1000) })
+  await expect(sidebar.locator('.member-row').filter({ hasText: 'Мария' })).toContainText('Сейчас в сети')
+  emit('presence.updated', { server_id: 1, user_id: 2, status: 'offline', last_seen_at: Math.floor(Date.now() / 1000) })
+  await expect(sidebar.locator('.member-row').filter({ hasText: 'Мария' })).toContainText('Был в сети только что')
+  await sidebar.getByRole('tab', { name: 'Участники канала' }).click()
+  await expect(sidebar.locator('.member-row')).toHaveCount(2)
+  await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-dark.png' })
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light')
+  await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-light.png' })
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.getByTitle('Показать участников', { exact: true }).click()
+  await expect(sidebar).toBeVisible()
+  await expect(sidebar.locator('.member-row')).toHaveCount(2)
+  expect(await sidebar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-mobile.png' })
 })

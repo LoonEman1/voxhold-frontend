@@ -8,6 +8,12 @@ function mockTransport(response: TransportResponse<unknown>) {
 }
 
 describe('Voxhold API client', () => {
+  it('loads the authoritative channel access roster with authentication and cancellation', async () => {
+    const { api, request } = mockTransport({ status: 200, data: { user_ids: [1, 3] } })
+    const controller = new AbortController()
+    expect(await api.channels.members('session', 2, 4, controller.signal)).toEqual({ user_ids: [1, 3] })
+    expect(request).toHaveBeenCalledWith({ token: 'session', path: '/api/v1/servers/2/channels/4/members', signal: controller.signal })
+  })
   it('removes a server recording without deleting local browser data', async () => {
     const { api, request } = mockTransport({ status: 200, data: { id: 'record', status: 'deleted' } })
     await api.recordings.remove('session', 'record')
