@@ -311,7 +311,7 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
     if (!content || sending) return
     setSending(true); setSendError('')
     setDraft('')
-    try { await onSend(content) } catch (error) { setDraft((current) => current || draft); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
+    try { await onSend(content) } catch (error) { setDraft((current) => current || content); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
   }
 
   const saveEdit = async (messageId: number, encoded?: string) => {

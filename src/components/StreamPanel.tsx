@@ -88,6 +88,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
     </button>
     {!isPublisher && playbackState === 'audio_blocked' && media && <button className="call-stream-tile__audio" onClick={enableAudio}><Icon name="volume" size={14}/>Включить звук</button>}
     <footer><div><b><Icon name="monitor" size={14}/>{isPublisher ? 'Ваш экран' : publisherName ?? 'Трансляция экрана'}</b><small>{playbackState === 'stalled' ? liveLabel : subtitle}</small></div><div className="call-stream-tile__actions">
+      {isPublisher && stream?.has_audio && onToggleAudio && <button className="icon-button" type="button" onClick={onToggleAudio} aria-pressed={audioMuted} aria-label={audioMuted ? 'Включить звук трансляции' : 'Выключить звук трансляции'} title={audioMuted ? 'Звук трансляции выключен — включить для зрителей' : 'Выключить звук трансляции для зрителей'}><Icon name={audioMuted ? 'volumeOff' : 'volume'} size={16}/></button>}
       {media && onFullscreen && <button className="icon-button" onClick={onFullscreen} aria-label="Трансляция на полный экран"><Icon name="maximize" size={16}/></button>}
       {(isPublisher || watching) && <button className="icon-button" onClick={onLeave} aria-label={isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'}><Icon name="close" size={16}/></button>}
     </div></footer>

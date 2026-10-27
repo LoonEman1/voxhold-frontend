@@ -46,6 +46,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   const deleted = useRef(new Set<string>())
   const uploadAbort = useRef<AbortController | null>(null)
   const starting = useRef(false)
+  const recordVersions = useRef(new Map<number, number>())
   const merge = useCallback((record: ChannelRecording) => {
     if (record.status === 'deleted') {
       deleted.current.add(record.id)
@@ -54,6 +55,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
       setLocals((current) => current.map((local) => local.record.id === record.id ? { ...local, record } : local))
       setRetry((value) => value + 1)
     } else if (deleted.current.has(record.id)) return
+    recordVersions.current.set(record.server_id, (recordVersions.current.get(record.server_id) ?? 0) + 1)
     setRecords((current) => {
       const previous = current[record.id]
       return previous && previous.updated_at > record.updated_at ? current : { ...current, [record.id]: record }
@@ -135,12 +137,20 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   useEffect(() => {
     if (!serverId || !token) return
     const controller = new AbortController()
-    void api.recordings.list(token, serverId, controller.signal).then(({ recordings }) => {
-      if (controller.signal.aborted) return
-      const visible = new Set(recordings.map((record) => record.id))
-      setRecords((current) => Object.fromEntries(Object.entries(current).filter(([, record]) => record.server_id !== serverId || visible.has(record.id))))
-      recordings.forEach(merge)
-    }).catch(() => {})
+    void (async () => {
+      while (!controller.signal.aborted) {
+        const version = recordVersions.current.get(serverId) ?? 0
+        const { recordings } = await api.recordings.list(token, serverId, controller.signal)
+        if (controller.signal.aborted) return
+        // A live event can be newer than this HTTP snapshot. Fetch again before
+        // pruning, so new recordings survive and revoked records still disappear.
+        if (version !== (recordVersions.current.get(serverId) ?? 0)) continue
+        const visible = new Set(recordings.map((record) => record.id))
+        setRecords((current) => Object.fromEntries(Object.entries(current).filter(([, record]) => record.server_id !== serverId || visible.has(record.id))))
+        recordings.forEach(merge)
+        return
+      }
+    })().catch(() => {})
     return () => controller.abort()
   }, [api, token, serverId, merge, retry])
   useEffect(() => {

@@ -14,7 +14,10 @@ have an amber row accent and styled mention chips.
 Alerts arrive from other channels/servers over an active connection. They ignore
 the sender, edits, history loads, send retries and inaccessible channels. Clicking
 an alert rechecks access and jumps to its message. A focused, actively read
-channel stays quiet. Four toasts and 256 recent message claims bound memory;
+channel stays quiet. Scrolling away, a covering dialog or focused stream viewing
+ends reading suppression immediately; a stale heartbeat from the same tab does
+not override its current state. Failed sends preserve selected mention IDs when
+restoring the draft. Four toasts and 256 recent message claims bound memory;
 sound is limited to one soft two-note cue per 3 seconds. Web Locks and local
 storage suppress duplicates across tabs; private browsing/storage failure keeps
 a best-effort memory fallback. Queued alerts and existing toasts are cancelled on

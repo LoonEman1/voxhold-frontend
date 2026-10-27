@@ -58,3 +58,13 @@ it('ignores a stale desktop notification action after logout or access revocatio
   center.allowChannel(1, 7); disposers.splice(0).forEach((dispose) => dispose()); center.open(event())
   expect(open).not.toHaveBeenCalled()
 })
+
+it('uses current reading state instead of its own stale heartbeat after scrolling away', async () => {
+  vi.mocked(document.hasFocus).mockReturnValue(true)
+  const reading = { serverId: 1, channelId: 7, following: true }
+  const { center, sound } = setup(reading)
+  reading.following = false
+  await center.receive(event())
+  expect(center.snapshot()).toHaveLength(1)
+  expect(sound).toHaveBeenCalledOnce()
+})

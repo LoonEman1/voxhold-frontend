@@ -25,6 +25,8 @@ export class MessageNotificationCenter {
   private started = false
   private lastSound = -Infinity
   private tabId = crypto.randomUUID()
+  private publishedReading: string | null = null
+  private publishedReadingAt = -Infinity
   private readingKey: string
   private seenKey: string
 
@@ -51,17 +53,24 @@ export class MessageNotificationCenter {
   contextChanged() {
     const reading = this.dependencies.reading()
     if (!this.started || document.visibilityState !== 'visible' || !document.hasFocus() || !reading.channelId || !reading.following) { this.releaseReading(); return }
-    try { localStorage.setItem(this.readingKey, JSON.stringify({ ...reading, tabId: this.tabId, at: Date.now() })) } catch { /* Private browsing can disable storage. */ }
+    const signature = `${reading.serverId}:${reading.channelId}`, now = Date.now()
+    if (signature === this.publishedReading && now >= this.publishedReadingAt && now - this.publishedReadingAt < 1_000) return
+    try {
+      localStorage.setItem(this.readingKey, JSON.stringify({ ...reading, tabId: this.tabId, at: now }))
+      this.publishedReading = signature; this.publishedReadingAt = now
+    } catch { /* Private browsing can disable storage. */ }
   }
   private releaseReading() {
+    if (this.publishedReading === null) return
+    this.publishedReading = null; this.publishedReadingAt = -Infinity
     try { if (JSON.parse(localStorage.getItem(this.readingKey) ?? 'null')?.tabId === this.tabId) localStorage.removeItem(this.readingKey) } catch { /* Optional cross-tab state. */ }
   }
   private isReading(event: MessageNotification) {
     const reading = this.dependencies.reading()
     if (document.visibilityState === 'visible' && document.hasFocus() && reading.following && reading.serverId === event.server_id && reading.channelId === event.channel_id) return true
     try {
-      const other = JSON.parse(localStorage.getItem(this.readingKey) ?? 'null') as { at: number; serverId: number; channelId: number } | null
-      return !!other && Date.now() >= other.at && Date.now() - other.at < 5_000 && other.serverId === event.server_id && other.channelId === event.channel_id
+      const other = JSON.parse(localStorage.getItem(this.readingKey) ?? 'null') as { tabId: string; at: number; serverId: number; channelId: number } | null
+      return !!other && other.tabId !== this.tabId && Date.now() >= other.at && Date.now() - other.at < 5_000 && other.serverId === event.server_id && other.channelId === event.channel_id
     } catch { return false }
   }
   setSettings(value: NotificationSettings) { this.modes.set(value.channel_id, value.mode); if (value.mode !== 'all') this.removeWhere((event) => event.channel_id === value.channel_id && (value.mode === 'none' || !event.mentioned)) }

@@ -30,3 +30,9 @@ Validation: TypeScript, ESLint, unit tests, Chromium browser UI/reliability suit
 and screenshots in dark/light/mobile layouts. Browser stream layout tests use a
 real canvas MediaStream; existing voice tests exercise real WebRTC audio. A live
 multi-device SFU call on the production host is not part of this local verification.
+
+Publisher audio controls remain available in the call tile, mini player, focused
+player and fullscreen controls. Returning to fullscreen resets the hover guard
+so controls can fade again. Recording-list refreshes retry a snapshot overtaken
+by live recording events before pruning it, preserving new recordings while
+still removing records whose access has been revoked.

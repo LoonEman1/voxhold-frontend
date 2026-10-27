@@ -144,7 +144,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const notificationReading = useRef<() => { serverId: number | null; channelId: number | null; following: boolean }>(() => ({ serverId: null, channelId: null, following: false }))
   const notificationCenter = useMemo(() => new MessageNotificationCenter(`${realtimeBaseUrl || window.location.origin}:${user?.id ?? 0}`, user?.id ?? 0, { reading: () => notificationReading.current(), sound: () => notificationActions.current.sound(), open: (event) => notificationActions.current.open(event) }), [realtimeBaseUrl, user?.id])
   useEffect(() => notificationCenter.start(), [notificationCenter])
-  useEffect(() => notificationCenter.contextChanged(), [notificationCenter, selectedServerId, selectedChannelId])
   const channelRefreshRef = useRef<(serverId: number) => void>(() => {})
   const channelRequestsRef = useRef(new Map<number, number>())
   const recordingMerge = recording.merge
@@ -255,6 +254,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   messageTargetRef.current = messageTarget
 
   const chatVisible = voiceChatOpen || channels.some((channel) => channel.id === selectedChannelId && channel.kind === 'text')
+  const notificationChatVisible = chatVisible && !streamExpanded && !dialog && !notificationChannel && !recordingsOpen && !messagePanel && !confirmRequest && !mobileNav
+  useEffect(() => notificationCenter.contextChanged(), [notificationCenter, selectedServerId, selectedChannelId, notificationChatVisible])
   syncLatestRef.current = () => {
     const serverId = activeServerRef.current, channelId = activeChannelRef.current
     if (!chatVisible || !token || !serverId || !channelId) return
@@ -602,7 +603,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     return () => navigator.mediaDevices.removeEventListener('devicechange', refresh)
   }, [refreshVoiceDevices])
 
-  notificationReading.current = () => ({ serverId: activeServerRef.current, channelId: activeChannelRef.current, following: historyStore.viewport(activeChannelRef.current)?.following !== false })
+  notificationReading.current = () => ({ serverId: activeServerRef.current, channelId: activeChannelRef.current, following: notificationChatVisible && historyStore.viewport(activeChannelRef.current)?.following !== false })
   notificationActions.current.sound = () => playUISound('message_notification')
   notificationActions.current.open = (event) => {
     if (!token) return
@@ -2186,7 +2187,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     const inRoom = !streamExpanded && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId
     openActiveVoiceChannel(); setStreamExpanded(false); setVoiceChatOpen((value) => inRoom ? !value : true)
   }} onShare={() => openStreamSettings(voiceSession.channelId)} onLeave={leaveVoiceChannel}/>
-  const channelChat = <ChatPanel key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value) }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
+  const channelChat = <ChatPanel key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value); notificationCenter.contextChanged() }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
   const streamChannelIsOpen = !!voiceSession && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId && selectedChannel?.kind === 'voice'
   const canChangeViewedRole = !!selectedServer && selectedServer.role === 'owner' && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner'
   const canBanViewedMember = !!selectedServer && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner' && (selectedServer.role === 'owner' || (selectedServer.role === 'admin' && viewedProfileRole === 'member'))
@@ -2250,6 +2251,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         mode={streamExpanded ? 'expanded' : 'mini'}
         stream={activeVoiceStream}
         role={streamRole}
+        audioMuted={streamAudioMuted}
+        onToggleAudio={toggleStreamAudio}
         status={streamStatus}
         media={streamMedia}
         channelName={voiceSession.channelName}
