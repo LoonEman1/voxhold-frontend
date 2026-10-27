@@ -50,3 +50,11 @@ it('mutes a channel immediately and opens the correct message from a toast', asy
   center.setSettings({ server_id: 1, channel_id: 7, mode: 'all' }); await center.receive(event(6))
   center.open(event(6)); expect(open).toHaveBeenCalledWith(event(6)); expect(center.snapshot()).toHaveLength(0)
 })
+
+it('ignores a stale desktop notification action after logout or access revocation', () => {
+  const { center, open } = setup()
+  center.retainChannels(1, new Set()); center.open(event())
+  expect(open).not.toHaveBeenCalled()
+  center.allowChannel(1, 7); disposers.splice(0).forEach((dispose) => dispose()); center.open(event())
+  expect(open).not.toHaveBeenCalled()
+})

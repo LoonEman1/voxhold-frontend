@@ -607,6 +607,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   notificationActions.current.open = (event) => {
     if (!token) return
     void api.channels.list(token, event.server_id).then((visible) => {
+      if (!notificationCenter.isAvailable(event)) return
       if (!visible.some((channel) => channel.id === event.channel_id && channel.kind === 'text')) throw new Error('Доступ к этому каналу больше недоступен')
       setStreamExpanded(false); setStreamCinema(false); setDialog(null); setNotificationChannel(null); setRecordingsOpen(false)
       if (document.fullscreenElement && document.exitFullscreen) void document.exitFullscreen().catch(() => undefined)

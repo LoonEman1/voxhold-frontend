@@ -74,7 +74,8 @@ export class MessageNotificationCenter {
     const next = this.items.filter((event) => event.message.id !== id)
     if (next.length !== this.items.length) { this.items = next; this.emit() }
   }
-  open(event: MessageNotification) { this.dismiss(event.message.id); this.dependencies.open(event) }
+  isAvailable(event: MessageNotification) { return this.started && !this.denied(event) }
+  open(event: MessageNotification) { const available = this.isAvailable(event); this.dismiss(event.message.id); if (available) this.dependencies.open(event) }
   allowChannel(serverId: number, channelId: number) { this.deniedChannels.delete(channelId); this.deniedServers.delete(serverId); if (this.allowed.has(serverId)) this.allowed.set(serverId, new Set([...this.allowed.get(serverId)!, channelId])) }
   private muted(event: MessageNotification) { const mode = this.modes.get(event.channel_id); return mode === 'none' || mode === 'mentions' && !event.mentioned }
   private denied(event: MessageNotification) { return this.deniedServers.has(event.server_id) || this.deniedChannels.has(event.channel_id) || this.allowed.has(event.server_id) && !this.allowed.get(event.server_id)!.has(event.channel_id) }
