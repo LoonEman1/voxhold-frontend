@@ -506,3 +506,141 @@ test('a covering dialog does not suppress mentions in the selected text channel'
   await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('voxhold.notifications.seen:')).some((key) => JSON.parse(localStorage.getItem(key) ?? '[]').includes(802)))).toBe(true)
   await expect(page.locator('.message-notification')).toHaveCount(1)
 })
+
+test('first opening recordings keeps the workspace visible while the dialog chunk loads', async ({ page }) => {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/src/components/RecordingsDialog.tsx*', async (route) => { await held; await route.continue() })
+  try {
+    await openCallWorkspace(page)
+    const before = await page.locator('.content-shell').boundingBox()
+    await page.getByRole('button', { name: 'Список записей' }).click()
+    await expect(page.getByRole('dialog', { name: 'Записи сервера' })).toBeVisible()
+    await expect(page.getByRole('status')).toContainText('Загружаем')
+    await expect(page.locator('.content-header h1')).toHaveText('первый-голосовой')
+    expect(await page.locator('.content-shell').boundingBox()).toEqual(before)
+    await page.screenshot({ path: 'node_modules/.cache/recordings-first-load.png', animations: 'disabled' })
+    release()
+    await expect(page.getByRole('dialog').getByText('Записей пока нет')).toBeVisible()
+  } finally { release() }
+})
+
+test('channel-access events refresh the member roster without waiting for the catalog or manual refresh', async ({ page }) => {
+  const fixture = await openCallWorkspace(page, { channelMemberIds: [1, 2] })
+  const panel = page.locator('.members-sidebar__panel')
+  await expect(panel.getByText('Мария', { exact: true })).toBeVisible()
+  await expect(panel.getByText('ОченьДлинноеИмяУчастника', { exact: true })).toHaveCount(0)
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/v1/servers/1/channels', async (route) => { await held; await route.fulfill({ json: [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }] }) })
+  await page.route('**/api/v1/servers/1/channels/1/members', async (route) => { await route.fulfill({ json: { user_ids: [1, 3] } }) })
+  try {
+    fixture.emit('channels.changed', { server_id: 1 })
+    await expect(panel.getByText('ОченьДлинноеИмяУчастника', { exact: true })).toBeVisible()
+    await expect(panel.getByText('Мария', { exact: true })).toHaveCount(0)
+  } finally { release() }
+})
+
+
+test('message context menu expands reactions, persists selection and shows who reacted', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  let revision = 1, selected = false, writes = 0, reads = 0
+  await page.route('**/messages/3/reactions/**', async (route) => {
+    if (route.request().method() === 'GET') { reads++; await route.fulfill({ json: { users: [{ user_id: 2, username: 'Nikita' }, { user_id: 3, username: 'Мария' }], has_more: false, next_user_id: null } }); return }
+    writes++; selected = route.request().method() === 'PUT'
+    const data = { channel_id: 2, message_id: 3, revision: ++revision, reactions: selected ? [{ emoji: '🔥', count: 2, me: true }] : [] }
+    fixture.emit('message.reactions_changed', data)
+    await route.fulfill({ json: data })
+  })
+  const row = page.locator('[data-message-id="3"]')
+  await row.click({ button: 'right' })
+  const menu = page.getByRole('menu', { name: 'Действия с сообщением' })
+  await expect(menu.getByRole('menuitem', { name: 'Ответить', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Изменить', exact: true })).toHaveCount(0)
+  await menu.getByRole('button', { name: 'Все реакции', exact: true }).click()
+  await expect(menu.getByRole('group', { name: 'Эмодзи', exact: true }).getByRole('menuitemcheckbox')).toHaveCount(102)
+  await page.screenshot({ path: 'node_modules/.cache/message-menu-dark.png', animations: 'disabled' })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; document.documentElement.style.colorScheme = 'light' })
+  await page.screenshot({ path: 'node_modules/.cache/message-menu-light.png', animations: 'disabled' })
+  await menu.getByRole('textbox', { name: 'Найти эмодзи' }).fill('Огонь')
+  await menu.getByRole('textbox', { name: 'Найти эмодзи' }).press('ArrowDown')
+  await expect(menu.getByRole('group', { name: 'Эмодзи', exact: true }).getByRole('menuitemcheckbox', { name: 'Огонь', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(menu).toHaveCount(0)
+  const reaction = row.getByRole('button', { name: 'Огонь: 2, ваша реакция', exact: true })
+  await expect(reaction).toHaveAttribute('aria-pressed', 'true')
+  expect(reads).toBe(0)
+  await reaction.hover()
+  const people = page.getByRole('dialog', { name: 'Кто поставил реакцию «Огонь»' })
+  await expect(people.getByText('Мария', { exact: true })).toBeVisible()
+  await expect(people.getByText('вы', { exact: true })).toBeVisible()
+  await page.screenshot({ path: 'node_modules/.cache/message-reaction-people.png', animations: 'disabled' })
+  await reaction.click()
+  await expect(row.locator('.message-reaction')).toHaveCount(0)
+  await expect(people).toHaveCount(0)
+  expect(writes).toBe(2)
+})
+
+test('reply composer tracks deletions and sends a quoted message', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  let sent: Record<string, unknown> | undefined
+  await page.route('**/channels/2/messages', async (route) => {
+    sent = route.request().postDataJSON()
+    await route.fulfill({ status: 201, json: { id: 120, channel_id: 2, content: sent!.content, author: { user_id: 2, username: 'Nikita' }, created_at: 1800000000, edited_at: null, revision: 1, reply: { message_id: 2, author: { user_id: 1, username: 'Александр' }, content: 'Коллеги <@&member>, встречаемся через пять минут', revision: 1, deleted: false }, reactions: [], reactions_revision: 1 } })
+  })
+  await page.locator('[data-message-id="3"]').click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Ответить', exact: true }).click()
+  const input = page.getByRole('textbox', { name: 'Сообщение в общий' })
+  await expect(input).toBeFocused()
+  await expect(page.locator('.composer-reply')).toContainText('Обычное сообщение')
+  fixture.emit('message.deleted', { channel_id: 2, message_id: 3 })
+  await expect(page.locator('.composer-reply')).toContainText('Исходное сообщение удалено')
+  await input.fill('Ответ сохраняется')
+  await expect(page.locator('.composer button[type="submit"]')).toBeDisabled()
+  await page.getByRole('button', { name: 'Отменить ответ' }).click()
+  await page.locator('[data-message-id="2"]').click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Ответить', exact: true }).click()
+  await input.press('End'); await input.press('Enter')
+  await expect.poll(() => sent?.reply_to_message_id).toBe(2)
+  expect(sent?.content).toBe('Ответ сохраняется')
+  expect(sent?.client_message_id).toBeTruthy()
+  await expect(page.locator('[data-message-id="120"] .message-quote')).toContainText('Александр')
+  await expect(page.locator('.composer-reply')).toHaveCount(0)
+})
+
+test('forward dialog retries the same request and retains original attribution', async ({ page }) => {
+  await openTextNotifications(page)
+  const attempts: Record<string, unknown>[] = []
+  await page.route('**/channels/3/messages/forward', async (route) => {
+    const body = route.request().postDataJSON(); attempts.push(body)
+    if (attempts.length === 1) { await route.fulfill({ status: 503, json: { error: 'temporary failure' } }); return }
+    await route.fulfill({ status: 201, json: { id: 121, channel_id: 3, content: 'Nikita, проверь пожалуйста макет — @Nikita', author: { user_id: 2, username: 'Nikita' }, forward: { author: { user_id: 1, username: 'Александр' }, created_at: 1800000000 }, created_at: 1800000001, revision: 1, edited_at: null, reactions: [], reactions_revision: 1 } })
+  })
+  await page.locator('[data-message-id="1"]').click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Переслать', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Переслать сообщение', exact: true })
+  await dialog.getByRole('button', { name: /проекты/ }).click()
+  await page.screenshot({ path: 'node_modules/.cache/message-forward.png', animations: 'disabled' })
+  await dialog.getByRole('button', { name: 'Переслать', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toBeVisible()
+  await dialog.getByRole('button', { name: 'Переслать', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(attempts).toHaveLength(2)
+  expect(attempts[0]).toEqual(attempts[1])
+  expect(attempts[0]?.source_message_id).toBe(1)
+  await page.route('**/channels/3/messages/sync**', async (route) => route.fulfill({ json: { messages: [{ id: 121, channel_id: 3, content: 'Nikita, проверь пожалуйста макет — @Nikita', author: { user_id: 2, username: 'Nikita' }, forward: { author: { user_id: 1, username: 'Александр' }, created_at: 1800000000 }, created_at: 1800000001, revision: 1, edited_at: null, reactions: [], reactions_revision: 1 }], deleted_ids: [], cursor: 5, reset: true, has_more: false, has_older: false } }))
+  await page.getByRole('button', { name: /^проекты(?:,|$)/ }).click()
+  const row = page.locator('[data-message-id="121"]')
+  await expect(row.locator('.message-forward')).toContainText('Переслано от Александр')
+  await expect(row).not.toHaveClass(/message--mentioned/)
+  await row.click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Изменить', exact: true })).toHaveCount(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await row.click({ button: 'right' })
+  await page.getByRole('button', { name: 'Все реакции', exact: true }).click()
+  const box = await page.getByRole('menu', { name: 'Действия с сообщением' }).boundingBox()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844)
+  await page.screenshot({ path: 'node_modules/.cache/message-menu-mobile.png', animations: 'disabled' })
+})

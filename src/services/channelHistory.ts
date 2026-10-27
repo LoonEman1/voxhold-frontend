@@ -1,11 +1,12 @@
-import type { Message, MessageSyncPage } from '../domain/types'
+import type { Message, MessageSyncPage, MessageReactions, MessageReply } from '../domain/types'
 import type { VoxholdApi } from './api'
-import { newerMessage } from '../lib/messageRevisions'
+import { newerMessage, resolveReplyReferences, withReactions } from '../lib/messageRevisions'
 
 export const MAX_CACHED_CHANNELS = 8
 export const MAX_CHANNEL_MESSAGES = 1_000
 export interface ChatViewport { messageId: number; offset: number; following: boolean }
-export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string }
+export interface ForwardSource { server_id: number; channel_id: number; message_id: number; content: string; created_at: number; author: Message['author']; forward?: Message['forward'] }
+export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; reply?: MessageReply; forward?: ForwardSource }
 export interface ChannelHistoryState {
   messages: Message[]
   cursor: number | null
@@ -24,6 +25,7 @@ interface Entry {
   controller: AbortController
   historyController: AbortController
   tombstones: Set<number>
+  reactionSnapshots: Map<number, MessageReactions>
   live: Map<number, { version: number; message: Message }>
   version: number
   viewport?: ChatViewport
@@ -49,7 +51,7 @@ export class ChannelHistoryStore {
   entry(serverId: number, channelId: number): Entry {
     let entry = this.entries.get(channelId)
     if (!entry) {
-      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), live: new Map(), version: 0, syncAgain: false, contextGeneration: 0, forceSnapshot: false }
+      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), reactionSnapshots: new Map(), live: new Map(), version: 0, syncAgain: false, contextGeneration: 0, forceSnapshot: false }
       this.entries.set(channelId, entry)
     }
     return entry
@@ -85,7 +87,7 @@ export class ChannelHistoryStore {
         entry.contextGeneration++
         entry.sync = undefined
         entry.state = { ...initial(), pending: entry.state.pending }
-        entry.viewport = undefined; entry.live.clear(); entry.tombstones.clear()
+        entry.viewport = undefined; entry.live.clear(); entry.tombstones.clear(); entry.reactionSnapshots.clear()
         retained--; continue
       }
       entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id)
@@ -96,9 +98,9 @@ export class ChannelHistoryStore {
     const values = new Map((reset ? [] : entry.state.messages).map((message) => [message.id, message]))
     const previous = new Map(entry.state.messages.map((message) => [message.id, message]))
     incoming.forEach((message) => {
-      if (!entry.tombstones.has(message.id)) values.set(message.id, newerMessage(values.get(message.id) ?? previous.get(message.id), message))
+      if (!entry.tombstones.has(message.id)) values.set(message.id, newerMessage(values.get(message.id) ?? previous.get(message.id), entry.reactionSnapshots.has(message.id) ? withReactions(message, entry.reactionSnapshots.get(message.id)!) : message))
     })
-    const sorted = [...values.values()].filter((message) => !entry.tombstones.has(message.id)).sort((a, b) => a.id - b.id)
+    const sorted = resolveReplyReferences([...values.values()].filter((message) => !entry.tombstones.has(message.id)).sort((a, b) => a.id - b.id), [...entry.live.values()].map((value) => value.message).concat(incoming, [...values.values()]), entry.tombstones)
     const truncated = sorted.length > MAX_CHANNEL_MESSAGES
     return { messages: preferOlder ? sorted.slice(0, MAX_CHANNEL_MESSAGES) : sorted.slice(-MAX_CHANNEL_MESSAGES), truncated }
   }
@@ -106,6 +108,7 @@ export class ChannelHistoryStore {
     if (this.closed) return
     const entry = this.entries.get(message.channel_id)
     if (!entry || entry.tombstones.has(message.id)) return
+    message = newerMessage(entry.live.get(message.id)?.message ?? entry.state.messages.find((value) => value.id === message.id), message)
     entry.version++
     entry.live.set(message.id, { version: entry.version, message })
     while (entry.live.size > MAX_CHANNEL_MESSAGES) entry.live.delete(entry.live.keys().next().value!)
@@ -113,7 +116,8 @@ export class ChannelHistoryStore {
     const pending = message.client_message_id && message.author.user_id === this.userId ? current.pending.filter((item) => item.id !== message.client_message_id) : current.pending
     const last = current.messages.at(-1)?.id ?? 0
     if (current.messages.length && message.id < current.messages[0]!.id) {
-      if (pending !== current.pending) this.update(message.channel_id, { pending })
+      const messages = resolveReplyReferences(current.messages, [message], entry.tombstones)
+      if (pending !== current.pending || messages.some((value, index) => value !== current.messages[index])) this.update(message.channel_id, { pending, messages })
       return
     }
     if (!current.messages.some((item) => item.id === message.id) && (current.hasNewer || (current.messages.length >= MAX_CHANNEL_MESSAGES && entry.viewport?.following === false)) && message.id > last) {
@@ -122,13 +126,31 @@ export class ChannelHistoryStore {
     const { messages, truncated } = this.merge(entry, [message])
     this.update(message.channel_id, { messages, pending, ...(truncated ? { hasMore: true, nextBeforeId: messages[0]!.id } : {}) })
   }
+  reactions(event: MessageReactions) {
+    const entry = this.entries.get(event.channel_id)
+    const current = entry?.state.messages.find((value) => value.id === event.message_id)
+    if (!entry || this.closed || entry.tombstones.has(event.message_id)) return
+    if (event.revision <= (entry.reactionSnapshots.get(event.message_id)?.revision ?? 0)) return
+    entry.reactionSnapshots.set(event.message_id, event)
+    while (entry.reactionSnapshots.size > MAX_CHANNEL_MESSAGES) entry.reactionSnapshots.delete(entry.reactionSnapshots.keys().next().value!)
+    if (!current) return
+    const next = withReactions(current, event)
+    if (next === current) return
+    entry.version++
+    entry.live.set(next.id, { version: entry.version, message: next })
+    this.update(event.channel_id, { messages: entry.state.messages.map((value) => value.id === next.id ? next : value) })
+  }
+  isDeleted(channelId: number, messageId: number) { return this.entries.get(channelId)?.tombstones.has(messageId) ?? false }
   remove(channelId: number, messageId: number) {
     const entry = this.entries.get(channelId)
     if (!entry) return
-    entry.version++; entry.live.delete(messageId); entry.tombstones.add(messageId)
+    entry.version++; entry.live.delete(messageId); entry.reactionSnapshots.delete(messageId); entry.tombstones.add(messageId)
     // Bound tombstones too; oldest evicted messages cannot be in the window.
     while (entry.tombstones.size > MAX_CHANNEL_MESSAGES * 2) entry.tombstones.delete(entry.tombstones.values().next().value!)
-    this.update(channelId, { messages: entry.state.messages.filter((message) => message.id !== messageId) })
+    this.update(channelId, { messages: resolveReplyReferences(entry.state.messages.filter((message) => message.id !== messageId), [], entry.tombstones) })
+  }
+  async syncCached(serverId: number) {
+    await Promise.all([...this.entries].filter(([, entry]) => entry.serverId === serverId).map(([id]) => this.sync(serverId, id).catch(() => undefined)))
   }
   sync(serverId: number, channelId: number): Promise<void> {
     const entry = this.entry(serverId, channelId)
@@ -227,19 +249,21 @@ export class ChannelHistoryStore {
     this.update(channelId, { cursor: null, hasNewer: false })
     await this.sync(serverId, channelId)
   }
-  async send(serverId: number, channelId: number, content: string, retryId?: string) {
+  async send(serverId: number, channelId: number, content: string, retryId?: string, reply?: MessageReply, forward?: ForwardSource, newId?: string) {
     const entry = this.entry(serverId, channelId)
     if (!retryId && [...this.entries.values()].reduce((count, value) => count + value.state.pending.length, 0) >= 20) throw new Error('Сначала повторите или удалите неотправленные сообщения')
-    const id = retryId ?? crypto.randomUUID()
+    const id = retryId ?? newId ?? crypto.randomUUID()
     const pending = entry.state.pending.find((item) => item.id === id)
     if (retryId && (!pending || pending.status === 'sending')) return
-    this.update(channelId, { pending: [...entry.state.pending.filter((item) => item.id !== id), { id, content, status: 'sending' }] })
+    const reference = pending?.reply ?? reply
+    const forwarded = pending?.forward ?? forward
+    this.update(channelId, { pending: [...entry.state.pending.filter((item) => item.id !== id), { id, content, status: 'sending', ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }] })
     const timeout = new AbortController()
     const abort = () => timeout.abort()
     entry.controller.signal.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(abort, 15_000)
     try {
-      const message = await this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal)
+      const message = await (forwarded ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, timeout.signal) : reference ? this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, reference.message_id) : this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal))
       if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
       this.receive({ ...message, client_message_id: id })
       this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id) })
@@ -250,21 +274,40 @@ export class ChannelHistoryStore {
       this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? { ...item, status: 'failed', error: error instanceof Error ? error.message : 'Ошибка сети' } : item) })
     } finally { clearTimeout(timer); entry.controller.signal.removeEventListener('abort', abort); this.trim() }
   }
+  async forward(serverId: number, channelId: number, source: ForwardSource, key: string): Promise<Message> {
+    const entry = this.entry(serverId, channelId)
+    const retry = entry.state.pending.some((item) => item.id === key)
+    const created = await this.send(serverId, channelId, source.content, retry ? key : undefined, undefined, source, key)
+    if (created) return created
+    const acknowledged = entry.state.messages.find((value) => value.client_message_id === key) ?? [...entry.live.values()].find((value) => value.message.client_message_id === key)?.message
+    if (acknowledged) return acknowledged
+    const failed = entry.state.pending.find((item) => item.id === key)
+    throw new Error(failed?.error ?? 'Не удалось завершить пересылку')
+  }
+  private removeForwardSources(predicate: (source: ForwardSource) => boolean) {
+    for (const [id, entry] of this.entries) {
+      const pending = entry.state.pending.filter((item) => !item.forward || !predicate(item.forward))
+      if (pending.length !== entry.state.pending.length) this.update(id, { pending })
+    }
+  }
   dismiss(channelId: number, id: string) {
     const entry = this.entries.get(channelId)
     if (entry) this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id || item.status === 'sending') })
   }
   removeChannel(channelId: number) {
+    this.removeForwardSources((source) => source.channel_id === channelId)
     const entry = this.entries.get(channelId)
     if (!entry) return
     this.update(channelId, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(channelId); entry.listeners.forEach((listener) => listener())
   }
   retainChannels(serverId: number, allowed: ReadonlySet<number>) {
+    this.removeForwardSources((source) => source.server_id === serverId && !allowed.has(source.channel_id))
     for (const [id, entry] of this.entries) if (entry.serverId === serverId && !allowed.has(id)) {
       this.update(id, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())
     }
   }
   removeServer(serverId: number) {
+    this.removeForwardSources((source) => source.server_id === serverId)
     for (const [id, entry] of this.entries) if (entry.serverId === serverId) {
       this.update(id, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())
     }

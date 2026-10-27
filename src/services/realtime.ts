@@ -8,6 +8,7 @@ import type {
   ChannelReadSnapshot,
   InvitationReceivedEvent,
   Message,
+  MessageReactions,
   MessageDeletedEvent,
   MessagePinnedEvent,
   PresenceSnapshot,
@@ -62,6 +63,7 @@ interface RealtimeOptions {
   baseUrl?: string
   onMessage: (message: Message) => void
   onMessageUpdated?: (message: Message) => void
+  onMessageReactions?: (event: MessageReactions) => void
   onMessageDeleted?: (event: MessageDeletedEvent) => void
   onMessagePinned?: (event: MessagePinnedEvent) => void
   onMessageUnpinned?: (event: MessageDeletedEvent) => void
@@ -321,6 +323,8 @@ export class RealtimeClient {
           this.options.onNotificationSettings?.(payload.data as NotificationSettings)
         } else if (payload.type === 'message.created' && payload.data) {
           this.options.onMessage(payload.data as Message)
+        } else if (payload.type === 'message.reactions_changed' && payload.data) {
+          this.options.onMessageReactions?.(payload.data as MessageReactions)
         } else if (payload.type === 'message.updated' && payload.data) {
           this.options.onMessageUpdated?.(payload.data as Message)
         } else if (payload.type === 'message.deleted' && payload.data) {

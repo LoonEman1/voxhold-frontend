@@ -96,6 +96,17 @@ export interface MessageAuthor {
   username: string
 }
 
+export interface MessageReply {
+  message_id: number
+  author: MessageAuthor
+  content: string
+  revision: number
+  deleted: boolean
+}
+export interface MessageForward { author: MessageAuthor; created_at: number; mention_names?: Record<string, string> }
+export interface MessageReaction { emoji: string; count: number; me: boolean }
+export interface MessageReactions { channel_id: number; message_id: number; revision: number; reactions: MessageReaction[] }
+export interface ReactorPage { users: MessageAuthor[]; has_more: boolean; next_user_id: number | null }
 export interface Message {
   client_message_id?: string
   id: EntityId
@@ -105,6 +116,10 @@ export interface Message {
   created_at: number
   edited_at: number | null
   revision?: number
+  reply?: MessageReply
+  forward?: MessageForward
+  reactions?: MessageReaction[]
+  reactions_revision?: number
 }
 
 export interface MessageSyncPage {

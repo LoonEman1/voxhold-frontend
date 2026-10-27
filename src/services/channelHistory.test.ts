@@ -11,10 +11,11 @@ function setup(sync = vi.fn(async () => page())) {
   const create = vi.fn(async (_token: string, _server: number, channel: number, _content: string, _key?: string, _signal?: AbortSignal) => message(1, channel))
   const context = vi.fn(async () => ({ messages: [message(20)], target_index: 0, target_message_id: 20 }))
   const list = vi.fn(async () => ({ messages: [message(1)], pagination: { next_before_id: null, has_more: false } }))
-  const api = { messages: { sync, create, context, list } } as unknown as VoxholdApi
+  const forward = vi.fn(async (_token: string, _server: number, channel: number, _sourceServer: number, _sourceChannel: number, _sourceMessage: number, _key: string, _signal?: AbortSignal) => ({ ...message(90, channel), forward: { author: message(1).author, created_at: 1 } }))
+  const api = { messages: { sync, create, context, list, forward } } as unknown as VoxholdApi
   const store = new ChannelHistoryStore(api, 'token', 1)
   stores.push(store)
-  return { store, sync, create, context, list }
+  return { store, sync, create, context, list, forward }
 }
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.restoreAllMocks() })
 
@@ -185,4 +186,75 @@ it('revoked access clears cached history and prevents an in-flight response rest
   pending.resolve(page([message(99)])); await loading
   expect(store.snapshot(2)).toEqual(EMPTY_HISTORY)
   expect(store.snapshot(3).messages).toEqual([message(60, 3)])
+})
+
+it('reconciles a reaction racing a history response without hiding an edit', async () => {
+  const { store, sync } = setup(vi.fn(async () => page([message(1)])))
+  await store.sync(1, 2)
+  const held = deferred<MessageSyncPage>()
+  sync.mockReturnValueOnce(held.promise)
+  const pending = store.sync(1, 2)
+  store.reactions({ channel_id: 2, message_id: 1, revision: 3, reactions: [{ emoji: '👍', count: 1, me: true }] })
+  held.resolve(page([{ ...message(1, 2, 2), content: 'edited', reactions: [], reactions_revision: 2 }]))
+  await pending
+  expect(store.snapshot(2).messages[0]!.content).toBe('edited')
+  expect(store.snapshot(2).messages[0]!.reactions).toEqual([{ emoji: '👍', count: 1, me: true }])
+})
+
+it('preserves the reply target and send key when retrying the outbox', async () => {
+  const { store, create } = setup()
+  create.mockRejectedValueOnce(new Error('network'))
+  const reference = { message_id: 40, author: { user_id: 2, username: 'Bob' }, content: 'original', revision: 1, deleted: false }
+  await store.send(1, 2, 'answer', undefined, reference)
+  const pending = store.snapshot(2).pending[0]!
+  expect(pending.reply).toEqual(reference)
+  await store.send(1, 2, pending.content, pending.id)
+  expect(create.mock.calls[0]![4]).toBe(create.mock.calls[1]![4])
+  expect((create.mock.calls[0] as unknown[])[6]).toBe(40)
+  expect((create.mock.calls[1] as unknown[])[6]).toBe(40)
+})
+
+it('updates a quote when its target is outside the loaded window and ignores an older edit', async () => {
+  const answer: Message = { ...message(20), reply: { message_id: 1, author: message(1).author, content: 'original', revision: 1, deleted: false } }
+  const { store } = setup(vi.fn(async () => page([answer])))
+  await store.sync(1, 2)
+  store.receive({ ...message(1, 2, 3), content: 'new quote' })
+  expect(store.snapshot(2).messages).toHaveLength(1)
+  expect(store.snapshot(2).messages[0]!.reply!.content).toBe('new quote')
+  store.receive({ ...message(1, 2, 2), content: 'late old quote' })
+  expect(store.snapshot(2).messages[0]!.reply!.content).toBe('new quote')
+  store.remove(2, 1)
+  expect(store.snapshot(2).messages[0]!.reply!.deleted).toBe(true)
+})
+
+it('retries a failed forward with its original source and key', async () => {
+  const { store, forward, create } = setup()
+  const source = { server_id: 1, channel_id: 2, message_id: 8, content: 'original', author: message(8).author, created_at: 1 }
+  forward.mockRejectedValueOnce(new Error('network'))
+  await expect(store.forward(1, 3, source, 'forward-key')).rejects.toThrow('network')
+  expect(store.snapshot(3).pending[0]?.forward).toEqual(source)
+  const value = await store.forward(1, 3, source, 'forward-key')
+  expect(value.id).toBe(90)
+  expect(forward.mock.calls.map((call) => call.slice(1, 7))).toEqual([[1, 3, 1, 2, 8, 'forward-key'], [1, 3, 1, 2, 8, 'forward-key']])
+  expect(create).not.toHaveBeenCalled()
+  expect(store.snapshot(3).pending).toEqual([])
+})
+
+it('purges private forward previews when access to the source is revoked', async () => {
+  const { store, forward } = setup()
+  forward.mockRejectedValueOnce(new Error('network'))
+  await expect(store.forward(1, 3, { server_id: 1, channel_id: 2, message_id: 8, content: 'secret', author: message(8).author, created_at: 1 }, 'forward-key')).rejects.toThrow()
+  store.retainChannels(1, new Set([3]))
+  expect(store.snapshot(3).pending).toEqual([])
+})
+
+it('retains reactions that arrive before their message history response', async () => {
+  const held = deferred<MessageSyncPage>()
+  const { store } = setup(vi.fn(() => held.promise))
+  const loading = store.sync(1, 2)
+  store.reactions({ channel_id: 2, message_id: 1, revision: 3, reactions: [{ emoji: '🔥', count: 2, me: true }] })
+  held.resolve(page([{ ...message(1), reactions: [], reactions_revision: 1 }]))
+  await loading
+  expect(store.snapshot(2).messages[0]?.reactions).toEqual([{ emoji: '🔥', count: 2, me: true }])
+  expect(store.snapshot(2).messages[0]?.content).toBe('message 1')
 })

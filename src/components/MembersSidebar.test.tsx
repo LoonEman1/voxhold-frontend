@@ -56,3 +56,14 @@ describe('channel and server member lists', () => {
     await waitFor(() => expect(loader).toHaveBeenCalledTimes(3))
   })
 })
+
+it('reloads channel access immediately on a realtime invalidation with an unchanged catalog', async () => {
+  const loader = vi.fn().mockResolvedValueOnce({ user_ids: [1, 3] }).mockResolvedValueOnce({ user_ids: [1, 2] })
+  const handlers = props(loader)
+  const { rerender } = render(<MembersSidebar {...handlers} refreshKey={0}/>)
+  await screen.findByText('Carol')
+  rerender(<MembersSidebar {...handlers} refreshKey={1}/>)
+  await screen.findByText('Bob')
+  expect(screen.queryByText('Carol')).toBeNull()
+  expect(loader).toHaveBeenCalledTimes(2)
+})

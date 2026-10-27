@@ -17,6 +17,8 @@ import type {
   InviteLinkPage,
   CorsOriginsPayload,
   Message,
+  MessageReactions,
+  ReactorPage,
   MessageContext,
   MessagePage,
   MessageSyncPage,
@@ -187,6 +189,12 @@ export function createApi(transport: Transport) {
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}`, method: 'DELETE' }) as Promise<void>,
     },
     messages: {
+      setReaction: (token: string, serverId: number, channelId: number, messageId: number, emoji: string, active: boolean) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/${url(messageId)}/reactions/${url(emoji)}`, method: active ? 'PUT' : 'DELETE' }) as Promise<MessageReactions>,
+      reactors: (token: string, serverId: number, channelId: number, messageId: number, emoji: string, signal: AbortSignal, after?: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/${url(messageId)}/reactions/${url(emoji)}${after ? `?after_user_id=${after}` : ''}`, signal }) as Promise<ReactorPage>,
+      forward: (token: string, serverId: number, channelId: number, sourceServerId: number, sourceChannelId: number, sourceMessageId: number, clientMessageId: string, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/forward`, method: 'POST', body: { source_server_id: sourceServerId, source_channel_id: sourceChannelId, source_message_id: sourceMessageId, client_message_id: clientMessageId }, signal }) as Promise<Message>,
       sync: (token: string, serverId: number, channelId: number, after?: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/sync${after === undefined ? '' : `?after=${after}`}`, signal }) as Promise<MessageSyncPage>,
       list: (token: string, serverId: number, channelId: number, beforeId?: number, signal?: AbortSignal) => {
@@ -197,11 +205,11 @@ export function createApi(transport: Transport) {
           signal,
         }) as Promise<MessagePage>
       },
-      create: (token: string, serverId: number, channelId: number, content: string, clientMessageId?: string, signal?: AbortSignal) =>
+      create: (token: string, serverId: number, channelId: number, content: string, clientMessageId?: string, signal?: AbortSignal, replyToMessageId?: number) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages`,
           method: 'POST',
-          body: { content, ...(clientMessageId ? { client_message_id: clientMessageId } : {}) },
+          body: { content, ...(clientMessageId ? { client_message_id: clientMessageId } : {}), ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}) },
           ...(signal ? { signal } : {}),
         }) as Promise<Message>,
       update: (token: string, serverId: number, channelId: number, messageId: number, content: string) =>

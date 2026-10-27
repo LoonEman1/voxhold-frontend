@@ -1,7 +1,7 @@
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { Channel, ChannelRead, Message, ServerMember, ServerRole } from '../domain/types'
+import type { Channel, ChannelRead, Message, MessageReply, ServerMember, ServerRole } from '../domain/types'
 import { formatDate, formatTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
@@ -10,6 +10,10 @@ import { MessageMentions } from './MessageMentions'
 import { MentionComposer } from './MentionComposer'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
+import { MessageContextMenu } from './MessageContextMenu'
+import { MessageReactions, type ReactorLoader } from './MessageReactions'
+import { MessageQuote, ForwardAttribution, readableMessage } from './MessageQuote'
+import { rememberReaction } from '../lib/reactionCatalog'
 
 interface ChatPanelProps {
   pendingMessages?: PendingMessage[]
@@ -35,7 +39,12 @@ interface ChatPanelProps {
   onLoadNewer: () => Promise<void>
   onReturnToLatest: () => Promise<void>
   onReadThrough: (messageId: number) => void
-  onSend: (content: string) => Promise<void>
+  onSend: (content: string, reply?: MessageReply) => Promise<void>
+  onSetReaction?: (messageId: number, emoji: string, active: boolean) => Promise<void>
+  onLoadReactors?: ReactorLoader
+  onForward?: (message: Message) => void
+  onOpenMessage?: (messageId: number) => void
+  isMessageDeleted?: (messageId: number) => boolean
   onEdit: (messageId: number, content: string) => Promise<void>
   onDelete: (messageId: number) => Promise<void>
   onTogglePin: (messageId: number, pinned: boolean) => Promise<void>
@@ -55,9 +64,16 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
   return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
 }
 
-export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
   const [draft, setDraft] = useState('')
+  const [replyTarget, setReplyTarget] = useState<MessageReply | null>(null)
+  const [composerFocus, setComposerFocus] = useState(0)
+  const [messageMenu, setMessageMenu] = useState<{ id: number; x: number; y: number; expanded: boolean } | null>(null)
+  const [reactionPending, setReactionPending] = useState<Record<number, Record<string, boolean>>>({})
+  const reactionInFlight = useRef(new Set<string>())
+  const closeMessageMenu = useCallback(() => setMessageMenu(null), [])
+
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -89,7 +105,7 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
   const membersById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members])
   const virtualized = messages.length > 0
   const getMessageKey = useCallback((index: number) => messages[index]!.id, [messages])
-  const estimateMessageSize = useCallback((index: number) => 52 + Math.min(240, Math.floor((messages[index]?.content.length ?? 0) / 80) * 18), [messages])
+  const estimateMessageSize = useCallback((index: number) => 52 + Math.min(240, Math.floor((messages[index]?.content.length ?? 0) / 80) * 18) + (messages[index]?.reply ? 55 : 0) + (messages[index]?.forward ? 25 : 0) + (messages[index]?.reactions?.length ? 37 : 0), [messages])
   const getScrollElement = useCallback(() => scrollRef.current, [])
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -277,6 +293,7 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
 
   useEffect(() => {
     setDraft('')
+    setReplyTarget(null); setMessageMenu(null); setReactionPending({}); reactionInFlight.current.clear()
     setSendError('')
     setEditingId(null)
     setConfirmDeleteId(null)
@@ -305,13 +322,51 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
     return () => { cancelRestore(); container.removeEventListener('scroll', save); container.removeEventListener('wheel', cancelRestore); container.removeEventListener('pointerdown', cancelRestore) }
   }, [channelId])
 
+  const liveReply = replyTarget ? messages.find((value) => value.id === replyTarget.message_id) : undefined
+  const reply = replyTarget ? { ...replyTarget, ...(liveReply ? { author: liveReply.author, content: liveReply.content, revision: liveReply.revision ?? 0 } : {}), deleted: replyTarget.deleted || !!isMessageDeleted?.(replyTarget.message_id) } : null
+  const menuMessage = messageMenu ? messages.find((value) => value.id === messageMenu.id) : undefined
+  const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, message: Message, expanded = false) => {
+    if ((event.target as Element).closest('textarea,input,[contenteditable="true"]')) return
+    event.preventDefault(); event.stopPropagation()
+    const box = event.currentTarget.getBoundingClientRect()
+    setMessageMenu({ id: message.id, x: event.clientX || box.right - 12, y: event.clientY || box.bottom + 4, expanded })
+  }
+  const beginReply = (message: Message) => {
+    setReplyTarget({ message_id: message.id, author: message.author, content: message.content, revision: message.revision ?? 0, deleted: false })
+    setComposerFocus((current) => current + 1); setSendError('')
+  }
+  const react = async (message: Message, emoji: string) => {
+    if (!onSetReaction) return
+    const key = `${message.id}:${emoji}`
+    if (reactionInFlight.current.has(key)) return
+    reactionInFlight.current.add(key)
+    const active = !(message.reactions?.find((value) => value.emoji === emoji)?.me ?? false)
+    setReactionPending((current) => ({ ...current, [message.id]: { ...current[message.id], [emoji]: active } }))
+    setActionError(null)
+    try { await onSetReaction(message.id, emoji, active); rememberReaction(emoji) }
+    catch (caught) { setActionError({ id: message.id, message: caught instanceof Error ? caught.message : 'Не удалось изменить реакцию' }) }
+    finally {
+      reactionInFlight.current.delete(key)
+      setReactionPending((current) => { const next = { ...current }, values = { ...next[message.id] }; delete values[emoji]; if (Object.keys(values).length) next[message.id] = values; else delete next[message.id]; return next })
+    }
+  }
+  const copyMessage = async (message: Message) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Браузер не разрешил копирование текста')
+      await navigator.clipboard.writeText(readableMessage(message.content, members, message.forward?.mention_names))
+    } catch (caught) { setActionError({ id: message.id, message: caught instanceof Error ? caught.message : 'Не удалось скопировать текст' }) }
+  }
   const submit = async (event?: FormEvent, encoded?: string) => {
     event?.preventDefault()
     const content = (encoded ?? draft).trim()
     if (!content || sending) return
+    if (reply?.deleted) { setSendError('Исходное сообщение удалено. Уберите ответ, чтобы отправить текст.'); return }
+    const reference = reply
     setSending(true); setSendError('')
-    setDraft('')
-    try { await onSend(content) } catch (error) { setDraft((current) => current || content); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
+    setDraft(''); setReplyTarget(null)
+    try { await (reference ? onSend(content, reference) : onSend(content)) }
+    catch (error) { setDraft((current) => current || content); setReplyTarget((current) => current ?? reference); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') }
+    finally { setSending(false) }
   }
 
   const saveEdit = async (messageId: number, encoded?: string) => {
@@ -371,25 +426,28 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
           const message = messages[index]!
           const role = membersById.get(message.author.user_id)?.role ?? 'member'
           const mine = message.author.user_id === currentUserId
-          const mentions = parseMentions(message.content, directory)
-          const mentioned = !mine && mentionsMe(mentions, currentUserId, ownRole)
+          const mentions = parseMentions(message.content, directory).map((mention) => message.forward && mention.userId && message.forward.mention_names?.[mention.userId] ? { ...mention, label: message.forward.mention_names[mention.userId]! } : mention)
+          const mentioned = !mine && !message.forward && (mentionsMe(mentions, currentUserId, ownRole) || !!message.reply && !message.reply.deleted && message.reply.author.user_id === currentUserId)
           const readers = mine ? members.filter((member) => member.user_id !== currentUserId && (channelReads[member.user_id]?.last_read_message_id ?? 0) >= message.id) : []
           const pinned = pinnedMessageIds.has(message.id)
           const previous = messages[index - 1]
           const showDate = !previous || !sameDay(previous.created_at, message.created_at)
-          const grouped = previous && previous.author.user_id === message.author.user_id && message.created_at - previous.created_at < 300 && !showDate
+          const grouped = !message.reply && !message.forward && !previous?.reply && !previous?.forward && previous && previous.author.user_id === message.author.user_id && message.created_at - previous.created_at < 300 && !showDate
           return (
             <div key={key} data-index={index} ref={virtualized ? virtualizer.measureElement : undefined}>
               {showDate && <div className="date-divider"><span>{formatDate(message.created_at)}</span></div>}
-              <article data-message-id={message.id} className={`message ${mentioned ? 'message--mentioned' : ''} ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
+              <article data-message-id={message.id} onContextMenu={(event) => openMessageMenu(event, message)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); setMessageMenu({ id: message.id, x: box.left + 40, y: box.top + 20, expanded: false }) } }} className={`message ${mentioned ? 'message--mentioned' : ''} ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
                 {!grouped && <button className="message__avatar-button" onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)} aria-label={`Открыть профиль ${message.author.username}`}><Avatar userId={message.author.user_id} name={message.author.username}/></button>}
                 <div className="message__body">
                   {!grouped && <header><button className={`message__author message__author--${role}`} onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)}>{message.author.username}</button><span className={`role-badge role-badge--${role}`}>{roleMeta[role].shortLabel}</span>{mine && <span className="you-tag">вы</span>}<time dateTime={new Date(message.created_at * 1000).toISOString()}>{formatTime(message.created_at)}</time></header>}
                   {pinned && <span className="message__pin-label"><Icon name="pin" size={11}/> Закреплено</span>}
+                  {message.forward && <ForwardAttribution message={message}/>}
+                  {message.reply && <MessageQuote reference={message.reply} members={members} onOpen={onOpenMessage}/>}
                   {editingId === message.id ? <div className="message-editor">
                     <MentionComposer draft={editDraft} onChange={setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void saveEdit(message.id, content) }} sending={pendingActionId === message.id} channelName={channel.name} members={members} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => setEditingId(null)}/>
                     <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
-                  </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={currentUserId} currentRole={ownRole} onOpenProfile={(id) => { const member = membersById.get(id); if (member) onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
+                  </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
+                  {editingId !== message.id && <MessageReactions message={message} currentUserId={currentUserId} pending={reactionPending[message.id]} onReact={onSetReaction ? (emoji) => { void react(message, emoji) } : undefined} loadReactors={onLoadReactors}/>}
                   {actionError?.id === message.id && <div className="message__error">{actionError.message}</div>}
                 </div>
                 {mine && editingId !== message.id && <>
@@ -397,10 +455,10 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
                   {receiptMessageId === message.id && <div className="message-readers"><header><b>{readers.length ? 'Прочитали' : 'Статус сообщения'}</b><button onClick={() => setReceiptMessageId(null)} aria-label="Закрыть"><Icon name="close" size={12}/></button></header>{readers.length ? readers.map((reader) => <div key={reader.user_id}><Avatar userId={reader.user_id} name={reader.username} size="small"/><span><b>{reader.username}</b><small>{roleMeta[reader.role].label}</small></span></div>) : <p><Icon name="check" size={13}/> Сохранено на сервере. Пока никто не прочитал.</p>}</div>}
                 </>}
                 {grouped && <time className="message__hover-time">{formatTime(message.created_at)}</time>}
-                {editingId !== message.id && (mine || canManage) && <div className="message__actions">
-                  {canManage && <button onClick={() => void togglePin(message.id, pinned)} disabled={pendingActionId === message.id} title={pinned ? 'Открепить' : 'Закрепить'} className={pinned ? 'is-active' : ''}><Icon name="pin" size={14}/></button>}
-                  {mine && <button onClick={() => { setEditingId(message.id); setEditDraft(message.content); setConfirmDeleteId(null); setActionError(null) }} title="Редактировать"><Icon name="edit" size={14}/></button>}
-                  {(mine || canManage) && <button className="is-danger" onClick={() => setConfirmDeleteId(message.id)} title="Удалить"><Icon name="trash" size={14}/></button>}
+                {editingId !== message.id && <div className="message__actions">
+                  <button type="button" onClick={() => beginReply(message)} title="Ответить" aria-label="Ответить на сообщение"><Icon name="reply" size={15}/></button>
+                  {onSetReaction && <button type="button" onClick={(event) => openMessageMenu(event, message, true)} title="Поставить реакцию" aria-label="Поставить реакцию"><Icon name="emoji" size={15}/></button>}
+                  <button type="button" onClick={(event) => openMessageMenu(event, message)} title="Действия с сообщением" aria-label="Действия с сообщением"><Icon name="more" size={15}/></button>
                 </div>}
                 {confirmDeleteId === message.id && <div className="message-delete-confirm"><span>Удалить сообщение?</span><button onClick={() => setConfirmDeleteId(null)}>Нет</button><button className="is-danger" onClick={() => void remove(message.id)} disabled={pendingActionId === message.id}>Да</button></div>}
               </article>
@@ -409,11 +467,13 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} members={members} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
-      <MentionComposer draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/>
+      {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, members)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); setComposerFocus((current) => current + 1) }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
+      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      <MentionComposer focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/>
     </section>
   )
 }
