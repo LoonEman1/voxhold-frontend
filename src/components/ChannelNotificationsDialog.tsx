@@ -7,7 +7,7 @@ import { Modal } from './Modal'
 
 const choices: { value: NotificationMode; title: string; description: string; icon: 'message' | 'bell' | 'volumeOff' }[] = [
   { value: 'all', title: 'Все сообщения', description: 'Уведомлять о каждом новом сообщении в канале', icon: 'message' },
-  { value: 'mentions', title: 'Только упоминания', description: 'Когда упоминают вас или вашу роль', icon: 'bell' },
+  { value: 'mentions', title: 'Только упоминания', description: 'Когда упоминают вас, вашу роль или отвечают на ваше сообщение', icon: 'bell' },
   { value: 'none', title: 'Ничего', description: 'Без уведомлений и звука из этого канала', icon: 'volumeOff' },
 ]
 const permission = () => typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
