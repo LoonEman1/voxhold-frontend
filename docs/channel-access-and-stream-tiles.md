@@ -36,3 +36,7 @@ player and fullscreen controls. Returning to fullscreen resets the hover guard
 so controls can fade again. Recording-list refreshes retry a snapshot overtaken
 by live recording events before pruning it, preserving new recordings while
 still removing records whose access has been revoked.
+
+The workspace viewport stays fixed during focus changes. Its inner panes keep
+their own scrolling, so switching participant context menus cannot pan the
+application and dismiss the new menu through a delayed scroll event.
