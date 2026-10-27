@@ -54,6 +54,7 @@ export class DecodeWatchdog {
   private lastFrames: number | null = null
   private bytesStalled = 0
   private framesStalled = 0
+  private missingSamples = 0
   private keyframeTimestamps: number[] = []
   // -Infinity so the very first request is never blocked by a cooldown that
   // would otherwise compare against the epoch.
@@ -94,6 +95,10 @@ export class DecodeWatchdog {
     this.lastBytes = null
     this.lastFrames = null
     if (this.phase !== 'idle' && this.phase !== 'exhausted') this.phase = 'healthy'
+    this.keyframeTimestamps = []
+    this.lastKeyframeAt = Number.NEGATIVE_INFINITY
+    this.lastIceAt = Number.NEGATIVE_INFINITY
+    this.missingSamples = 0
   }
 
   private async tick() {
@@ -110,9 +115,13 @@ export class DecodeWatchdog {
     }
     // The session may have been closed while getStats was in flight.
     if (generation !== this.generation || this.timer === null) return
-    if (!sample) return
-
-    const now = sample.timestamp
+    const now = performance.now()
+    if (!sample) {
+      this.missingSamples += 1
+      if (this.missingSamples >= (this.options.bytesStallSamples ?? BYTES_STALL_SAMPLES) + 2) this.triggerIceRecovery(now)
+      return
+    }
+    this.missingSamples = 0
     const bytes = typeof sample.bytesReceived === 'number' ? sample.bytesReceived : undefined
     const frames = typeof sample.framesDecoded === 'number' ? sample.framesDecoded : undefined
 
@@ -138,6 +147,12 @@ export class DecodeWatchdog {
       this.lastFrames = frames
     }
 
+    // A connected transport or fresh RTP is insufficient: give the ICE
+    // attempt a bounded grace period to produce an actually decoded frame.
+    if (this.phase === 'ice_recovery' && now - this.lastIceAt >= (this.options.iceCooldownMs ?? ICE_COOLDOWN_MS)) {
+      this.triggerFullRewatch()
+      return
+    }
     if ((bytes !== undefined ? this.bytesStalled : 0) >= (this.options.bytesStallSamples ?? BYTES_STALL_SAMPLES)) {
       this.triggerIceRecovery(now)
       return
@@ -160,7 +175,7 @@ export class DecodeWatchdog {
     this.lastKeyframeAt = now
     this.keyframeTimestamps.push(now)
     this.framesStalled = 0
-    this.phase = 'keyframing'
+    if (this.phase !== 'ice_recovery' && this.phase !== 'rewatching') this.phase = 'keyframing'
     clientDiagnostics.record('media', 'stream_keyframe_requested', 'warn', {
       attempts_in_window: this.keyframeTimestamps.length,
     })
@@ -183,6 +198,11 @@ export class DecodeWatchdog {
     this.phase = 'ice_recovery'
     clientDiagnostics.record('media', 'stream_rtp_stalled', 'error', { recovery: 'ice_restart' })
     this.options.requestIceRestart?.()
+  }
+
+  /** Called when the player cannot resume even though the transport may be connected. */
+  recoverPlayback() {
+    if (this.timer !== null && this.phase !== 'rewatching') this.triggerFullRewatch()
   }
 
   private triggerFullRewatch() {

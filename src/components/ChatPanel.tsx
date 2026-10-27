@@ -1,3 +1,4 @@
+import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Channel, ChannelRead, Message, ServerMember, ServerRole } from '../domain/types'
@@ -8,6 +9,11 @@ import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
 
 interface ChatPanelProps {
+  pendingMessages?: PendingMessage[]
+  onRetryPending?: (message: PendingMessage) => void
+  onDismissPending?: (id: string) => void
+  initialViewport?: ChatViewport
+  onViewport?: (viewport: ChatViewport) => void
   channel: Channel | null
   messages: Message[]
   loading: boolean
@@ -38,7 +44,14 @@ function sameDay(left: number, right: number) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
-export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+function readViewport(container: HTMLDivElement): ChatViewport | undefined {
+  const rect = container.getBoundingClientRect()
+  const row = [...container.querySelectorAll<HTMLElement>('[data-message-id]')].find((element) => element.getBoundingClientRect().bottom > rect.top + 2)
+  if (!row) return
+  return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
+}
+
+export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -51,6 +64,10 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
   const [showReturnToLatest, setShowReturnToLatest] = useState(false)
   const [returningToLatest, setReturningToLatest] = useState(false)
   const [receiptMessageId, setReceiptMessageId] = useState<number | null>(null)
+  const viewportCallback = useRef(onViewport)
+  viewportCallback.current = onViewport
+  const viewportToRestore = useRef(initialViewport)
+  const restoreFrame = useRef<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const topSentinelRef = useRef<HTMLDivElement>(null)
   const bottomSentinelRef = useRef<HTMLDivElement>(null)
@@ -74,6 +91,7 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
     getItemKey: getMessageKey,
     estimateSize: estimateMessageSize,
     overscan: 8,
+    useAnimationFrameWithResizeObserver: true,
     enabled: virtualized,
     anchorTo: 'end',
     followOnAppend: true,
@@ -101,6 +119,10 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
     })
   }
 
+  // Each effect setup (including StrictMode replay) starts its own channel
+  // positioning pass. A replay must not leave a cancelled restore half done.
+  useLayoutEffect(() => { previousChannel.current = null }, [channelId])
+
   useLayoutEffect(() => {
     const container = scrollRef.current
     if (!container) return
@@ -112,12 +134,13 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
     }
     const channelChanged = previousChannel.current !== channelId
     if (channelChanged) {
+      viewportToRestore.current = initialViewport
       previousChannel.current = channelId
       pendingChannelScroll.current = channelId
       previousMessageCount.current = 0
       previousFocus.current = null
     }
-    if (loading) return
+    if (loading || messages.length === 0) return
     if (!focusedMessageId) previousFocus.current = null
     if (focusedMessageId && previousFocus.current !== focusedMessageId) {
       if (virtualized) {
@@ -140,7 +163,28 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
       }
     }
     if (pendingChannelScroll.current === channelId) {
-      if (virtualized) virtualizer.scrollToEnd()
+      const saved = viewportToRestore.current
+      viewportToRestore.current = undefined
+      const index = saved ? messages.findIndex((message) => message.id === saved.messageId) : -1
+      if (saved && !saved.following && index >= 0) {
+        virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' })
+        let attempts = 0, stable = 0
+        const restore = () => {
+          // An index command keeps reconciling for several frames. Cancel it
+          // before applying the saved intra-row offset, otherwise it can undo
+          // the offset again after ResizeObserver measures the restored rows.
+          virtualizer.cancelScroll()
+          const row = container.querySelector<HTMLElement>(`[data-message-id="${saved.messageId}"]`)
+          if (row) {
+            const delta = row.getBoundingClientRect().top - container.getBoundingClientRect().top - saved.offset
+            if (Math.abs(delta) < 0.5) stable++
+            else { stable = 0; container.scrollTop += delta }
+          }
+          if (++attempts < 12 && stable < 3) restoreFrame.current = requestAnimationFrame(restore)
+          else restoreFrame.current = null
+        }
+        restoreFrame.current = requestAnimationFrame(restore)
+      } else if (virtualized) virtualizer.scrollToEnd()
       else container.scrollTop = container.scrollHeight
       pendingChannelScroll.current = null
       previousMessageCount.current = messages.length
@@ -151,7 +195,7 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
       container.scrollTop = container.scrollHeight
     }
     previousMessageCount.current = messages.length
-  }, [channelId, focusedMessageId, loading, messages, virtualized, virtualizer])
+  }, [channelId, focusedMessageId, initialViewport, loading, messages, virtualized, virtualizer])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -240,12 +284,28 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
     }
   }, [channelId])
 
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    const callback = viewportCallback.current
+    const save = () => {
+      const value = readViewport(container)
+      if (value) callback?.(value)
+    }
+    const cancelRestore = () => { if (restoreFrame.current !== null) cancelAnimationFrame(restoreFrame.current); restoreFrame.current = null }
+    container.addEventListener('scroll', save, { passive: true })
+    container.addEventListener('wheel', cancelRestore, { passive: true })
+    container.addEventListener('pointerdown', cancelRestore)
+    return () => { cancelRestore(); container.removeEventListener('scroll', save); container.removeEventListener('wheel', cancelRestore); container.removeEventListener('pointerdown', cancelRestore) }
+  }, [channelId])
+
   const submit = async (event?: FormEvent) => {
     event?.preventDefault()
     const content = draft.trim()
     if (!content || sending) return
     setSending(true); setSendError('')
-    try { await onSend(content); setDraft('') } catch (error) { setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
+    setDraft('')
+    try { await onSend(content) } catch (error) { setDraft((current) => current || content); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -348,6 +408,7 @@ export function ChatPanel({ channel, messages, loading, loadingOlder, hasMore, l
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
+        {pendingMessages.map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><p>{item.content}</p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}

@@ -256,3 +256,20 @@ test('blocked recording audio releases the busy control instead of hanging indef
   await expect(page.getByRole('button', { name: 'Начать запись', exact: true })).toBeEnabled()
   await expect(page.getByText('Записывает Александр')).toHaveCount(0)
 })
+
+test('both clients highlight the actual remote speaker and clear silence over real WebRTC audio', async ({ page }) => {
+  await page.goto('/e2e/fixtures/voice-speaking.html')
+  await page.getByRole('button', { name: 'Connect both clients' }).click()
+  await expect(page.locator('#result')).toHaveText('ready')
+  await page.getByRole('button', { name: 'Toggle Alice' }).click()
+  for (const client of ['Client 1', 'Client 2']) {
+    await expect(page.getByRole('region', { name: client }).locator('.voice-participant').filter({ hasText: 'Alice' })).toHaveClass(/is-speaking/)
+    await expect(page.getByRole('region', { name: client }).locator('.voice-participant').filter({ hasText: 'Bob' })).not.toHaveClass(/is-speaking/)
+  }
+  await page.getByRole('button', { name: 'Toggle Alice' }).click()
+  await page.getByRole('button', { name: 'Toggle Bob' }).click()
+  for (const client of ['Client 1', 'Client 2']) {
+    await expect(page.getByRole('region', { name: client }).locator('.voice-participant').filter({ hasText: 'Bob' })).toHaveClass(/is-speaking/)
+    await expect(page.getByRole('region', { name: client }).locator('.voice-participant').filter({ hasText: 'Alice' })).not.toHaveClass(/is-speaking/)
+  }
+})

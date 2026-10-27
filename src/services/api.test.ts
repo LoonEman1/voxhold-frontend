@@ -8,6 +8,12 @@ function mockTransport(response: TransportResponse<unknown>) {
 }
 
 describe('Voxhold API client', () => {
+  it('loads the authoritative channel access roster with authentication and cancellation', async () => {
+    const { api, request } = mockTransport({ status: 200, data: { user_ids: [1, 3] } })
+    const controller = new AbortController()
+    expect(await api.channels.members('session', 2, 4, controller.signal)).toEqual({ user_ids: [1, 3] })
+    expect(request).toHaveBeenCalledWith({ token: 'session', path: '/api/v1/servers/2/channels/4/members', signal: controller.signal })
+  })
   it('removes a server recording without deleting local browser data', async () => {
     const { api, request } = mockTransport({ status: 200, data: { id: 'record', status: 'deleted' } })
     await api.recordings.remove('session', 'record')
@@ -147,6 +153,15 @@ describe('Voxhold API client', () => {
       body: { token: 'invite-token' },
       token: 'session',
     })
+  })
+
+  it('lists and revokes managed invite links with authorization and a cursor', async () => {
+    const { api, request } = mockTransport({ status: 204, data: null })
+    const signal = new AbortController().signal
+    await api.inviteLinks.list('session', 4, 23, signal)
+    await api.inviteLinks.revoke('session', 4, 23)
+    expect(request).toHaveBeenNthCalledWith(1, { token: 'session', path: '/api/v1/servers/4/invite-links?limit=50&before_id=23', signal })
+    expect(request).toHaveBeenNthCalledWith(2, { token: 'session', path: '/api/v1/servers/4/invite-links/23', method: 'DELETE' })
   })
 
   it('builds cursor pagination and authorization', async () => {

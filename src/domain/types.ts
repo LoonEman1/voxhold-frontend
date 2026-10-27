@@ -86,6 +86,7 @@ export interface MessageAuthor {
 }
 
 export interface Message {
+  client_message_id?: string
   id: EntityId
   channel_id: EntityId
   author: MessageAuthor
@@ -93,6 +94,15 @@ export interface Message {
   created_at: number
   edited_at: number | null
   revision?: number
+}
+
+export interface MessageSyncPage {
+  messages: Message[]
+  deleted_ids: number[]
+  cursor: number
+  reset: boolean
+  has_more: boolean
+  has_older: boolean
 }
 
 export interface MessagePage {
@@ -149,6 +159,7 @@ export interface PresenceUpdate {
   server_id: EntityId
   user_id: EntityId
   status: 'online' | 'offline'
+  last_seen_at?: number
 }
 
 export interface Profile {
@@ -371,6 +382,23 @@ export interface CreatedInviteLink extends InviteLinkPreview {
   id: EntityId
   token: string
   created_at: number
+}
+
+export interface ActiveInviteLink {
+  id: EntityId
+  server_id: EntityId
+  created_by: EntityId
+  creator_username: string
+  expires_at: number
+  max_uses: number | null
+  use_count: number
+  allow_registration: boolean
+  created_at: number
+}
+
+export interface InviteLinkPage {
+  invite_links: ActiveInviteLink[]
+  pagination: { next_before_id: number | null; has_more: boolean }
 }
 
 export interface ApiErrorPayload {

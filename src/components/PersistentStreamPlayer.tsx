@@ -1,3 +1,4 @@
+import { useStreamQuality } from './MediaActivity'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ActiveStream } from '../domain/types'
 import type { StreamPreferences } from '../services/streamSettings'
@@ -9,6 +10,7 @@ import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
 interface PersistentStreamPlayerProps {
+  onPlaybackRecovery?: () => void
   callControls?: ReactNode
   mode: 'mini' | 'expanded'
   stream: ActiveStream | null
@@ -29,7 +31,8 @@ interface PersistentStreamPlayerProps {
 /** Cinema controls fade out after this long without input. */
 export const CINEMA_IDLE_MS = 2_500
 
-export function PersistentStreamPlayer({ mode, stream, role, status, media, channelName, preferences, quality, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false, callControls }: PersistentStreamPlayerProps) {
+export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false, callControls }: PersistentStreamPlayerProps) {
+  const quality = useStreamQuality(qualityOverride)
   const playerRef = useRef<HTMLElement>(null)
   const [uiHidden, setUIHidden] = useState(false)
   const [idle, setIdle] = useState(false)
@@ -41,6 +44,8 @@ export function PersistentStreamPlayer({ mode, stream, role, status, media, chan
   const { videoRef, state: playbackState, muted, attach, enableAudio } = useMediaPlayback({
     role,
     muted: wantMuted,
+    recovering: status === 'signaling',
+    onRecoveryRequired: onPlaybackRecovery,
     context: { channel_id: stream?.channel_id ?? null },
   })
 

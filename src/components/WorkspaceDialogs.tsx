@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { Channel, ChannelKind, CreatedInviteLink, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
+import type { Channel, ChannelKind, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
 import { countryByCode } from '../lib/countries'
 import { formatDate, humanError } from '../lib/format'
-import { createWebInviteURL } from '../lib/inviteLinks'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
+import { MemberPresence, usePresenceClock } from './MemberPresence'
 import { AvatarEditor } from './AvatarEditor'
 import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
@@ -106,45 +106,7 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
   )
 }
 
-export function InviteUserDialog({ open, onClose, server, onCreateLink }: AsyncDialogProps & {
-  server: Server | null
-  onCreateLink(input: { expires_in_seconds: number; max_uses: number | null; allow_registration: boolean }): Promise<CreatedInviteLink>
-}) {
-  const [error, setError] = useState('')
-  const [pending, setPending] = useState(false)
-  const [lifetime, setLifetime] = useState(24 * 60 * 60)
-  const [maxUses, setMaxUses] = useState(25)
-  const [generatedURL, setGeneratedURL] = useState('')
-  const [copied, setCopied] = useState(false)
-  useEffect(() => { if (open) { setError(''); setGeneratedURL(''); setCopied(false); setLifetime(24 * 60 * 60); setMaxUses(25) } }, [open])
-  const createLink = async (event: FormEvent) => {
-    event.preventDefault()
-    if (pending) return
-    setPending(true); setError('')
-    try {
-      const link = await onCreateLink({ expires_in_seconds: lifetime, max_uses: maxUses, allow_registration: true })
-      setGeneratedURL(createWebInviteURL(link.token, `${window.location.origin}${window.location.pathname}`))
-    } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
-  }
-  const copyLink = async () => {
-    try { await navigator.clipboard.writeText(generatedURL); setCopied(true); setError('') }
-    catch { setError('Не удалось скопировать ссылку. Выделите её и скопируйте вручную.') }
-  }
-  return <Modal open={open} onClose={onClose} title={`Пригласить в ${server?.name ?? 'сервер'}`} eyebrow="ПРИГЛАШЕНИЕ ПО ССЫЛКЕ" size="medium">
-    {generatedURL ? <div className="dialog-form invite-link-result">
-      <p>Отправьте ссылку новому участнику: он сможет создать аккаунт и сразу присоединиться к этому инстансу.</p>
-      <label><span>Ссылка-приглашение</span><input readOnly value={generatedURL} onFocus={(event) => event.currentTarget.select()}/></label>
-      {error && <div className="form-error" role="alert">{error}</div>}
-      <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={() => { setGeneratedURL(''); setCopied(false) }}>Создать ещё</button><button className="button button--primary" type="button" onClick={() => void copyLink()}>{copied ? 'Скопировано' : 'Копировать'}</button></div>
-    </div> : <form className="dialog-form" onSubmit={createLink}>
-      <p>Новые участники регистрируются по ссылке. Пользователи с аккаунтом уже состоят в этом инстансе.</p>
-      <label><span>Срок действия</span><select value={lifetime} onChange={(event) => setLifetime(Number(event.target.value))}><option value={60 * 60}>1 час</option><option value={6 * 60 * 60}>6 часов</option><option value={24 * 60 * 60}>1 сутки</option></select></label>
-      <label><span>Количество использований</span><input type="number" min={1} max={100} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} required/></label>
-      {error && <div className="form-error" role="alert">{error}</div>}
-      <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Создать ссылку'}</button></div>
-    </form>}
-  </Modal>
-}
+export { InviteUserDialog } from './InviteUserDialog'
 
 export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false }: AsyncDialogProps & { profile: Profile | null; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const [about, setAbout] = useState('')
@@ -170,7 +132,8 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
+export function MemberProfileDialog({ online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
+  const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
   const [manageError, setManageError] = useState('')
@@ -192,6 +155,7 @@ export function MemberProfileDialog({ open, onClose, profile, role, loading, err
         <div className="member-profile-cover"><i/><i/><i/></div>
         <div className="member-profile-avatar-slot" aria-label="Фотография профиля"><Avatar userId={profile.user_id} name={profile.username} size="large"/></div>
         <div className="member-profile-head"><div><h3>{profile.username}</h3><span>@{profile.username}</span></div><span className={`role-badge role-badge--${role}`}>{roleMeta[role].label}</span></div>
+        <div className="member-profile-presence"><MemberPresence online={online} lastSeenAt={profile.last_seen_at} now={now}/></div>
         <dl className="profile-facts">
           <div><dt>В Voxhold с</dt><dd>{formatDate(profile.created_at)}</dd></div>
           <div><dt>Страна проживания</dt><dd>{country ? <><CountryFlag code={country.code}/> {country.name}</> : 'Не указана'}</dd></div>

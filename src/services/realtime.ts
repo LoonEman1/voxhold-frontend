@@ -103,6 +103,7 @@ interface RealtimeOptions {
   onUnauthorized: () => void
   onReady?: () => void
   onSubscribed?: () => void
+  onSyncRequired?: (event: { server_id: number; channel_id: number }) => void
 }
 
 export interface RealtimeServerError {
@@ -275,7 +276,7 @@ export class RealtimeClient {
 
     socket.addEventListener('open', () => {
       clientDiagnostics.record('websocket', 'opened', 'info')
-      this.send('auth', { token: this.options.token })
+      this.send('auth', { token: this.options.token, message_sync: true })
     })
 
     socket.addEventListener('message', (event) => {
@@ -307,6 +308,8 @@ export class RealtimeClient {
           this.options.onRecordingUpdated?.(payload.data as ChannelRecording)
         } else if (payload.type === 'avatar.updated' && payload.data) {
           this.options.onAvatarUpdated?.(payload.data as { user_id: number; version?: string | null })
+        } else if (payload.type === 'channel.sync_required' && payload.data) {
+          this.options.onSyncRequired?.(payload.data as { server_id: number; channel_id: number })
         } else if (payload.type === 'message.created' && payload.data) {
           this.options.onMessage(payload.data as Message)
         } else if (payload.type === 'message.updated' && payload.data) {

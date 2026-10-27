@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openCallWorkspace(page: Page) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -14,36 +14,151 @@ async function openCallWorkspace(page: Page) {
     }
   })
   const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
+  const participants = options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
+  let emit = (_type: string, _data: unknown) => {}
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
+    emit = (type, data) => socket.send(JSON.stringify({ type, data }))
     socket.onMessage((raw) => {
       const event = JSON.parse(String(raw))
       if (event.type === 'auth') {
         socket.send(JSON.stringify({ type: 'ready', data: { user_id: 1, protocol_version: 6 } }))
-        socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: [1] }] } }))
-        socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants: [participant] } }))
+        socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: participants.map((item) => item.user_id) }] } }))
+        socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants } }))
       }
-      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants: [participant] } }))
+      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } }))
       if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
     })
   })
+  const now = Math.floor(Date.now() / 1000)
+  let nextInviteId = 105
+  let inviteLinks = [
+    { id: 101, server_id: 1, created_by: 1, creator_username: 'Александр', created_at: now - 600, expires_at: now + 3600, max_uses: 25 as number | null, use_count: 3, allow_registration: true },
+    { id: 102, server_id: 1, created_by: 2, creator_username: 'Другой администратор', created_at: now - 300, expires_at: now + 3600, max_uses: null as number | null, use_count: 1, allow_registration: false },
+    { id: 103, server_id: 1, created_by: 1, creator_username: 'Истёкшая', created_at: now - 600, expires_at: now - 1, max_uses: 25 as number | null, use_count: 0, allow_registration: true },
+    { id: 104, server_id: 1, created_by: 1, creator_username: 'Исчерпанная', created_at: now - 600, expires_at: now + 3600, max_uses: 25 as number | null, use_count: 25, allow_registration: true },
+  ]
   await page.route('**/api/v1/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
+    const url = new URL(route.request().url())
+    const path = url.pathname
     let json: unknown = {}
-    if (path.endsWith('/me/servers')) json = [{ id: 1, name: 'FirstInstance', role: 'owner', created_by: 1, created_at: 1, joined_at: 1 }]
+    if (path.endsWith('/me/servers')) json = [{ id: 1, name: 'FirstInstance', role: options.role ?? 'owner', created_by: 1, created_at: 1, joined_at: 1 }]
     else if (path.endsWith('/instance')) json = { instance_id: 'fixture', name: 'FirstInstance', initialized: true, registration: 'invite_only', protocol_version: 1, created_at: 1 }
     else if (path.endsWith('/me/profile')) json = { user_id: 1, username: 'Александр', about: '', country_code: null, created_at: 1 }
     else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
-    else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: null }))
+    else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: options.channelMemberIds ?? [1, 2, 3] }
+    else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: now - 5 * 60 }))
     else if (path.endsWith('/recordings')) json = { recordings: [] }
     else if (path.endsWith('/pins')) json = []
+    else if (path.endsWith('/messages/sync')) json = { messages: [], deleted_ids: [], cursor: 0, reset: true, has_more: false, has_older: false }
     else if (path.endsWith('/messages')) json = { messages: [], pagination: { has_more: false, next_before_id: null } }
-    else if (path.endsWith('/invite-links')) json = { token: 'fixture-invite', expires_at: 9999999999, max_uses: 25, allow_registration: true }
+    else if (/\/invite-links(?:\/\d+)?$/.test(path)) {
+      if (options.role === 'member') { await route.fulfill({ status: 403, json: { error: 'not allowed to manage invite links' } }); return }
+      if (route.request().method() === 'DELETE') {
+        const id = Number(path.split('/').at(-1))
+        inviteLinks = inviteLinks.filter((link) => link.id !== id)
+        await route.fulfill({ status: 204 }); return
+      }
+      if (route.request().method() === 'POST') {
+        const input = route.request().postDataJSON() as { expires_in_seconds: number; max_uses: number | null; allow_registration: boolean }
+        const link = { id: nextInviteId++, server_id: 1, created_by: 1, creator_username: 'Александр', created_at: now, expires_at: now + input.expires_in_seconds, max_uses: input.max_uses, use_count: 0, allow_registration: input.allow_registration }
+        inviteLinks.push(link)
+        json = { ...link, server_name: 'FirstInstance', token: `fixture-invite-${link.id}` }
+      } else {
+        const before = Number(url.searchParams.get('before_id') ?? Number.MAX_SAFE_INTEGER)
+        json = { invite_links: inviteLinks.filter((link) => link.id < before && link.expires_at > now && (link.max_uses === null || link.use_count < link.max_uses)).sort((a, b) => b.id - a.id), pagination: { has_more: false, next_before_id: null } }
+      }
+    }
     else if (path.endsWith('/webrtc/config')) json = { ice_servers: [], ice_transport_policy: 'all' }
     await route.fulfill({ json })
   })
   await page.goto('/')
-  await expect(page.locator('.voice-participant')).toBeVisible()
+  await expect(page.locator('.voice-participant')).toHaveCount(participants.length)
+  return { emit }
 }
+
+for (const role of ['owner', 'admin'] as const) {
+  test(`${role} manages active invitation links from the top invitation menu`, async ({ page }) => {
+    await openCallWorkspace(page, { role })
+    await page.getByRole('button', { name: 'Пригласить', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Пригласить в FirstInstance' })
+    await dialog.getByRole('button', { name: 'Активные ссылки', exact: true }).click()
+    const ownerLink = dialog.getByRole('article', { name: 'Ссылка №101', exact: true })
+    await expect(ownerLink).toContainText('Александр')
+    await expect(ownerLink).toContainText('3 / 25')
+    await expect(dialog.getByRole('article', { name: 'Ссылка №102', exact: true })).toContainText('Другой администратор')
+    await expect(dialog.getByRole('article')).toHaveCount(2)
+    await page.setViewportSize({ width: 375, height: 812 })
+    expect(await page.locator('.modal-card').evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+    await ownerLink.getByRole('button', { name: 'Закрыть ссылку', exact: true }).click()
+    const deletion = page.waitForRequest((request) => request.method() === 'DELETE' && request.url().endsWith('/invite-links/101'))
+    await ownerLink.getByRole('button', { name: 'Да, закрыть', exact: true }).click()
+    await deletion
+    await expect(ownerLink).toHaveCount(0)
+    await expect(dialog.getByRole('article')).toHaveCount(1)
+    await dialog.getByRole('button', { name: 'Закрыть', exact: true }).click()
+    await page.setViewportSize({ width: 1600, height: 1000 })
+    await page.getByRole('button', { name: 'Пригласить', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Активные ссылки', exact: true }).click()
+    await expect(dialog.getByRole('article')).toHaveCount(1)
+    await expect(dialog.getByRole('article', { name: 'Ссылка №101', exact: true })).toHaveCount(0)
+    await dialog.getByRole('button', { name: 'Новая ссылка', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Создать ссылку', exact: true }).click()
+    await expect(dialog.getByRole('textbox', { name: 'Ссылка-приглашение', exact: true })).toHaveValue(/fixture-invite-105/)
+    await dialog.getByRole('button', { name: 'Активные ссылки', exact: true }).click()
+    await expect(dialog.getByRole('article', { name: 'Ссылка №105', exact: true })).toBeVisible()
+  })
+}
+
+test('ordinary members have no invitation management entry point', async ({ page }) => {
+  await openCallWorkspace(page, { role: 'member' })
+  await expect(page.getByRole('button', { name: 'Пригласить', exact: true })).toHaveCount(0)
+})
+
+test('participant volume updates in an open menu and the same menu opens on room cards', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await openCallWorkspace(page, { withPeers: true })
+  const menu = page.getByRole('menu')
+  const slider = menu.getByRole('slider', { name: 'Громкость пользователя' })
+  const sidebarMaria = page.locator('.channel-voice-users button').filter({ hasText: 'Мария' })
+  const mariaCard = page.locator('.voice-participant').filter({ hasText: 'Мария' })
+
+  await sidebarMaria.click({ button: 'right' })
+  await expect(slider).toHaveValue('100')
+  await slider.press('Home')
+  await expect(slider).toHaveValue('0')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('0%')
+  await slider.press('End')
+  await expect(slider).toHaveValue('200')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('200%')
+  await slider.press('ArrowLeft')
+  await expect(slider).toHaveValue('195')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('195%')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('voxhold.voice.userVolumes.v1') ?? '{}')['2'])).toBe(195)
+
+  await page.keyboard.press('Escape')
+  await mariaCard.click({ button: 'right' })
+  await expect(menu.locator('.context-menu__title')).toHaveText('Мария')
+  await expect(slider).toHaveValue('195')
+  await expect(menu.getByRole('menuitem', { name: 'Просмотреть профиль' })).toBeVisible()
+  await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await slider.press('ArrowLeft')
+  await expect(slider).toHaveValue('190')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('190%')
+
+  await page.locator('.voice-participant').filter({ hasText: 'ОченьДлинноеИмяУчастника' }).click({ button: 'right' })
+  await expect(slider).toHaveValue('100')
+  await expect(menu.locator('.context-menu__volume em')).toHaveText('100%')
+  await mariaCard.click({ button: 'right' })
+  await expect(slider).toHaveValue('190')
+  await page.locator('.voice-participant').filter({ hasText: 'Александр' }).click({ button: 'right' })
+  await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toHaveCount(0)
+  expect(errors).toEqual([])
+})
 
 test('call tiles, registration links and docked pins work in the real workspace', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 })
@@ -144,4 +259,30 @@ test('avatar camera menu supports moving, zooming, server crop upload and remova
   expect(bodyBytes).toBe(file.length)
   await trigger.click(); await page.getByRole('button', { name: 'Удалить аватар' }).click()
   await expect.poll(() => removed).toBe(true)
+})
+
+test('member tabs follow server access, retain all users and show live last-seen with clear presence', async ({ page }) => {
+  const { emit } = await openCallWorkspace(page, { channelMemberIds: [1, 3] })
+  const sidebar = page.locator('.members-sidebar')
+  await expect(sidebar.locator('.member-row')).toHaveCount(2)
+  await expect(sidebar.locator('.role-dot')).toHaveCount(0)
+  await expect(sidebar.locator('.member-row').filter({ hasText: 'ОченьДлинноеИмяУчастника' })).toContainText('Был в сети 5 минут назад')
+  await expect(sidebar.locator('time')).toHaveAttribute('title', /Последний раз в сети:/)
+  await sidebar.getByRole('tab', { name: 'Все участники' }).click()
+  await expect(sidebar.locator('.member-row')).toHaveCount(3)
+  emit('presence.updated', { server_id: 1, user_id: 2, status: 'online', last_seen_at: Math.floor(Date.now() / 1000) })
+  await expect(sidebar.locator('.member-row').filter({ hasText: 'Мария' })).toContainText('Сейчас в сети')
+  emit('presence.updated', { server_id: 1, user_id: 2, status: 'offline', last_seen_at: Math.floor(Date.now() / 1000) })
+  await expect(sidebar.locator('.member-row').filter({ hasText: 'Мария' })).toContainText('Был в сети только что')
+  await sidebar.getByRole('tab', { name: 'Участники канала' }).click()
+  await expect(sidebar.locator('.member-row')).toHaveCount(2)
+  await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-dark.png' })
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light')
+  await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-light.png' })
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.getByTitle('Показать участников', { exact: true }).click()
+  await expect(sidebar).toBeVisible()
+  await expect(sidebar.locator('.member-row')).toHaveCount(2)
+  expect(await sidebar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-mobile.png' })
 })

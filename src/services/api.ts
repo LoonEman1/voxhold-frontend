@@ -11,10 +11,12 @@ import type {
   InstanceMetadata,
   InviteLinkPreview,
   CreatedInviteLink,
+  InviteLinkPage,
   CorsOriginsPayload,
   Message,
   MessageContext,
   MessagePage,
+  MessageSyncPage,
   PinnedMessage,
   Profile,
   SearchMessagePage,
@@ -162,6 +164,8 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      members: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/members`, signal }) as Promise<{ user_ids: number[] }>,
       list: (token: string, serverId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels`, signal }) as Promise<Channel[]>,
       create: (token: string, serverId: number, name: string, kind: ChannelKind) =>
@@ -172,6 +176,8 @@ export function createApi(transport: Transport) {
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}`, method: 'DELETE' }) as Promise<void>,
     },
     messages: {
+      sync: (token: string, serverId: number, channelId: number, after?: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/sync${after === undefined ? '' : `?after=${after}`}`, signal }) as Promise<MessageSyncPage>,
       list: (token: string, serverId: number, channelId: number, beforeId?: number, signal?: AbortSignal) => {
         const query = new URLSearchParams({ limit: '50' })
         if (beforeId) query.set('before_id', String(beforeId))
@@ -180,11 +186,12 @@ export function createApi(transport: Transport) {
           signal,
         }) as Promise<MessagePage>
       },
-      create: (token: string, serverId: number, channelId: number, content: string) =>
+      create: (token: string, serverId: number, channelId: number, content: string, clientMessageId?: string, signal?: AbortSignal) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages`,
           method: 'POST',
-          body: { content },
+          body: { content, ...(clientMessageId ? { client_message_id: clientMessageId } : {}) },
+          ...(signal ? { signal } : {}),
         }) as Promise<Message>,
       update: (token: string, serverId: number, channelId: number, messageId: number, content: string) =>
         authorized(token, {
@@ -251,6 +258,13 @@ export function createApi(transport: Transport) {
         authorized(token, { path: `/api/v1/me/server-invites/${url(inviteId)}/decline`, method: 'POST' }) as Promise<void>,
     },
     inviteLinks: {
+      list: (token: string, serverId: number, beforeId?: number, signal?: AbortSignal) => {
+        const query = new URLSearchParams({ limit: '50' })
+        if (beforeId !== undefined) query.set('before_id', String(beforeId))
+        return authorized(token, { path: `/api/v1/servers/${url(serverId)}/invite-links?${query}`, signal }) as Promise<InviteLinkPage>
+      },
+      revoke: (token: string, serverId: number, linkId: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/invite-links/${url(linkId)}`, method: 'DELETE' }) as Promise<void>,
       create: (
         token: string,
         serverId: number,

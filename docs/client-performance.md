@@ -1,5 +1,12 @@
 # Client performance and media quality
 
+Channel history now has bounded caches, durable change synchronization and
+idempotent send retries. Media activity subscriptions, member virtualization
+and deferred dialogs are described in [channel history and rendering](channel-history.md).
+The follow-up build has 262.50 kB initial JS (82.29 kB gzip) and 287.66 kB
+workspace JS (81.70 kB gzip), with recording/voice/stream settings dialogs in
+separate chunks. These bundle sizes do not measure a production FPS gain.
+
 The workspace is loaded as a separate chunk after authentication. Chat history
 uses TanStack Virtual with measured row heights, stable message IDs, scroll
 anchoring on prepend, follow-on-append near the bottom and indexed search jumps.

@@ -138,6 +138,25 @@ describe('DecodeWatchdog', () => {
     watchdog.stop()
   })
 
+  it('escalates a connected decoder freeze even when bytes resume after ICE', async () => {
+    const samples = Array.from({ length: 30 }, (_, i) => ({ bytesReceived: 1000 + i * 500, framesDecoded: 10 }))
+    const watchdog = createWatchdog(samples, counters)
+    watchdog.start()
+    await runTicks(30)
+    expect(counters.iceRestarts).toBe(1)
+    expect(counters.rewatches).toBeGreaterThanOrEqual(1)
+    watchdog.stop()
+  })
+
+  it('recovers a session that never produces its first inbound video stats', async () => {
+    const watchdog = createWatchdog([], counters)
+    watchdog.start()
+    await runTicks(20)
+    expect(counters.iceRestarts).toBe(1)
+    expect(counters.rewatches).toBeGreaterThanOrEqual(1)
+    watchdog.stop()
+  })
+
   it('ends in an explicit exhausted state after bounded rewatches', async () => {
     const frozen = { bytesReceived: 1000, framesDecoded: 10 }
     const watchdog = createWatchdog(
