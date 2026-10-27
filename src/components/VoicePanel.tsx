@@ -84,7 +84,7 @@ export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, partici
       {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
       <div className="voice-stage-content">
 
-      <section className="voice-participants">
+      <section className={`voice-participants ${!participants.length && !stream && !streamMedia && !streamError ? 'is-empty' : ''}`}>
         {participants.length || stream || streamMedia || streamError ? <div className="voice-participant-grid"><StreamPanel tile onPlaybackRecovery={onPlaybackRecovery} stream={stream} currentUserId={currentUserId} publisherName={publisherName} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>{participants.map((participant) => {
           const member = members.find((item) => item.user_id === participant.user_id)
           const username = member?.username ?? `Пользователь #${participant.user_id}`
