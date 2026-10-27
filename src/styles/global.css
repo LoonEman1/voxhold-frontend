@@ -266,3 +266,12 @@ input::placeholder, textarea::placeholder { color: #66665f; }
 [data-theme="light"] .channel-access__success { color: #477315; }
 
 .channel-access__people b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dialog-loading { padding: 2px 0 8px; }
+.dialog-loading__caption { display: flex; align-items: center; gap: 10px; margin: 2px 0 20px; color: var(--muted); font-size: 13px; }
+.dialog-loading__rows { display: grid; gap: 12px; }
+.dialog-loading__row { display: flex; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); }
+.dialog-loading__row > i { width: 80px; height: 54px; flex: none; border-radius: 9px; background: var(--line-strong); opacity: .45; }
+.dialog-loading__row > span { display: grid; flex: 1; align-content: center; gap: 10px; }
+.dialog-loading__row b, .dialog-loading__row small { display: block; width: 70%; height: 9px; border-radius: 9px; background: var(--line-strong); opacity: .5; }
+.dialog-loading__row small { width: 42%; height: 7px; opacity: .3; }

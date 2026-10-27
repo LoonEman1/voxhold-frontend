@@ -8,6 +8,8 @@ export type IconName =
   | 'chevron'
   | 'close'
   | 'copy'
+  | 'reply'
+  | 'forward'
   | 'edit'
   | 'emoji'
   | 'hash'
@@ -46,6 +48,8 @@ const paths: Record<IconName, React.ReactNode> = {
   chevron: <path d="m9 18 6-6-6-6" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
   copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></>,
+  reply: <path d="m9 5-6 6 6 6v-4h4c4 0 6 2 8 6 0-8-3-12-8-12H9Z"/>,
+  forward: <path d="m15 5 6 6-6 6v-4h-4c-4 0-6 2-8 6 0-8 3-12 8-12h4Z"/>,
   edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></>,
   emoji: <><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></>,
   hash: <><path d="M5 9h14M4 15h14M10 3 8 21M16 3l-2 18"/></>,

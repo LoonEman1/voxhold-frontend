@@ -7,17 +7,19 @@ import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 
 interface Option { key: string; label: string; detail: string; token: string; userId?: number }
-export function MentionComposer({ draft, onChange, onSubmit, sending, channelName, members, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel }: {
-  draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; sending: boolean; channelName: string; members: ServerMember[]; error: string
+export function MentionComposer({ focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel }: {
+  focusKey?: number; submitDisabled?: boolean; draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; sending: boolean; channelName: string; members: ServerMember[]; error: string
 }) {
   const input = useRef<HTMLTextAreaElement>(null)
   const model = useRef(new MentionDraft())
   const directory = useMemo(() => mentionDirectory(members), [members])
   model.current.sync(draft, directory)
   const text = model.current.text
+  useEffect(() => { if (focusKey) input.current?.focus({ preventScroll: true }) }, [focusKey])
   const [localError, setLocalError] = useState('')
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
+    if (submitDisabled || sending) return
     const encoded = model.current.encode()
     if ([...encoded].length > 5120) { setLocalError('Сократите сообщение: вместе с упоминаниями оно превышает 5120 символов'); return }
     setLocalError(''); onSubmit(event, encoded)
@@ -63,7 +65,7 @@ export function MentionComposer({ draft, onChange, onSubmit, sending, channelNam
       } else if (event.key === 'Escape' && onCancel) { event.preventDefault(); onCancel() }
       else if (event.key === 'Enter' && !event.shiftKey && (submitOnEnter || event.ctrlKey || event.metaKey)) { event.preventDefault(); submit() }
     }} placeholder={`Написать в #${channelName} · @ для упоминания`} maxLength={5120} aria-label={inputLabel ?? `Сообщение в ${channelName}`} aria-autocomplete="list" aria-controls={options.length ? id : undefined} aria-activedescendant={options.length ? `${id}-${selected}` : undefined}/>
-    <button type="submit" className="composer__send" disabled={!draft.trim() || sending} aria-label={sending ? 'Отправляется' : submitLabel} title={submitLabel}>{sending ? <span className="spinner"/> : <Icon name={editing ? 'check' : 'send'}/> }</button>
+    <button type="submit" className="composer__send" disabled={!draft.trim() || sending || submitDisabled} aria-label={sending ? 'Отправляется' : submitLabel} title={submitLabel}>{sending ? <span className="spinner"/> : <Icon name={editing ? 'check' : 'send'}/> }</button>
     {onCancel && <button className="button button--ghost button--small" type="button" onClick={onCancel}>Отмена</button>}
     {(localError || error) && <div className="composer__error" role="alert">{localError || error}</div>}
   </form>

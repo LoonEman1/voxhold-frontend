@@ -6,7 +6,8 @@ import { MemberList } from './MemberList'
 
 export type ChannelMemberLoader = (channelId: number, signal: AbortSignal) => Promise<{ user_ids: number[] }>
 
-export function MembersSidebar({ channel, members, onlineUserIds, onLoadMembers, onClose, onOpenProfile, onMemberContextMenu }: {
+export function MembersSidebar({ refreshKey = 0, channel, members, onlineUserIds, onLoadMembers, onClose, onOpenProfile, onMemberContextMenu }: {
+  refreshKey?: number
   channel: Channel | null
   members: ServerMember[]
   onlineUserIds: ReadonlySet<number>
@@ -34,7 +35,7 @@ export function MembersSidebar({ channel, members, onlineUserIds, onLoadMembers,
       if (!controller.signal.aborted) setRoster({ key, ids: new Set(), error: humanError(error), loading: false })
     })
     return () => controller.abort()
-  }, [key, channelId, accessRevision, membership, onLoadMembers, tab, revision])
+  }, [key, channelId, accessRevision, membership, onLoadMembers, tab, revision, refreshKey])
   useEffect(() => {
     if (tab !== 'channel') return
     const visible = () => { if (document.visibilityState === 'visible') refresh() }
