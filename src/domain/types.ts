@@ -84,6 +84,13 @@ export interface Channel {
   last_message_id?: EntityId
 }
 
+export type NotificationMode = 'all' | 'mentions' | 'none'
+export interface NotificationSettings { server_id: number; channel_id: number; mode: NotificationMode }
+export interface MessageNotification {
+  server_id: number; channel_id: number; server_name: string; channel_name: string; mentioned: boolean
+  message: { id: number; author: MessageAuthor; content: string; created_at: number }
+}
+
 export interface MessageAuthor {
   user_id: EntityId
   username: string

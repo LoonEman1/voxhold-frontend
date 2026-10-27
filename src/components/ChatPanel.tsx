@@ -1,10 +1,13 @@
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Channel, ChannelRead, Message, ServerMember, ServerRole } from '../domain/types'
 import { formatDate, formatTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
+import { mentionDirectory, parseMentions, mentionsMe } from '../lib/mentions'
+import { MessageMentions } from './MessageMentions'
+import { MentionComposer } from './MentionComposer'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
 
@@ -22,6 +25,7 @@ interface ChatPanelProps {
   loadingNewer: boolean
   hasNewer: boolean
   currentUserId: number
+  currentRole?: ServerRole
   canManage: boolean
   members: ServerMember[]
   pinnedMessageIds: ReadonlySet<number>
@@ -51,7 +55,7 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
   return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
 }
 
-export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -80,6 +84,8 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
   const readFrameRef = useRef<number | null>(null)
   const onReadThroughRef = useRef(onReadThrough)
   onReadThroughRef.current = onReadThrough
+  const directory = useMemo(() => mentionDirectory(members), [members])
+  const ownRole = currentRole ?? members.find((member) => member.user_id === currentUserId)?.role
   const membersById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members])
   const virtualized = messages.length > 0
   const getMessageKey = useCallback((index: number) => messages[index]!.id, [messages])
@@ -299,21 +305,17 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
     return () => { cancelRestore(); container.removeEventListener('scroll', save); container.removeEventListener('wheel', cancelRestore); container.removeEventListener('pointerdown', cancelRestore) }
   }, [channelId])
 
-  const submit = async (event?: FormEvent) => {
+  const submit = async (event?: FormEvent, encoded?: string) => {
     event?.preventDefault()
-    const content = draft.trim()
+    const content = (encoded ?? draft).trim()
     if (!content || sending) return
     setSending(true); setSendError('')
     setDraft('')
-    try { await onSend(content) } catch (error) { setDraft((current) => current || content); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
+    try { await onSend(content) } catch (error) { setDraft((current) => current || draft); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') } finally { setSending(false) }
   }
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() }
-  }
-
-  const saveEdit = async (messageId: number) => {
-    const content = editDraft.trim()
+  const saveEdit = async (messageId: number, encoded?: string) => {
+    const content = (encoded ?? editDraft).trim()
     if (!content || pendingActionId !== null) return
     setPendingActionId(messageId)
     setActionError(null)
@@ -369,6 +371,8 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
           const message = messages[index]!
           const role = membersById.get(message.author.user_id)?.role ?? 'member'
           const mine = message.author.user_id === currentUserId
+          const mentions = parseMentions(message.content, directory)
+          const mentioned = !mine && mentionsMe(mentions, currentUserId, ownRole)
           const readers = mine ? members.filter((member) => member.user_id !== currentUserId && (channelReads[member.user_id]?.last_read_message_id ?? 0) >= message.id) : []
           const pinned = pinnedMessageIds.has(message.id)
           const previous = messages[index - 1]
@@ -377,18 +381,15 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
           return (
             <div key={key} data-index={index} ref={virtualized ? virtualizer.measureElement : undefined}>
               {showDate && <div className="date-divider"><span>{formatDate(message.created_at)}</span></div>}
-              <article data-message-id={message.id} className={`message ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
+              <article data-message-id={message.id} className={`message ${mentioned ? 'message--mentioned' : ''} ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
                 {!grouped && <button className="message__avatar-button" onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)} aria-label={`Открыть профиль ${message.author.username}`}><Avatar userId={message.author.user_id} name={message.author.username}/></button>}
                 <div className="message__body">
                   {!grouped && <header><button className={`message__author message__author--${role}`} onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)}>{message.author.username}</button><span className={`role-badge role-badge--${role}`}>{roleMeta[role].shortLabel}</span>{mine && <span className="you-tag">вы</span>}<time dateTime={new Date(message.created_at * 1000).toISOString()}>{formatTime(message.created_at)}</time></header>}
                   {pinned && <span className="message__pin-label"><Icon name="pin" size={11}/> Закреплено</span>}
                   {editingId === message.id ? <div className="message-editor">
-                    <textarea value={editDraft} onChange={(event) => setEditDraft(event.target.value)} onKeyDown={(event) => {
-                      if (event.key === 'Escape') setEditingId(null)
-                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void saveEdit(message.id) }
-                    }} maxLength={5120} rows={3} autoFocus/>
-                    <div><small>Ctrl + Enter — сохранить</small><button className="button button--ghost button--small" onClick={() => setEditingId(null)}>Отмена</button><button className="button button--primary button--small" onClick={() => void saveEdit(message.id)} disabled={!editDraft.trim() || pendingActionId === message.id}>{pendingActionId === message.id ? <span className="spinner"/> : 'Сохранить'}</button></div>
-                  </div> : <p>{message.content}{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
+                    <MentionComposer draft={editDraft} onChange={setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void saveEdit(message.id, content) }} sending={pendingActionId === message.id} channelName={channel.name} members={members} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => setEditingId(null)}/>
+                    <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
+                  </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={currentUserId} currentRole={ownRole} onOpenProfile={(id) => { const member = membersById.get(id); if (member) onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
                   {actionError?.id === message.id && <div className="message__error">{actionError.message}</div>}
                 </div>
                 {mine && editingId !== message.id && <>
@@ -408,17 +409,11 @@ export function ChatPanel({ pendingMessages = [], onRetryPending, onDismissPendi
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><p>{item.content}</p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
-      <form className="composer" onSubmit={submit}>
-        <button type="button" className="composer__action" aria-label="Добавить файл" title="Вложения появятся позже"><Icon name="add"/></button>
-        <textarea rows={1} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKeyDown} placeholder={`Написать в #${channel.name}`} maxLength={5120} aria-label={`Сообщение в ${channel.name}`} />
-        <button type="button" className="composer__emoji" aria-label="Эмодзи"><Icon name="emoji"/></button>
-        <button type="submit" className="composer__send" disabled={!draft.trim() || sending} aria-label={sending ? 'Отправляется' : 'Отправить'}>{sending ? <span className="spinner"/> : <Icon name="send"/>}</button>
-        {sendError && <div className="composer__error">{sendError}</div>}
-      </form>
+      <MentionComposer draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/>
     </section>
   )
 }

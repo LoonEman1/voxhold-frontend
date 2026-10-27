@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react'
-import type { PinnedMessage, SearchMessage } from '../domain/types'
+import { useEffect, useMemo, useState } from 'react'
+import type { PinnedMessage, SearchMessage, ServerMember, ServerRole } from '../domain/types'
 import { formatDate, formatTime, humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
+import { mentionDirectory } from '../lib/mentions'
+import { MentionPreview } from './MessageMentions'
 import { Avatar } from './Avatar'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
 
-interface SearchPanelProps {
+const NO_MEMBERS: ServerMember[] = []
+interface MentionContext { members?: ServerMember[]; currentUserId?: number; currentRole?: ServerRole }
+interface SearchPanelProps extends MentionContext {
   open: boolean
   api: VoxholdApi
   token: string
@@ -15,7 +19,8 @@ interface SearchPanelProps {
   onOpenMessage: (channelId: number, messageId: number) => void
 }
 
-export function MessageSearchPanel({ open, api, token, serverId, onClose, onOpenMessage }: SearchPanelProps) {
+export function MessageSearchPanel({ open, api, token, serverId, onClose, onOpenMessage, members = NO_MEMBERS, currentUserId = 0, currentRole }: SearchPanelProps) {
+  const directory = useMemo(() => mentionDirectory(members), [members])
   const [query, setQuery] = useState('')
   const [messages, setMessages] = useState<SearchMessage[]>([])
   const [nextBeforeId, setNextBeforeId] = useState<number | null>(null)
@@ -105,7 +110,7 @@ export function MessageSearchPanel({ open, api, token, serverId, onClose, onOpen
           {messages.map((message) => <button className="search-result" key={message.id} onClick={() => onOpenMessage(message.channel_id, message.id)}>
             <div className="search-result__meta"><span><Icon name="hash" size={12}/>{message.channel_name}</span><time>{formatDate(message.created_at)} · {formatTime(message.created_at)}</time></div>
             <div className="search-result__author"><Avatar userId={message.author.user_id} name={message.author.username} size="small"/><b>{message.author.username}</b>{message.edited_at && <small>изменено</small>}</div>
-            <p>{message.content}</p>
+            <MentionPreview content={message.content} directory={directory} currentUserId={currentUserId} currentRole={currentRole}/>
           </button>)}
           {hasMore && <button className="load-older" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? <span className="spinner"/> : 'Показать ещё'}</button>}
         </>}
@@ -114,7 +119,7 @@ export function MessageSearchPanel({ open, api, token, serverId, onClose, onOpen
   )
 }
 
-interface PinsPanelProps {
+interface PinsPanelProps extends MentionContext {
   docked?: boolean
   open: boolean
   pins: PinnedMessage[]
@@ -125,7 +130,8 @@ interface PinsPanelProps {
   onUnpin: (messageId: number) => Promise<void>
 }
 
-export function PinnedMessagesPanel({ docked = false, open, pins, loading, canManage, onClose, onOpenMessage, onUnpin }: PinsPanelProps) {
+export function PinnedMessagesPanel({ docked = false, open, pins, loading, canManage, onClose, onOpenMessage, onUnpin, members = NO_MEMBERS, currentUserId = 0, currentRole }: PinsPanelProps) {
+  const directory = useMemo(() => mentionDirectory(members), [members])
   const [pendingId, setPendingId] = useState<number | null>(null)
   const [error, setError] = useState('')
 
@@ -147,7 +153,7 @@ export function PinnedMessagesPanel({ docked = false, open, pins, loading, canMa
         {loading ? <div className="panel-loading"><span className="spinner"/>Загружаем закрепы…</div> : error ? <div className="panel-error" role="alert">{error}</div> : pins.length === 0 ? <EmptyState icon="pin" title="Закрепов пока нет">Администратор может сохранить здесь важное сообщение.</EmptyState> : pins.map((pin) => <article className="pinned-card" key={pin.message.id}>
           <button className="pinned-card__content" onClick={() => onOpenMessage(pin.message.channel_id, pin.message.id)}>
             <div className="pinned-card__author"><Avatar userId={pin.message.author.user_id} name={pin.message.author.username} size="small"/><span><b>{pin.message.author.username}</b><small>{formatDate(pin.message.created_at)} · {formatTime(pin.message.created_at)}</small></span></div>
-            <p>{pin.message.content}</p>
+            <MentionPreview content={pin.message.content} directory={directory} currentUserId={currentUserId} currentRole={currentRole}/>
             <small className="pinned-card__by"><Icon name="pin" size={12}/> Закрепил {pin.pinned_by.username}</small>
           </button>
           {canManage && <button className="pinned-card__remove" onClick={() => void unpin(pin.message.id)} disabled={pendingId === pin.message.id} title="Открепить"><Icon name="close" size={14}/></button>}
