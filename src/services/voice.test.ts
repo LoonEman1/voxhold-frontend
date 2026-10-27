@@ -244,3 +244,7 @@ describe('voiceCloseMessage', () => {
       .toBe('Голосовое подключение остановлено: превышен разрешённый сервером битрейт микрофона')
   })
 })
+
+it('explains permanent channel access revocation', () => {
+  expect(voiceCloseMessage('channel access was revoked')).toBe('Доступ к голосовому каналу был отозван')
+})

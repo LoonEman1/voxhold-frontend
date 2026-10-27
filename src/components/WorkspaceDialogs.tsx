@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import type { Channel, ChannelKind, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
 import { countryByCode } from '../lib/countries'
 import { formatDate, humanError } from '../lib/format'
@@ -172,12 +172,12 @@ export function MemberProfileDialog({ online = false, open, onClose, profile, ro
   )
 }
 
-export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemove }: AsyncDialogProps & { channel: Channel | null; onRename(name: string): Promise<void>; onRemove(): Promise<void> }) {
+export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemove, accessPanel }: AsyncDialogProps & { accessPanel?: ReactNode; channel: Channel | null; onRename(name: string): Promise<void>; onRemove(): Promise<void> }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  useEffect(() => { if (open) { setName(channel?.name ?? ''); setError(''); setConfirming(false) } }, [open, channel])
+  useEffect(() => { if (open) { setName(channel?.name ?? ''); setError(''); setConfirming(false) } }, [open, channel?.id, channel?.name])
   const rename = async (event: FormEvent) => {
     event.preventDefault(); setPending(true); setError('')
     try { await onRename(name.trim().toLowerCase().replace(/\s+/g, '-')); onClose() } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
@@ -193,6 +193,7 @@ export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemo
         <label><span>Название</span><div className="input-with-prefix"><Icon name={channel?.kind === 'voice' ? 'volume' : 'hash'} size={16}/><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required /></div></label>
         <button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button>
       </form>
+      {accessPanel}
       <div className="danger-zone"><div><h3>Удалить канал</h3><p>Канал и его история исчезнут для всех участников. Это действие нельзя отменить.</p></div>{confirming ? <div className="danger-confirm"><span>Точно удалить «{channel?.name}»?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить канал</button>}</div>
       {error && <div className="form-error dialog-standalone-error" role="alert">{error}</div>}
     </Modal>

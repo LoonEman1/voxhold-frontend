@@ -11,6 +11,7 @@ import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
 interface StreamPanelProps {
+  tile?: boolean
   onPlaybackRecovery?: () => void
   stream: ActiveStream | null
   currentUserId: number
@@ -33,7 +34,7 @@ interface StreamPanelProps {
   onToggleAudio?: () => void
 }
 
-export function StreamPanel({ onPlaybackRecovery, stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality: qualityOverride, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
+export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentUserId, publisherName, voiceActive, status, error, media, preferences, quality: qualityOverride, audioMuted = false, onPreferencesChange, onOpenSettings, onWatch, onLeave, onExpand, onFullscreen, onToggleAudio }: StreamPanelProps) {
   const quality = useStreamQuality(qualityOverride)
   const pendingPublisher = !stream && !!media
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
@@ -78,6 +79,21 @@ export function StreamPanel({ onPlaybackRecovery, stream, currentUserId, publish
   const subtitle = stream
     ? [viewerLabel(stream.viewer_count), duration].filter(Boolean).join(' · ')
     : 'Подключение трансляции…'
+
+  if (tile) return <section className="call-stream-tile" aria-label={title}>
+    <button className="call-stream-tile__preview" type="button" disabled={!media && (!voiceActive || watching)} onClick={media ? onExpand : onWatch} aria-label={media ? `Развернуть: ${title}` : watching ? 'Подключаем трансляцию' : `Смотреть: ${title}`}>
+      {media ? <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0}/> : <span className="call-stream-tile__placeholder"><Icon name="monitor" size={38}/><b>{watching ? 'Подключаемся…' : 'Смотреть трансляцию'}</b><small>{voiceActive ? 'Нажмите, чтобы присоединиться' : 'Подключитесь к каналу для просмотра'}</small></span>}
+      <span className="call-stream-tile__live"><i/>{stream ? 'В ЭФИРЕ' : 'ЗАПУСК'}</span>
+      {media && <span className="call-stream-tile__expand"><Icon name="maximize" size={22}/>Развернуть</span>}
+    </button>
+    {!isPublisher && playbackState === 'audio_blocked' && media && <button className="call-stream-tile__audio" onClick={enableAudio}><Icon name="volume" size={14}/>Включить звук</button>}
+    <footer><div><b><Icon name="monitor" size={14}/>{isPublisher ? 'Ваш экран' : publisherName ?? 'Трансляция экрана'}</b><small>{playbackState === 'stalled' ? liveLabel : subtitle}</small></div><div className="call-stream-tile__actions">
+      {isPublisher && stream?.has_audio && onToggleAudio && <button className="icon-button" type="button" onClick={onToggleAudio} aria-pressed={audioMuted} aria-label={audioMuted ? 'Включить звук трансляции' : 'Выключить звук трансляции'} title={audioMuted ? 'Звук трансляции выключен — включить для зрителей' : 'Выключить звук трансляции для зрителей'}><Icon name={audioMuted ? 'volumeOff' : 'volume'} size={16}/></button>}
+      {media && onFullscreen && <button className="icon-button" onClick={onFullscreen} aria-label="Трансляция на полный экран"><Icon name="maximize" size={16}/></button>}
+      {(isPublisher || watching) && <button className="icon-button" onClick={onLeave} aria-label={isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'}><Icon name="close" size={16}/></button>}
+    </div></footer>
+    {error && <p className="voice-error" role="alert">{error}</p>}
+  </section>
 
   return <section className="stream-panel">
     <header>

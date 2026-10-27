@@ -165,6 +165,16 @@ describe('PersistentStreamPlayer cinema mode', () => {
     expect(dialog.classList.contains('is-idle')).toBe(false)
   })
 
+  it('resets the hover guard when cinema controls are unmounted', () => {
+    vi.useFakeTimers()
+    const dialog = renderExpanded(true)
+    fireEvent.pointerEnter(dialog.querySelector('.stream-cinema-controls')!)
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из полного экрана' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Полный экран' }))
+    act(() => { vi.advanceTimersByTime(CINEMA_IDLE_MS + 100) })
+    expect(dialog.classList.contains('is-idle')).toBe(true)
+  })
+
   it('toggles fullscreen with the F key', () => {
     const dialog = renderExpanded(false)
 
@@ -174,4 +184,16 @@ describe('PersistentStreamPlayer cinema mode', () => {
     fireEvent.keyDown(window, { code: 'KeyF', key: 'f' })
     expect(dialog.classList.contains('is-ui-hidden')).toBe(false)
   })
+})
+
+it.each(['mini', 'expanded'] as const)('lets the publisher toggle stream audio in the %s player', (mode) => {
+  const onToggleAudio = vi.fn()
+  const props = { mode, stream, role: 'publisher' as const, status: 'connected' as const,
+    media: {} as MediaStream, channelName: 'Общий', preferences: DEFAULT_STREAM_PREFERENCES,
+    onPreferencesChange: vi.fn(), onExpand: vi.fn(), onCollapse: vi.fn(), onLeave: vi.fn() }
+  const { rerender } = render(<PersistentStreamPlayer {...props} audioMuted={false} onToggleAudio={onToggleAudio}/>)
+  fireEvent.click(screen.getByRole('button', { name: 'Выключить звук трансляции' }))
+  expect(onToggleAudio).toHaveBeenCalledOnce()
+  rerender(<PersistentStreamPlayer {...props} audioMuted onToggleAudio={onToggleAudio}/>)
+  expect(screen.getByRole('button', { name: 'Включить звук трансляции' }).getAttribute('aria-pressed')).toBe('true')
 })

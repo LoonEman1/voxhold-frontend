@@ -11,6 +11,7 @@ export type UISound =
   | 'unmute'
   | 'deafen'
   | 'undeafen'
+  | 'message_notification'
 
 interface Tone {
   frequency: number
@@ -28,6 +29,7 @@ interface SoundSpec {
 // Rising pairs mean "on/in", falling pairs "off/out". Other participants are
 // quieter and higher than your own connection so they never sound alike.
 export const UI_SOUND_SPECS: Record<UISound, SoundSpec> = {
+  message_notification: { type: 'sine', gain: 0.24, tones: [{ frequency: 659.25, at: 0, duration: 0.18 }, { frequency: 987.77, at: 0.12, duration: 0.32 }] },
   self_join: { type: 'sine', gain: 0.45, tones: [{ frequency: 587.33, at: 0, duration: 0.12 }, { frequency: 880, at: 0.1, duration: 0.2 }] },
   self_leave: { type: 'sine', gain: 0.45, tones: [{ frequency: 880, at: 0, duration: 0.12 }, { frequency: 587.33, at: 0.1, duration: 0.22 }] },
   user_join: { type: 'triangle', gain: 0.3, tones: [{ frequency: 659.25, at: 0, duration: 0.09 }, { frequency: 987.77, at: 0.08, duration: 0.15 }] },

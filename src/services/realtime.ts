@@ -1,5 +1,7 @@
 import type {
   Channel,
+  MessageNotification,
+  NotificationSettings,
   ChannelRecording,
   ChannelDeletedEvent,
   ChannelRead,
@@ -52,6 +54,8 @@ interface Subscription {
 }
 
 interface RealtimeOptions {
+  onNotification?: (event: MessageNotification) => void
+  onNotificationSettings?: (value: NotificationSettings) => void
   onRecordingUpdated?: (record: ChannelRecording) => void
   onAvatarUpdated?: (event: { user_id: number; version?: string | null }) => void
   token: string
@@ -68,6 +72,7 @@ interface RealtimeOptions {
   onServerMemberRemoved?: (event: ServerMemberRemovedEvent) => void
   onServerDeleted?: (event: ServerDeletedEvent) => void
   onInvitationReceived?: (event: InvitationReceivedEvent) => void
+  onChannelsChanged?: (event: { server_id: number }) => void
   onChannelCreated?: (channel: Channel) => void
   onChannelUpdated?: (channel: Channel) => void
   onChannelDeleted?: (event: ChannelDeletedEvent) => void
@@ -310,6 +315,10 @@ export class RealtimeClient {
           this.options.onAvatarUpdated?.(payload.data as { user_id: number; version?: string | null })
         } else if (payload.type === 'channel.sync_required' && payload.data) {
           this.options.onSyncRequired?.(payload.data as { server_id: number; channel_id: number })
+        } else if (payload.type === 'notification.message' && payload.data) {
+          this.options.onNotification?.(payload.data as MessageNotification)
+        } else if (payload.type === 'notification.settings_updated' && payload.data) {
+          this.options.onNotificationSettings?.(payload.data as NotificationSettings)
         } else if (payload.type === 'message.created' && payload.data) {
           this.options.onMessage(payload.data as Message)
         } else if (payload.type === 'message.updated' && payload.data) {
@@ -334,6 +343,8 @@ export class RealtimeClient {
           this.options.onServerDeleted?.(payload.data as ServerDeletedEvent)
         } else if (payload.type === 'invitation.received' && payload.data) {
           this.options.onInvitationReceived?.(payload.data as InvitationReceivedEvent)
+        } else if (payload.type === 'channels.changed' && payload.data) {
+          this.options.onChannelsChanged?.(payload.data as { server_id: number })
         } else if (payload.type === 'channel.created' && payload.data) {
           this.options.onChannelCreated?.(payload.data as Channel)
         } else if (payload.type === 'channel.updated' && payload.data) {

@@ -4,6 +4,9 @@ import type {
   RecordingStorage,
   AuthPayload,
   Channel,
+  ChannelAccess,
+  NotificationMode,
+  NotificationSettings,
   ChannelRead,
   ChannelKind,
   CreatedInvite,
@@ -164,6 +167,14 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      notifications: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/notifications`, signal }) as Promise<NotificationSettings>,
+      setNotifications: (token: string, serverId: number, channelId: number, mode: NotificationMode) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/notifications`, method: 'PUT', body: { mode } }) as Promise<NotificationSettings>,
+      access: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/access`, signal }) as Promise<ChannelAccess>,
+      setAccess: (token: string, serverId: number, channelId: number, access: ChannelAccess) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/access`, method: 'PUT', body: access }) as Promise<ChannelAccess>,
       members: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/members`, signal }) as Promise<{ user_ids: number[] }>,
       list: (token: string, serverId: number, signal?: AbortSignal) =>

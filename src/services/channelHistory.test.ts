@@ -175,3 +175,14 @@ describe('outgoing message acknowledgement', () => {
     expect(store.snapshot(2).pending[0]?.status).toBe('failed')
   })
 })
+
+it('revoked access clears cached history and prevents an in-flight response restoring it', async () => {
+  const pending = deferred<MessageSyncPage>()
+  const { store } = setup(vi.fn(() => pending.promise))
+  const loading = store.sync(1, 2)
+  store.entry(1, 3); store.receive(message(50, 2)); store.receive(message(60, 3))
+  store.retainChannels(1, new Set([3]))
+  pending.resolve(page([message(99)])); await loading
+  expect(store.snapshot(2)).toEqual(EMPTY_HISTORY)
+  expect(store.snapshot(3).messages).toEqual([message(60, 3)])
+})

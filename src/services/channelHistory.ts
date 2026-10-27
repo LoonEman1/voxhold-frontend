@@ -254,6 +254,16 @@ export class ChannelHistoryStore {
     const entry = this.entries.get(channelId)
     if (entry) this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id || item.status === 'sending') })
   }
+  removeChannel(channelId: number) {
+    const entry = this.entries.get(channelId)
+    if (!entry) return
+    this.update(channelId, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(channelId); entry.listeners.forEach((listener) => listener())
+  }
+  retainChannels(serverId: number, allowed: ReadonlySet<number>) {
+    for (const [id, entry] of this.entries) if (entry.serverId === serverId && !allowed.has(id)) {
+      this.update(id, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())
+    }
+  }
   removeServer(serverId: number) {
     for (const [id, entry] of this.entries) if (entry.serverId === serverId) {
       this.update(id, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())

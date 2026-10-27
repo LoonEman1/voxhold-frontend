@@ -286,3 +286,218 @@ test('member tabs follow server access, retain all users and show live last-seen
   expect(await sidebar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await sidebar.screenshot({ path: 'node_modules/.cache/members-sidebar-mobile.png' })
 })
+
+test('channel access settings stay usable in dark, light and mobile layouts', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/e2e/fixtures/channel-access.html')
+  await page.getByRole('button', { name: 'Настроить доступ' }).click()
+  await expect(page.getByText('Канал будет доступен 2 из 4')).toBeVisible()
+  await page.screenshot({ path: 'node_modules/.cache/channel-access-dark.png', animations: 'disabled' })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; document.documentElement.style.colorScheme = 'light' })
+  await page.screenshot({ path: 'node_modules/.cache/channel-access-light.png', animations: 'disabled' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: 'Сохранить доступ' }).scrollIntoViewIfNeeded()
+  await expect(page.getByRole('button', { name: 'Сохранить доступ' })).toBeInViewport()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
+  await page.screenshot({ path: 'node_modules/.cache/channel-access-mobile.png', animations: 'disabled' })
+})
+
+test('a stream starts in the call grid, focuses on click, and hides interface in fullscreen', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/e2e/fixtures/channel-access.html')
+  const tile = page.locator('.call-stream-tile')
+  await expect(tile.locator('video')).toBeVisible()
+  await tile.getByRole('button', { name: 'Выключить звук трансляции' }).click()
+  await expect(tile.getByRole('button', { name: 'Включить звук трансляции' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.voice-participant')).toHaveCount(3)
+  const box = await tile.boundingBox(); expect(Math.abs(box!.width - box!.height)).toBeLessThan(3)
+  await page.screenshot({ path: 'node_modules/.cache/call-stream-grid.png', animations: 'disabled' })
+  await tile.getByRole('button', { name: 'Развернуть: Вы показываете экран' }).click()
+  const player = page.getByRole('dialog')
+  await expect(player.locator('video')).toBeVisible()
+  await player.getByRole('button', { name: 'Включить звук трансляции' }).click()
+  await expect(player.getByRole('button', { name: 'Выключить звук трансляции' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.stream-focused-participants')).toBeVisible()
+  await page.screenshot({ path: 'node_modules/.cache/call-stream-focus.png', animations: 'disabled' })
+  await player.getByRole('button', { name: 'Полный экран', exact: true }).click()
+  await expect(player).toHaveClass(/is-ui-hidden/)
+  await expect(player).toHaveClass(/is-idle/, { timeout: 6000 })
+  await expect(page.locator('.stream-focused-participants')).toBeHidden()
+  await page.mouse.move(400,300)
+  await expect(player).not.toHaveClass(/is-idle/)
+  await player.getByRole('button', { name: 'Выйти из полного экрана' }).click()
+  await expect(player).not.toHaveClass(/is-ui-hidden/)
+  await player.getByRole('button', { name: 'Полный экран', exact: true }).click()
+  await page.mouse.move(400, 300)
+  await expect(player).toHaveClass(/is-idle/, { timeout: 6000 })
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(player).toHaveCount(0)
+  await expect(tile.locator('video')).toBeVisible()
+})
+
+test('revoking an active channel stops local voice and removes the channel without an automatic rejoin', async ({ page }) => {
+  const { emit } = await openCallWorkspace(page, { role: 'member' })
+  await page.getByRole('button', { name: 'Подключиться к каналу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Отключиться', exact: true })).toBeVisible()
+  emit('voice.webrtc_closed', { reason: 'channel access was revoked' })
+  await expect(page.getByRole('button', { name: 'Подключиться к каналу', exact: true })).toBeVisible()
+  await page.route('**/api/v1/servers/1/channels', async (route) => route.fulfill({ json: [] }))
+  emit('channels.changed', { server_id: 1 })
+  await expect(page.locator('.channel-row')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Подключиться к каналу', exact: true })).toHaveCount(0)
+})
+
+async function openTextNotifications(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('voxhold.theme.v1', 'dark')
+    localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 2, username: 'Nikita', created_at: 1 }, session: { token: 'notifications-fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
+    const original = window.AudioContext
+    Object.assign(window, { notificationTones: 0, desktopAlerts: [] })
+    window.AudioContext = class extends original { createOscillator() { (window as unknown as { notificationTones: number }).notificationTones++; return super.createOscillator() } }
+    class DesktopNotification { static permission = 'default'; static async requestPermission() { this.permission = 'granted'; return 'granted' }; onclick = null; constructor(title: string, options: unknown) { (window as unknown as { desktopAlerts: unknown[] }).desktopAlerts.push({ title, options }) }; close() {} }
+    Object.defineProperty(window, 'Notification', { configurable: true, value: DesktopNotification })
+  })
+  let emit = (_type: string, _data: unknown) => {}
+  const modes = new Map<number, string>()
+  const saves: string[] = [], sent: string[] = []
+  const now = Math.floor(Date.now() / 1000)
+  const makeMessage = (id: number, content: string, author = 1) => ({ id, channel_id: 2, author: { user_id: author, username: author === 1 ? 'Александр' : 'Nikita' }, content, created_at: now - 60 + id, edited_at: null, revision: 1 })
+  const remoteMessages: Record<number, ReturnType<typeof makeMessage>[]> = { 3: [] }
+  const messages = [makeMessage(1, 'Nikita, проверь пожалуйста макет — @Nikita'), makeMessage(2, 'Коллеги <@&member>, встречаемся через пять минут'), makeMessage(3, 'Обычное сообщение для команды'), makeMessage(4, 'Обновление для <@&admin>')]
+  await page.routeWebSocket('**/api/v1/ws', (socket) => {
+    emit = (type, data) => socket.send(JSON.stringify({ type, data }))
+    socket.onMessage((raw) => {
+      const event = JSON.parse(String(raw))
+      if (event.type === 'auth') socket.send(JSON.stringify({ type: 'ready', data: { user_id: 2, protocol_version: 6 } }))
+      if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ type: 'channel.subscribed', data: event.data, request_id: event.request_id }))
+      if (event.type === 'channel.unsubscribe') socket.send(JSON.stringify({ type: 'channel.unsubscribed', data: event.data, request_id: event.request_id }))
+    })
+  })
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url()), path = url.pathname
+    let json: unknown = {}
+    if (path.endsWith('/instance')) json = { instance_id: 'notifications-fixture', name: 'Voxhold', initialized: true, registration: 'invite_only', protocol_version: 6, created_at: 1 }
+    else if (path.endsWith('/me/profile')) json = { user_id: 2, username: 'Nikita', about: '', country_code: '', created_at: 1 }
+    else if (path.endsWith('/servers')) json = [{ id: 1, name: 'Дизайн-команда', role: 'member', created_by: 1, created_at: 1, joined_at: 1 }]
+    else if (path.endsWith('/channels')) json = [{ id: 2, server_id: 1, name: 'общий', kind: 'text', position: 0, created_by: 1, created_at: 1, last_message_id: 4 }, { id: 3, server_id: 1, name: 'проекты', kind: 'text', position: 1, created_by: 1, created_at: 1 }, { id: 1, server_id: 1, name: 'звонок', kind: 'voice', position: 2, created_by: 1, created_at: 1 }]
+    else if (path.endsWith('/notifications')) {
+      const channelId = Number(path.split('/')[6])
+      if (route.request().method() === 'PUT') { const mode = route.request().postDataJSON().mode; modes.set(channelId, mode); saves.push(mode); emit('notification.settings_updated', { server_id: 1, channel_id: channelId, mode }) }
+      json = { server_id: 1, channel_id: channelId, mode: modes.get(channelId) ?? 'mentions' }
+    }
+    else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: [1, 2, 3] }
+    else if (path.endsWith('/members')) json = [{ user_id: 1, username: 'Александр', role: 'owner' }, { user_id: 2, username: 'Nikita', role: 'member' }, { user_id: 3, username: 'Мария', role: 'admin' }]
+    else if (path.endsWith('/context')) { const id = Number(path.split('/')[8]); json = { messages: [{ ...makeMessage(id, 'Привет <@2>'), channel_id: Number(path.split('/')[6]) }], target_message_id: id, target_index: 0 } }
+    else if (path.endsWith('/messages/sync')) json = { messages: path.includes('/channels/2/') ? messages : remoteMessages[Number(path.split('/')[6])] ?? [], cursor: 4, deleted_ids: [], reset: true, has_more: false, has_older: false }
+    else if (path.endsWith('/messages') && route.request().method() === 'POST') { const content = route.request().postDataJSON().content; sent.push(content); json = makeMessage(100 + sent.length, content, 2) }
+    else if (path.endsWith('/pins')) json = []
+    else if (path.endsWith('/recordings')) json = { recordings: [] }
+    await route.fulfill({ json })
+  })
+  await page.goto('/')
+  await expect(page.locator('[data-message-id="1"]')).toBeVisible()
+  return { emit, saves, sent, notification: (id: number, channelId = 3) => { const message = { ...makeMessage(id, 'Привет <@2>, посмотри новый вариант'), channel_id: channelId }; if (channelId !== 2 && !(remoteMessages[channelId] ?? []).some((item) => item.id === id)) (remoteMessages[channelId] ??= []).push(message); return ({ server_id: 1, channel_id: channelId, server_name: 'Дизайн-команда', channel_name: channelId === 3 ? 'проекты' : 'общий', mentioned: true, message: { id, author: { user_id: 1, username: 'Александр' }, content: 'Привет <@2>, посмотри новый вариант', created_at: now } }) } }
+}
+
+test('text channel notification preferences are available to members and absent from voice channels', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  await page.getByRole('button', { name: /^общий(?:,|$)/ }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Уведомления' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('radio', { name: /Только упоминания/ })).toBeChecked()
+  await page.screenshot({ path: 'node_modules/.cache/channel-notifications-dark.png', animations: 'disabled' })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; document.documentElement.style.colorScheme = 'light' })
+  await page.screenshot({ path: 'node_modules/.cache/channel-notifications-light.png', animations: 'disabled' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: 'node_modules/.cache/channel-notifications-mobile.png', animations: 'disabled' })
+  await dialog.getByRole('button', { name: 'Разрешить', exact: true }).click()
+  await expect(dialog.getByText('Разрешены в этом браузере.', { exact: false })).toBeVisible()
+  await dialog.getByRole('radio', { name: /Все сообщения/ }).check()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog).toHaveCount(0); expect(fixture.saves).toEqual(['all'])
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.getByRole('button', { name: 'звонок', exact: true }).click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Уведомления' })).toHaveCount(0)
+})
+
+test('personal and role mentions are highlighted and the composer sends stable IDs with readable text', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  await expect(page.locator('[data-message-id="1"]')).toHaveClass(/message--mentioned/)
+  await expect(page.locator('[data-message-id="2"]')).toHaveClass(/message--mentioned/)
+  await expect(page.locator('[data-message-id="3"]')).not.toHaveClass(/message--mentioned/)
+  await expect(page.locator('[data-message-id="4"]')).not.toHaveClass(/message--mentioned/)
+  const input = page.getByRole('textbox', { name: 'Сообщение в общий' })
+  await input.fill('@Nik')
+  await expect(page.getByRole('option', { name: /Nikita/ })).toBeVisible()
+  await page.screenshot({ path: 'node_modules/.cache/message-mentions.png', animations: 'disabled' })
+  await input.press('Enter'); await expect(input).toHaveValue('@Nikita ')
+  await input.press('End'); await input.press('Enter')
+  await expect.poll(() => fixture.sent).toEqual(['<@2>'])
+})
+
+test('inactive-channel notifications deduplicate and jump to the selected message', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  fixture.emit('notification.message', fixture.notification(500))
+  await expect(page.locator('.message-notification')).toHaveCount(1)
+  fixture.emit('notification.message', fixture.notification(500))
+  await expect(page.locator('.message-notification')).toHaveCount(1)
+  expect(await page.evaluate(() => (window as unknown as { notificationTones: number }).notificationTones)).toBe(2)
+  await page.screenshot({ path: 'node_modules/.cache/message-notification.png', animations: 'disabled' })
+  await page.locator('.message-notification__open').click()
+  await expect(page.locator('.content-header h1')).toHaveText('проекты')
+  await expect(page.locator('[data-message-id="500"]')).toBeVisible()
+  await expect(page.locator('.message-notification')).toHaveCount(0)
+})
+
+test('two tabs deliver one alert and suppress alerts while a channel is actively read', async ({ page, context }) => {
+  const first = await openTextNotifications(page)
+  const secondPage = await context.newPage(), second = await openTextNotifications(secondPage)
+  first.emit('notification.message', first.notification(500))
+  second.emit('notification.message', second.notification(500))
+  await expect.poll(async () => await page.locator('.message-notification').count() + await secondPage.locator('.message-notification').count()).toBe(1)
+  const tones = await page.evaluate(() => (window as unknown as { notificationTones: number }).notificationTones) + await secondPage.evaluate(() => (window as unknown as { notificationTones: number }).notificationTones)
+  expect(tones).toBe(2)
+  first.emit('notification.message', first.notification(501, 2))
+  second.emit('notification.message', second.notification(501, 2))
+  await expect.poll(async () => await page.locator('.message-notification').count() + await secondPage.locator('.message-notification').count()).toBe(1)
+  await expect.poll(() => secondPage.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('voxhold.notifications.seen:')).some((key) => JSON.parse(localStorage.getItem(key) ?? '[]').includes(501)))).toBe(true)
+  expect(await page.locator('.message-notification').count() + await secondPage.locator('.message-notification').count()).toBe(1)
+  await secondPage.close()
+})
+
+test('background desktop notifications require explicit permission and use readable, silent system text', async ({ page, context }) => {
+  const fixture = await openTextNotifications(page)
+  expect(await page.evaluate(() => (window as unknown as { desktopAlerts: unknown[] }).desktopAlerts)).toEqual([])
+  await page.getByRole('button', { name: /^общий(?:,|$)/ }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Уведомления' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Разрешить', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Закрыть', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => Notification.permission)).toBe('granted')
+  const foreground = await context.newPage(); await foreground.goto('about:blank'); await foreground.bringToFront()
+  // Headless Chromium does not consistently background tabs on every host.
+  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); document.dispatchEvent(new Event('visibilitychange')) })
+  fixture.emit('notification.message', fixture.notification(700))
+  await expect.poll(() => page.evaluate(() => (window as unknown as { desktopAlerts: unknown[] }).desktopAlerts.length)).toBe(1)
+  const alerts = await page.evaluate(() => (window as unknown as { desktopAlerts: { title: string; options: { body: string; silent: boolean } }[] }).desktopAlerts)
+  expect(alerts[0].title).toContain('проекты'); expect(alerts[0].options.body).toContain('@вы'); expect(alerts[0].options.silent).toBe(true)
+  await foreground.close()
+})
+
+test('a covering dialog does not suppress mentions in the selected text channel', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  await page.bringToFront()
+  await page.getByRole('textbox', { name: 'Сообщение в общий' }).click()
+  fixture.emit('notification.message', fixture.notification(800, 2))
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('voxhold.notifications.seen:')).some((key) => JSON.parse(localStorage.getItem(key) ?? '[]').includes(800)))).toBe(true)
+  await expect(page.locator('.message-notification')).toHaveCount(0)
+  await page.getByRole('button', { name: /^общий(?:,|$)/ }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Уведомления' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  fixture.emit('notification.message', fixture.notification(801, 2))
+  await expect(page.locator('.message-notification')).toHaveCount(1)
+  await page.getByRole('dialog').getByRole('button', { name: 'Закрыть', exact: true }).click()
+  fixture.emit('notification.message', fixture.notification(802, 2))
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('voxhold.notifications.seen:')).some((key) => JSON.parse(localStorage.getItem(key) ?? '[]').includes(802)))).toBe(true)
+  await expect(page.locator('.message-notification')).toHaveCount(1)
+})
