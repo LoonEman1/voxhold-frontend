@@ -57,10 +57,10 @@ async function unwrap<T>(transport: Transport, request: TransportRequest): Promi
 
   if (response.status < 200 || response.status >= 300) {
     const payload = response.data as ApiErrorPayload | null
-    if (response.status === 401) {
+    if (response.status === 401 && request.token) {
       // Single source of truth for session loss: AuthProvider listens and
       // expires the stored session; call sites no longer duplicate this.
-      notifyUnauthorized()
+      notifyUnauthorized(request.token)
     }
     throw new ApiError(payload?.error || 'Сервер вернул ошибку', response.status)
   }

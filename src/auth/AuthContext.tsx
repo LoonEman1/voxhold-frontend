@@ -26,7 +26,7 @@ interface AuthContextValue {
   login(username: string, password: string): Promise<void>
   register(username: string, password: string, confirmation: string, inviteToken: string): Promise<void>
   logout(): Promise<void>
-  expire(): void
+  expire(expectedToken?: string): void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -43,86 +43,90 @@ export function AuthProvider({
   const [auth, setAuth] = useState<PersistedAuth | null>(() => storage.read<PersistedAuth>(STORAGE_KEY))
   const [ready, setReady] = useState(false)
   const authRef = useRef(auth)
-  authRef.current = auth
+  const generation = useRef(0)
+  const mounted = useRef(false)
+  const refreshFlight = useRef<{ token: string; promise: Promise<void> } | null>(null)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
   useEffect(() => {
     clientDiagnostics.setToken(auth?.session.token ?? null)
   }, [auth?.session.token])
 
-  const persist = useCallback(
-    (next: PersistedAuth | null) => {
-      authRef.current = next
-      setAuth(next)
+  const apply = useCallback((next: PersistedAuth | null, write: boolean) => {
+    generation.current += 1
+    authRef.current = next
+    setAuth(next)
+    if (write) {
       if (next) storage.write(STORAGE_KEY, next)
       else storage.remove(STORAGE_KEY)
-    },
-    [storage],
-  )
-
-  const expire = useCallback(() => persist(null), [persist])
-
-  // Any API 401 anywhere in the app expires the local session exactly here.
-  useEffect(
-    () =>
-      onUnauthorized(() => {
-        if (authRef.current) persist(null)
-      }),
-    [persist],
-  )
-
-  useEffect(() => {
-    const current = authRef.current
-    if (!current) {
-      setReady(true)
-      return
     }
+  }, [storage])
+  const persist = useCallback((next: PersistedAuth | null) => apply(next, true), [apply])
+  useEffect(() => storage.subscribe?.(STORAGE_KEY, () => apply(storage.read<PersistedAuth>(STORAGE_KEY), false)), [storage, apply])
 
-    const controller = new AbortController()
-    const refresh = async () => {
-      const now = Math.floor(Date.now() / 1000)
-      if (current.session.expires_at <= now) {
-        persist(null)
-      } else if (current.session.expires_at - now <= REFRESH_MARGIN_SECONDS) {
-        try {
-          const session = await api.auth.refresh(current.session.token)
-          persist({ ...current, session })
-        } catch {
-          persist(null)
-        }
-      }
-      if (!controller.signal.aborted) setReady(true)
-    }
-    void refresh()
-    return () => controller.abort()
-  }, [api, persist])
+  const expire = useCallback((expectedToken?: string) => {
+    if (expectedToken && authRef.current?.session.token !== expectedToken) return
+    // Another tab may already have rotated this request's token before its
+    // storage notification reaches us. Adopt that generation instead.
+    const saved = storage.read<PersistedAuth>(STORAGE_KEY)
+    if (expectedToken && saved && saved.session.token !== expectedToken) apply(saved, false)
+    else persist(null)
+  }, [storage, apply, persist])
 
+  useEffect(() => onUnauthorized((token) => expire(token)), [expire])
+
+  // One scheduler owns startup and renewal. StrictMode may replay this effect;
+  // reuse the in-flight rotation and apply it only to its original generation.
   useEffect(() => {
-    if (!auth) return
+    if (!auth) { setReady(true); return }
+    if (auth.session.expires_at * 1000 <= Date.now()) { expire(auth.session.token); setReady(true); return }
     let timer = 0
-    let disposed = false
-    const refreshAt = (auth.session.expires_at - REFRESH_MARGIN_SECONDS) * 1000
     const schedule = () => {
-      const remaining = refreshAt - Date.now()
+      const remaining = (auth.session.expires_at - REFRESH_MARGIN_SECONDS) * 1000 - Date.now()
       if (remaining > 0) {
-        // Browser timers overflow beyond ~24.8 days; wake daily for 30-day sessions.
+        setReady(true)
         timer = window.setTimeout(schedule, Math.min(remaining, 24 * 60 * 60 * 1000))
         return
       }
-      void api.auth.refresh(auth.session.token)
-        .then((session) => { if (!disposed) persist({ ...auth, session }) })
-        .catch(() => { if (!disposed) persist(null) })
+      if (refreshFlight.current?.token === auth.session.token) return
+      const sourceGeneration = generation.current
+      const token = auth.session.token
+      const current = () => mounted.current && generation.current === sourceGeneration && authRef.current?.session.token === token
+      const rotate = async () => {
+        if (!current()) return
+        const saved = storage.read<PersistedAuth>(STORAGE_KEY)
+        if (saved?.session.token !== token) { if (current()) apply(saved, false); return }
+        const session = await api.auth.refresh(token)
+        if (current()) persist({ ...auth, session })
+      }
+      const promise = (storage.withLock ? storage.withLock(STORAGE_KEY, rotate) : rotate()).catch(() => {
+        if (current()) expire(token)
+      }).finally(() => {
+        if (refreshFlight.current?.promise === promise) refreshFlight.current = null
+        if (mounted.current) setReady(true)
+      })
+      refreshFlight.current = { token, promise }
     }
     schedule()
-    return () => { disposed = true; window.clearTimeout(timer) }
-  }, [api, auth, persist])
+    return () => window.clearTimeout(timer)
+  }, [api, auth, expire, persist, storage, apply])
 
   const login = useCallback(
-    async (username: string, password: string) => persist(await api.auth.login(username, password)),
+    async (username: string, password: string) => {
+      persist(null)
+      const request = generation.current
+      const next = await api.auth.login(username, password)
+      if (mounted.current && generation.current === request) persist(next)
+    },
     [api, persist],
   )
   const register = useCallback(
-    async (username: string, password: string, confirmation: string, inviteToken: string) =>
-      persist(await api.auth.register(username, password, confirmation, inviteToken)),
+    async (username: string, password: string, confirmation: string, inviteToken: string) => {
+      persist(null)
+      const request = generation.current
+      const next = await api.auth.register(username, password, confirmation, inviteToken)
+      if (mounted.current && generation.current === request) persist(next)
+    },
     [api, persist],
   )
   const logout = useCallback(async () => {

@@ -22,12 +22,22 @@ export interface Transport {
 }
 
 export interface SessionStorageAdapter {
+  subscribe?(key: string, listener: () => void): () => void
+  withLock?<T>(key: string, action: () => Promise<T>): Promise<T>
   read<T>(key: string): T | null
   write<T>(key: string, value: T): void
   remove(key: string): void
 }
 
 export const browserSessionStorage: SessionStorageAdapter = {
+  subscribe(key, listener) {
+    const changed = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === key || event.key === null)) listener() }
+    window.addEventListener('storage', changed)
+    return () => window.removeEventListener('storage', changed)
+  },
+  async withLock(key, action) {
+    return await (navigator.locks ? navigator.locks.request(key, action) : action())
+  },
   read<T>(key: string): T | null {
     try {
       const value = localStorage.getItem(key)
