@@ -720,6 +720,7 @@ export function voiceErrorMessage(error: unknown): string {
 }
 
 export function voiceCloseMessage(reason: string): string {
+  if (reason === 'channel access was revoked') return 'Доступ к голосовому каналу был отозван'
   if (reason === 'voice session moved to another connection') {
     return 'Голосовое подключение перенесено в другую вкладку или устройство'
   }

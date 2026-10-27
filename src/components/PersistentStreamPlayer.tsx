@@ -12,6 +12,7 @@ import { StreamQualitySummary } from './StreamQualitySummary'
 interface PersistentStreamPlayerProps {
   onPlaybackRecovery?: () => void
   callControls?: ReactNode
+  participants?: ReactNode
   mode: 'mini' | 'expanded'
   stream: ActiveStream | null
   role: 'publisher' | 'viewer'
@@ -31,9 +32,15 @@ interface PersistentStreamPlayerProps {
 /** Cinema controls fade out after this long without input. */
 export const CINEMA_IDLE_MS = 2_500
 
-export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false, callControls }: PersistentStreamPlayerProps) {
+export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false, callControls, participants }: PersistentStreamPlayerProps) {
   const quality = useStreamQuality(qualityOverride)
   const playerRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (mode !== 'expanded') return
+    const previous = document.activeElement as HTMLElement | null
+    playerRef.current?.focus({ preventScroll: true })
+    return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }) }
+  }, [mode])
   const [uiHidden, setUIHidden] = useState(false)
   const [idle, setIdle] = useState(false)
   const controlsHoveredRef = useRef(false)
@@ -91,6 +98,12 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   useEffect(() => {
     if (mode !== 'expanded') return
     const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Tab') {
+        const buttons = [...(playerRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])].filter((element) => element.getClientRects().length > 0)
+        const first = buttons[0], last = buttons.at(-1)
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === playerRef.current)) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && (document.activeElement === last || document.activeElement === playerRef.current)) { event.preventDefault(); first?.focus() }
+      }
       const target = event.target as HTMLElement | null
       const typing = !!target && (target.isContentEditable || target.tagName === 'TEXTAREA'
         || (target.tagName === 'INPUT' && (target as HTMLInputElement).type !== 'range'))
@@ -176,7 +189,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
     </aside>
   }
 
-  return <section ref={playerRef} className={`stream-expanded-player ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role="dialog" aria-modal="true" aria-label={`Трансляция в канале ${channelName}`}>
+  return <section ref={playerRef} tabIndex={-1} className={`stream-expanded-player ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role="dialog" aria-modal="true" aria-label={`Трансляция в канале ${channelName}`}>
     <header>
       <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА{duration && ` · ${duration}`}</span><h2>{channelName}</h2></div>
       <div className="stream-expanded-player__meta">
@@ -212,6 +225,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         {callControls}
       </div>}
     </div>
+    {participants && <div className="stream-focused-participants" aria-label="Участники звонка">{participants}</div>}
     <footer>
       {callControls}
       <StreamQualitySummary stats={quality}/>

@@ -68,6 +68,7 @@ interface RealtimeOptions {
   onServerMemberRemoved?: (event: ServerMemberRemovedEvent) => void
   onServerDeleted?: (event: ServerDeletedEvent) => void
   onInvitationReceived?: (event: InvitationReceivedEvent) => void
+  onChannelsChanged?: (event: { server_id: number }) => void
   onChannelCreated?: (channel: Channel) => void
   onChannelUpdated?: (channel: Channel) => void
   onChannelDeleted?: (event: ChannelDeletedEvent) => void
@@ -334,6 +335,8 @@ export class RealtimeClient {
           this.options.onServerDeleted?.(payload.data as ServerDeletedEvent)
         } else if (payload.type === 'invitation.received' && payload.data) {
           this.options.onInvitationReceived?.(payload.data as InvitationReceivedEvent)
+        } else if (payload.type === 'channels.changed' && payload.data) {
+          this.options.onChannelsChanged?.(payload.data as { server_id: number })
         } else if (payload.type === 'channel.created' && payload.data) {
           this.options.onChannelCreated?.(payload.data as Channel)
         } else if (payload.type === 'channel.updated' && payload.data) {

@@ -135,7 +135,12 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   useEffect(() => {
     if (!serverId || !token) return
     const controller = new AbortController()
-    void api.recordings.list(token, serverId, controller.signal).then(({ recordings }) => recordings.forEach(merge)).catch(() => {})
+    void api.recordings.list(token, serverId, controller.signal).then(({ recordings }) => {
+      if (controller.signal.aborted) return
+      const visible = new Set(recordings.map((record) => record.id))
+      setRecords((current) => Object.fromEntries(Object.entries(current).filter(([, record]) => record.server_id !== serverId || visible.has(record.id))))
+      recordings.forEach(merge)
+    }).catch(() => {})
     return () => controller.abort()
   }, [api, token, serverId, merge, retry])
   useEffect(() => {

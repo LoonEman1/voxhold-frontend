@@ -69,7 +69,11 @@ export interface Server {
 
 export type ChannelKind = 'text' | 'voice'
 
+export interface ChannelAccess { restricted: boolean; user_ids: number[]; roles: ServerRole[] }
+
 export interface Channel {
+  access_restricted?: boolean
+  access_revision?: number
   id: EntityId
   server_id: EntityId
   name: string

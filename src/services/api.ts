@@ -4,6 +4,7 @@ import type {
   RecordingStorage,
   AuthPayload,
   Channel,
+  ChannelAccess,
   ChannelRead,
   ChannelKind,
   CreatedInvite,
@@ -164,6 +165,10 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      access: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/access`, signal }) as Promise<ChannelAccess>,
+      setAccess: (token: string, serverId: number, channelId: number, access: ChannelAccess) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/access`, method: 'PUT', body: access }) as Promise<ChannelAccess>,
       members: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/members`, signal }) as Promise<{ user_ids: number[] }>,
       list: (token: string, serverId: number, signal?: AbortSignal) =>

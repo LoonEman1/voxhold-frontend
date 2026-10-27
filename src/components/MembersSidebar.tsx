@@ -20,6 +20,7 @@ export function MembersSidebar({ channel, members, onlineUserIds, onLoadMembers,
   const [roster, setRoster] = useState<{ key: string; ids: Set<number>; error: string; loading: boolean } | null>(null)
   const key = channel ? `${channel.server_id}:${channel.id}` : ''
   const channelId = channel?.id
+  const accessRevision = channel?.access_revision
   const membership = members.map((member) => `${member.user_id}:${member.role}`).join(',')
   const id = useId()
   const refresh = useCallback(() => setRevision((current) => current + 1), [])
@@ -33,7 +34,7 @@ export function MembersSidebar({ channel, members, onlineUserIds, onLoadMembers,
       if (!controller.signal.aborted) setRoster({ key, ids: new Set(), error: humanError(error), loading: false })
     })
     return () => controller.abort()
-  }, [key, channelId, membership, onLoadMembers, tab, revision])
+  }, [key, channelId, accessRevision, membership, onLoadMembers, tab, revision])
   useEffect(() => {
     if (tab !== 'channel') return
     const visible = () => { if (document.visibilityState === 'visible') refresh() }
