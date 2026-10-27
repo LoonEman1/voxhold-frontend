@@ -16,6 +16,8 @@ export interface ChannelRecording {
   preview_version?: string
 }
 
+export type RecordingLimits = Pick<RecordingStorage, 'quota_bytes' | 'max_file_bytes' | 'retention_seconds'>
+
 /** Instance-wide server copy budget, managed by the instance owner. */
 export interface RecordingStorage {
   quota_bytes: number

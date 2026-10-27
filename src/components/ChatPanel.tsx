@@ -33,6 +33,7 @@ interface ChatPanelProps {
   canManage: boolean
   members: ServerMember[]
   pinnedMessageIds: ReadonlySet<number>
+  focusVersion?: number
   focusedMessageId: number | null
   channelReads: Readonly<Record<number, ChannelRead>>
   onLoadOlder: () => Promise<void>
@@ -64,7 +65,7 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
   return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
 }
 
-export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
   const [draft, setDraft] = useState('')
   const [replyTarget, setReplyTarget] = useState<MessageReply | null>(null)
@@ -144,6 +145,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
   // Each effect setup (including StrictMode replay) starts its own channel
   // positioning pass. A replay must not leave a cancelled restore half done.
   useLayoutEffect(() => { previousChannel.current = null }, [channelId])
+  useLayoutEffect(() => { previousFocus.current = null }, [focusVersion])
 
   useLayoutEffect(() => {
     const container = scrollRef.current
@@ -217,7 +219,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
       container.scrollTop = container.scrollHeight
     }
     previousMessageCount.current = messages.length
-  }, [channelId, focusedMessageId, initialViewport, loading, messages, virtualized, virtualizer])
+  }, [channelId, focusedMessageId, focusVersion, initialViewport, loading, messages, virtualized, virtualizer])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -418,7 +420,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
     <section className="chat-panel">
       <div className="messages" ref={scrollRef} onScroll={() => { updateReturnVisibility(); scheduleReadCheck() }}>
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
-        {loading ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
+        {loading && messages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
           <div className="channel-start"><span><Icon name="hash" size={30}/></span><h2>Начало канала #{channel.name}</h2><p>Первое сообщение задаёт настроение. Сделайте его хорошим.</p></div>
         ) : <>
         {virtualized && <div aria-hidden="true" style={{ height: virtualItems[0]?.start ?? 0 }}/>}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import type { ChannelRecording } from '../domain/types'
+import type { RecordingLimits, ChannelRecording } from '../domain/types'
 import { humanError } from '../lib/format'
 import { ApiError, type VoxholdApi } from '../services/api'
 import type { BrowserVoiceSession } from '../services/voice'
@@ -26,6 +26,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   notify: (message: string, kind?: 'success' | 'error') => void
   mediaVersion?: string
 }) {
+  const [limits, setLimits] = useState<RecordingLimits | null>(null)
   const [records, setRecords] = useState<Record<string, ChannelRecording>>({})
   const [locals, setLocals] = useState<LocalRecording[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -119,6 +120,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
   }, [api, merge, notify, refreshLocal])
   const stopRef = useRef(stop); stopRef.current = stop
   useEffect(() => {
+    setLimits(null)
     let disposed = false
     void RecordingStore.open(scope).then(async (opened) => {
       if (disposed) { opened.close(); return }
@@ -140,8 +142,9 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
     void (async () => {
       while (!controller.signal.aborted) {
         const version = recordVersions.current.get(serverId) ?? 0
-        const { recordings } = await api.recordings.list(token, serverId, controller.signal)
+        const { recordings, quota_bytes, max_file_bytes, retention_seconds } = await api.recordings.list(token, serverId, controller.signal)
         if (controller.signal.aborted) return
+        if (quota_bytes && max_file_bytes && retention_seconds) setLimits({ quota_bytes, max_file_bytes, retention_seconds })
         // A live event can be newer than this HTTP snapshot. Fetch again before
         // pruning, so new recordings survive and revoked records still disappear.
         if (version !== (recordVersions.current.get(serverId) ?? 0)) continue
@@ -310,5 +313,5 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
     }
     catch { notify('Не удалось удалить локальную копию', 'error') }
   }
-  return { records: Object.values(records).filter((record) => record.expires_at * 1000 > Date.now()), locals, activeId, busy, progress, merge, start, stop, download, removeLocal, removeServer, loadPreview, retry: () => { previewTasks.current.clear(); setRetry((value) => value + 1) } }
+  return { limits, records: Object.values(records).filter((record) => record.expires_at * 1000 > Date.now()), locals, activeId, busy, progress, merge, start, stop, download, removeLocal, removeServer, loadPreview, retry: () => { previewTasks.current.clear(); setRetry((value) => value + 1) } }
 }

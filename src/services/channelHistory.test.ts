@@ -258,3 +258,55 @@ it('retains reactions that arrive before their message history response', async 
   expect(store.snapshot(2).messages[0]?.reactions).toEqual([{ emoji: '🔥', count: 2, me: true }])
   expect(store.snapshot(2).messages[0]?.content).toBe('message 1')
 })
+
+describe('reply navigation', () => {
+  it('jumps within the cached window without requesting or replacing history', async () => {
+    const { store, context } = setup(vi.fn(async () => page([message(10), message(11), message(12)], { has_older: true })))
+    await store.sync(1, 2)
+    const before = store.snapshot(2)
+    for (let i = 0; i < 30; i++) await store.context(1, 2, 10)
+    expect(context).not.toHaveBeenCalled()
+    expect(store.snapshot(2).messages).toBe(before.messages)
+    expect(store.snapshot(2).hasMore).toBe(before.hasMore)
+    expect(store.snapshot(2).loading).toBe(false)
+  })
+
+  it('coalesces repeated jumps and preserves visible messages until context arrives', async () => {
+    const { store, context } = setup(vi.fn(async () => page([message(100)])))
+    await store.sync(1, 2)
+    const reply = deferred<Awaited<ReturnType<typeof context>>>()
+    context.mockReturnValueOnce(reply.promise)
+    const tasks = Array.from({ length: 30 }, () => store.context(1, 2, 20))
+    expect(context).toHaveBeenCalledOnce()
+    expect(store.snapshot(2).messages.map((m) => m.id)).toEqual([100])
+    reply.resolve({ messages: [message(20)], target_index: 0, target_message_id: 20 })
+    await Promise.all(tasks)
+    expect(store.snapshot(2).messages.map((m) => m.id)).toEqual([20])
+    expect(store.snapshot(2).loading).toBe(false)
+  })
+
+  it('cancels an old jump when the reader selects a cached message', async () => {
+    const { store, context } = setup(vi.fn(async () => page([message(100)])))
+    await store.sync(1, 2)
+    const reply = deferred<Awaited<ReturnType<typeof context>>>()
+    context.mockReturnValueOnce(reply.promise)
+    const old = store.context(1, 2, 20)
+    await store.context(1, 2, 100)
+    reply.resolve({ messages: [message(20)], target_index: 0, target_message_id: 20 })
+    await old
+    expect(store.snapshot(2).messages.map((m) => m.id)).toEqual([100])
+    expect(store.snapshot(2).loading).toBe(false)
+  })
+
+  it('ignores a superseded context response and keeps the latest requested target', async () => {
+    const { store, context } = setup()
+    const first = deferred<Awaited<ReturnType<typeof context>>>()
+    const second = deferred<Awaited<ReturnType<typeof context>>>()
+    context.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const old = store.context(1, 2, 20)
+    const fresh = store.context(1, 2, 30)
+    second.resolve({ messages: [message(30)], target_index: 0, target_message_id: 30 }); await fresh
+    first.resolve({ messages: [message(20)], target_index: 0, target_message_id: 20 }); await old
+    expect(store.snapshot(2).messages.map((m) => m.id)).toEqual([30])
+  })
+})

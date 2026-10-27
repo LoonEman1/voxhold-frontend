@@ -32,6 +32,7 @@ interface Entry {
   sync?: Promise<void>
   syncAgain: boolean
   contextGeneration: number
+  contextRequest?: { messageId: number; controller: AbortController; promise: Promise<void> }
   forceSnapshot: boolean
 }
 const initial = (): ChannelHistoryState => ({ messages: [], cursor: null, nextBeforeId: null, hasMore: false, hasNewer: false, loading: false, loadingOlder: false, loadingNewer: false, pending: [] })
@@ -84,6 +85,7 @@ export class ChannelHistoryStore {
         // Outbox entries survive LRU eviction, without retaining their history.
         entry.historyController.abort()
         entry.historyController = new AbortController()
+        entry.contextRequest?.controller.abort(); entry.contextRequest = undefined
         entry.contextGeneration++
         entry.sync = undefined
         entry.state = { ...initial(), pending: entry.state.pending }
@@ -207,15 +209,40 @@ export class ChannelHistoryStore {
       ...(preserveWindow && page.messages.some((message) => message.id > (messages.at(-1)?.id ?? 0)) ? { hasNewer: true } : {}),
     })
   }
-  async context(serverId: number, channelId: number, messageId: number) {
-    const entry = this.entry(serverId, channelId), generation = ++entry.contextGeneration
-    this.update(channelId, { loading: true })
-    try {
-      const page = await this.api.messages.context(this.token, serverId, channelId, messageId, 25, 25, entry.historyController.signal)
-      if (entry.controller.signal.aborted || generation !== entry.contextGeneration) return
-      const { messages } = this.merge(entry, page.messages, true)
-      this.update(channelId, { messages, nextBeforeId: messages[0]?.id ?? null, hasMore: page.target_index >= 25, hasNewer: page.messages.length - page.target_index - 1 >= 25 })
-    } finally { if (generation === entry.contextGeneration && this.entries.get(channelId) === entry) this.update(channelId, { loading: false }); this.trim() }
+  context(serverId: number, channelId: number, messageId: number): Promise<void> {
+    const entry = this.entry(serverId, channelId)
+    if (entry.contextRequest?.messageId === messageId) return entry.contextRequest.promise
+    const generation = ++entry.contextGeneration
+    entry.contextRequest?.controller.abort()
+    entry.contextRequest = undefined
+    // A virtualized row may be outside the viewport but already in memory.
+    // Preserve the window and pagination when jumping to a loaded message.
+    if (entry.state.messages.some((message) => message.id === messageId)) {
+      this.update(channelId, { loading: false, loadingOlder: false, loadingNewer: false })
+      return Promise.resolve()
+    }
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, entry.historyController.signal])
+    this.update(channelId, { loading: true, loadingOlder: false, loadingNewer: false })
+    const run = async () => {
+      try {
+        const page = await this.api.messages.context(this.token, serverId, channelId, messageId, 25, 25, signal)
+        if (signal.aborted || generation !== entry.contextGeneration) return
+        const { messages } = this.merge(entry, page.messages, true)
+        this.update(channelId, { messages, nextBeforeId: messages[0]?.id ?? null, hasMore: page.target_index >= 25, hasNewer: page.messages.length - page.target_index - 1 >= 25 })
+      } catch (error) {
+        if (!signal.aborted && generation === entry.contextGeneration) throw error
+      } finally {
+        if (generation === entry.contextGeneration && this.entries.get(channelId) === entry) {
+          entry.contextRequest = undefined
+          this.update(channelId, { loading: false })
+        }
+        this.trim()
+      }
+    }
+    const promise = run()
+    entry.contextRequest = { messageId, controller, promise }
+    return promise
   }
   async older(serverId: number, channelId: number) {
     const entry = this.entry(serverId, channelId)
@@ -244,6 +271,7 @@ export class ChannelHistoryStore {
   }
   async latest(serverId: number, channelId: number) {
     const entry = this.entry(serverId, channelId)
+    entry.contextRequest?.controller.abort(); entry.contextRequest = undefined
     entry.contextGeneration++; entry.viewport = undefined
     entry.forceSnapshot = true
     this.update(channelId, { cursor: null, hasNewer: false })

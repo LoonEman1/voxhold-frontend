@@ -273,3 +273,41 @@ test('both clients highlight the actual remote speaker and clear silence over re
     await expect(page.getByRole('region', { name: client }).locator('.voice-participant').filter({ hasText: 'Alice' })).not.toHaveClass(/is-speaking/)
   }
 })
+
+test('outgoing stream volume changes actual audio amplitude and keeps capture alive', async ({ page }) => {
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  const samples = await page.evaluate(async () => {
+    const moduleUrl = '/src/services/streamAudioGain.ts'
+    const { StreamAudioGain } = await import(moduleUrl)
+    const context = new AudioContext()
+    await context.resume()
+    const oscillator = context.createOscillator(), raw = context.createMediaStreamDestination()
+    oscillator.frequency.value = 440
+    oscillator.connect(raw); oscillator.start()
+    const mixer = new StreamAudioGain(raw.stream, 100)
+    await mixer.resume()
+    const analyser = context.createAnalyser(); analyser.fftSize = 4096
+    const source = context.createMediaStreamSource(mixer.stream)
+    source.connect(analyser)
+    const quiet = context.createGain(); quiet.gain.value = 0
+    analyser.connect(quiet); quiet.connect(context.destination)
+    const sample = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      const values = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(values)
+      return Math.sqrt(values.reduce((total, value) => total + value * value, 0) / values.length)
+    }
+    const full = await sample()
+    mixer.setVolume(37); const reduced = await sample()
+    const track = raw.stream.getAudioTracks()[0]!
+    track.enabled = false; const muted = await sample()
+    track.enabled = true; const restored = await sample()
+    mixer.close(); const captureAlive = track.readyState === 'live'
+    oscillator.stop(); track.stop(); await context.close()
+    return { full, reduced, muted, restored, captureAlive }
+  })
+  expect(samples.full).toBeGreaterThan(0.3)
+  expect(samples.reduced / samples.full).toBeCloseTo(0.37, 1)
+  expect(samples.muted).toBeLessThan(0.001)
+  expect(samples.restored / samples.full).toBeCloseTo(0.37, 1)
+  expect(samples.captureAlive).toBe(true)
+})

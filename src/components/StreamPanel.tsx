@@ -7,6 +7,7 @@ import { useLiveDuration } from '../hooks/useLiveDuration'
 import { viewerLabel } from '../lib/format'
 import { useMediaPlayback } from '../hooks/useMediaPlayback'
 import { pictureInPictureAvailable, togglePictureInPicture } from '../lib/pictureInPicture'
+import { StreamVolumeControl } from './StreamVolumeControl'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
@@ -41,7 +42,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
   const duration = useLiveDuration(stream?.started_at_ms)
   const { videoRef, state: playbackState, attach, enableAudio } = useMediaPlayback({
     role: isPublisher ? 'publisher' : 'viewer',
-    muted: !!isPublisher || preferences.playbackVolume === 0,
+    muted: !!isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0),
     recovering: status === 'signaling',
     onRecoveryRequired: onPlaybackRecovery,
     context: { player: 'channel' },
@@ -66,8 +67,22 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
   }
 
   const updateVolume = (value: number) => {
-    onPreferencesChange({ ...preferences, playbackVolume: Math.max(0, Math.min(100, value)) })
+    const volume = Math.max(0, Math.min(100, value))
+    if (isPublisher) {
+      if (volume > 0) onPreferencesChange({ ...preferences, publishVolume: volume })
+      if ((volume === 0) !== audioMuted) onToggleAudio?.()
+    } else {
+      onPreferencesChange({ ...preferences, playbackVolume: volume || preferences.playbackVolume, playbackMuted: volume === 0 })
+    }
   }
+  const togglePlaybackAudio = () => onPreferencesChange({ ...preferences, playbackVolume: preferences.playbackVolume || 100, playbackMuted: !(preferences.playbackMuted || preferences.playbackVolume === 0) })
+  const volumeControl = (compact = false) => <StreamVolumeControl
+    compact={compact} publisher={!!isPublisher}
+    volume={isPublisher ? preferences.publishVolume : preferences.playbackVolume}
+    muted={isPublisher ? audioMuted : preferences.playbackMuted}
+    disabled={!stream?.has_audio} onVolumeChange={updateVolume}
+    onToggleMute={isPublisher ? () => onToggleAudio?.() : togglePlaybackAudio}/>
+
   const watching = !isPublisher && (!!media || status !== 'idle')
   const liveLabel = isPublisher
     ? audioMuted ? 'Ваш предпросмотр · звук выключен' : 'Ваш предпросмотр'
@@ -82,13 +97,13 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
 
   if (tile) return <section className="call-stream-tile" aria-label={title}>
     <button className="call-stream-tile__preview" type="button" disabled={!media && (!voiceActive || watching)} onClick={media ? onExpand : onWatch} aria-label={media ? `Развернуть: ${title}` : watching ? 'Подключаем трансляцию' : `Смотреть: ${title}`}>
-      {media ? <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0}/> : <span className="call-stream-tile__placeholder"><Icon name="monitor" size={38}/><b>{watching ? 'Подключаемся…' : 'Смотреть трансляцию'}</b><small>{voiceActive ? 'Нажмите, чтобы присоединиться' : 'Подключитесь к каналу для просмотра'}</small></span>}
+      {media ? <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0)}/> : <span className="call-stream-tile__placeholder"><Icon name="monitor" size={38}/><b>{watching ? 'Подключаемся…' : 'Смотреть трансляцию'}</b><small>{voiceActive ? 'Нажмите, чтобы присоединиться' : 'Подключитесь к каналу для просмотра'}</small></span>}
       <span className="call-stream-tile__live"><i/>{stream ? 'В ЭФИРЕ' : 'ЗАПУСК'}</span>
       {media && <span className="call-stream-tile__expand"><Icon name="maximize" size={22}/>Развернуть</span>}
     </button>
     {!isPublisher && playbackState === 'audio_blocked' && media && <button className="call-stream-tile__audio" onClick={enableAudio}><Icon name="volume" size={14}/>Включить звук</button>}
     <footer><div><b><Icon name="monitor" size={14}/>{isPublisher ? 'Ваш экран' : publisherName ?? 'Трансляция экрана'}</b><small>{playbackState === 'stalled' ? liveLabel : subtitle}</small></div><div className="call-stream-tile__actions">
-      {isPublisher && stream?.has_audio && onToggleAudio && <button className="icon-button" type="button" onClick={onToggleAudio} aria-pressed={audioMuted} aria-label={audioMuted ? 'Включить звук трансляции' : 'Выключить звук трансляции'} title={audioMuted ? 'Звук трансляции выключен — включить для зрителей' : 'Выключить звук трансляции для зрителей'}><Icon name={audioMuted ? 'volumeOff' : 'volume'} size={16}/></button>}
+      {stream?.has_audio && (isPublisher || watching) && volumeControl(true)}
       {media && onFullscreen && <button className="icon-button" onClick={onFullscreen} aria-label="Трансляция на полный экран"><Icon name="maximize" size={16}/></button>}
       {(isPublisher || watching) && <button className="icon-button" onClick={onLeave} aria-label={isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'}><Icon name="close" size={16}/></button>}
     </div></footer>
@@ -106,7 +121,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
     </header>
 
     {media && <div className="stream-video" onClick={(event) => { if (event.target === videoRef.current) onExpand() }} onDoubleClick={onFullscreen ?? onExpand}>
-      <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || preferences.playbackVolume === 0} controls={false}/>
+      <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0)} controls={false}/>
       <span>{liveLabel}</span>
       {!isPublisher && playbackState === 'audio_blocked' && (
         <div className="stream-audio-blocked-overlay">
@@ -118,12 +133,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
     <StreamQualitySummary stats={quality}/>
     {error && <div className="voice-error" role="alert">{error}</div>}
 
-    {stream && !isPublisher && watching && <label className={`stream-volume ${stream.has_audio ? '' : 'is-disabled'}`}>
-      <Icon name="volume"/>
-      <span>Громкость трансляции</span>
-      <input type="range" min="0" max="100" step="1" value={preferences.playbackVolume} disabled={!stream.has_audio} onChange={(event) => updateVolume(Number(event.target.value))}/>
-      <output>{stream.has_audio ? `${preferences.playbackVolume}%` : 'Без звука'}</output>
-    </label>}
+    {stream && !isPublisher && watching && volumeControl()}
 
     <div className="stream-actions">
       {isPublisher
@@ -131,9 +141,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
         : watching
           ? <button className="button button--ghost" type="button" onClick={onLeave}>Перестать смотреть</button>
           : <button className="button button--primary" type="button" disabled={!voiceActive} onClick={onWatch}><Icon name="monitor"/>Смотреть трансляцию</button>}
-      {isPublisher && stream?.has_audio && onToggleAudio && <button className={`stream-action ${audioMuted ? 'is-off' : ''}`} type="button" onClick={onToggleAudio} aria-pressed={audioMuted} title={audioMuted ? 'Зрители не слышат звук трансляции' : 'Выключить звук трансляции для зрителей'}>
-        <Icon name={audioMuted ? 'volumeOff' : 'volume'} size={16}/><span>{audioMuted ? 'Звук выключен' : 'Звук трансляции'}</span>
-      </button>}
+      {isPublisher && stream?.has_audio && onToggleAudio && volumeControl()}
       {media && onFullscreen && <button className="stream-action" type="button" onClick={onFullscreen} title="Только видео, без интерфейса (F, выход — Esc)"><Icon name="maximize" size={16}/><span>Полный экран</span></button>}
       {media && <button className="stream-action" type="button" onClick={onExpand} title="Развернуть трансляцию в окне приложения"><Icon name="monitor" size={16}/><span>Развернуть</span></button>}
       {media && !isPublisher && pictureInPictureAvailable() && <button className="stream-action" type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Смотреть поверх других окон"><Icon name="pip" size={16}/><span>Картинка в картинке</span></button>}
