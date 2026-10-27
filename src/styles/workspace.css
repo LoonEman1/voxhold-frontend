@@ -453,7 +453,14 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 .voice-stage-content .voice-participant > span em { display: none; }
 .voice-stage-content .voice-participant__live { position: absolute; top: 10px; right: 10px; }
 .voice-stage-content .voice-participant__state { position: absolute; left: 12px; bottom: 12px; }
-.voice-stage-content .voice-empty { color: var(--muted); }
+.voice-stage-content .voice-participants.is-empty { width: 100%; flex: 1; min-height: min-content; display: grid; place-items: center; padding: 18px 0; }
+.voice-stage-content .voice-empty { flex-direction: column; justify-content: center; text-align: center; width: min(100%, 310px); min-height: 260px; padding: 32px 24px; gap: 20px; border-style: solid; border-color: var(--line); border-radius: 24px; background: var(--surface-2); }
+.voice-stage-content .voice-empty > span { width: 60px; height: 60px; border-radius: 20px; }
+.voice-stage-content .voice-empty b { font-size: 18px; line-height: 1.4; }
+.voice-stage-content .voice-empty p { max-width: 240px; margin: 10px auto 0; font-size: 13px; line-height: 1.6; }
+.call-controls > button:has(small) { flex-direction: column; gap: 3px; }
+.call-controls > button small { font-size: 9px; line-height: 1; white-space: nowrap; }
+.call-controls > button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .voice-stage-footer { display: flex; justify-content: center; padding: 18px 10px 22px; }
 .call-controls { display: inline-flex; align-items: center; gap: 6px; padding: 7px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-2); box-shadow: 0 6px 30px #0004; }
 .call-controls > button { display: flex; align-items: center; justify-content: center; width: 44px; height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--text); cursor: pointer; }

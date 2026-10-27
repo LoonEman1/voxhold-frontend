@@ -19,10 +19,11 @@ export function MembersSidebar({ refreshKey = 0, channel, members, onlineUserIds
   const [tab, setTab] = useState<'channel' | 'all'>('channel')
   const [revision, setRevision] = useState(0)
   const [roster, setRoster] = useState<{ key: string; ids: Set<number>; error: string; loading: boolean } | null>(null)
-  const key = channel ? `${channel.server_id}:${channel.id}` : ''
+  const channelKey = channel ? `${channel.server_id}:${channel.id}` : ''
   const channelId = channel?.id
   const accessRevision = channel?.access_revision
   const membership = members.map((member) => `${member.user_id}:${member.role}`).join(',')
+  const key = `${channelKey}:${accessRevision ?? 0}:${membership}:${refreshKey}:${revision}`
   const id = useId()
   const refresh = useCallback(() => setRevision((current) => current + 1), [])
   useEffect(() => {
@@ -60,7 +61,7 @@ export function MembersSidebar({ refreshKey = 0, channel, members, onlineUserIds
       <button role="tab" id={`${id}-channel`} aria-controls={`${id}-panel`} aria-selected={!all} tabIndex={all ? -1 : 0} disabled={!channel} onClick={() => setTab('channel')}>Участники канала</button>
       <button role="tab" id={`${id}-all`} aria-controls={`${id}-panel`} aria-selected={all} tabIndex={all ? 0 : -1} onClick={() => setTab('all')}>Все участники</button>
     </div>
-    {!all && <div className="members-sidebar__scope"><span title={channel!.name}>{channel!.kind === 'voice' ? 'Могут войти в' : 'Могут видеть'} «{channel!.name}»</span><button className="button button--ghost button--small" aria-label="Обновить участников канала" disabled={current?.loading} onClick={refresh}>Обновить</button></div>}
+    {!all && <div className="members-sidebar__scope"><span title={channel!.name}>{channel!.kind === 'voice' ? 'Могут войти в' : 'Могут видеть'} «{channel!.name}»</span></div>}
     <div className="members-sidebar__panel" role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${all ? 'all' : 'channel'}`}>
       {!all && (!current || current.loading) ? <p className="members-sidebar__message" role="status">Загружаем участников…</p> : !all && current?.error ? <div className="members-sidebar__message" role="alert"><p>{current.error}</p><button className="button button--ghost button--small" onClick={refresh}>Повторить</button></div> : <MemberList key={all ? 'all' : key} online={online} offline={offline} onOpenProfile={onOpenProfile} onMemberContextMenu={onMemberContextMenu}/>}
       {ready && displayed.length === 0 && <p className="members-sidebar__message">Участников пока нет.</p>}

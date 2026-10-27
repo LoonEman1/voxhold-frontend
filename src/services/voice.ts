@@ -720,6 +720,8 @@ export function voiceErrorMessage(error: unknown): string {
 }
 
 export function voiceCloseMessage(reason: string): string {
+  if (reason === 'initial WebRTC answer timed out') return 'Не удалось согласовать подключение вовремя. Попробуйте подключиться снова.'
+  if (reason === 'initial WebRTC connection timed out') return 'Соединение не установлено вовремя. Проверьте сеть и подключитесь снова.'
   if (reason === 'channel access was revoked') return 'Доступ к голосовому каналу был отозван'
   if (reason === 'voice session moved to another connection') {
     return 'Голосовое подключение перенесено в другую вкладку или устройство'

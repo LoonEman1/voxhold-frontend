@@ -205,6 +205,7 @@ for (const theme of ['dark', 'light']) {
     await page.goto('/e2e/fixtures/ui-fixes.html')
     await page.evaluate((value) => { document.documentElement.dataset.theme = value }, theme)
     await expect(page.locator('.member-row .avatar img')).toBeVisible()
+    await page.locator('.call-controls').screenshot({path:`node_modules/.cache/audit-ui/controls-${theme}.png`})
     for (const selector of ['.member-row .avatar', '.user-dock .avatar', '.channel-row .record-dot']) {
       const box = await page.locator(selector).first().boundingBox()
       expect(box).toBeTruthy()
@@ -643,4 +644,62 @@ test('forward dialog retries the same request and retains original attribution',
   expect(box!.x + box!.width).toBeLessThanOrEqual(390)
   expect(box!.y + box!.height).toBeLessThanOrEqual(844)
   await page.screenshot({ path: 'node_modules/.cache/message-menu-mobile.png', animations: 'disabled' })
+})
+
+for (const theme of ['dark','light']) {
+  for (const size of [{width:360,height:800},{width:1280,height:720},{width:1920,height:1080}]) {
+    test(`audit empty voice room ${theme} ${size.width}`,async({page})=>{
+      await page.emulateMedia({reducedMotion:'reduce'})
+      await page.setViewportSize(size)
+      const {emit}=await openCallWorkspace(page)
+      if (size.width < 760) await page.locator('.members-sidebar').getByRole('button',{name:'Скрыть участников'}).click()
+      await page.evaluate((theme)=>{document.documentElement.dataset.theme=theme},theme)
+      emit('voice.snapshot',{participants:[]})
+      const card=page.locator('.voice-empty')
+      await expect(card).toBeVisible()
+      await expect.poll(async()=>{
+        const box=await card.boundingBox(),area=await page.locator('.voice-stage-content').boundingBox()
+        return box && area ? Math.abs(box.y+box.height/2-area.y-area.height/2) : Infinity
+      }).toBeLessThan(3)
+      const box=await card.boundingBox(),area=await page.locator('.voice-stage-content').boundingBox()
+      expect(box).toBeTruthy();expect(area).toBeTruthy()
+      expect(box!.width).toBeLessThanOrEqual(312)
+      expect(Math.abs(box!.x+box!.width/2-area!.x-area!.width/2)).toBeLessThan(3)
+      expect(Math.abs(box!.y+box!.height/2-area!.y-area!.height/2)).toBeLessThan(3)
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true)
+      await expect(page.getByRole('button',{name:'Подключиться к каналу',exact:true})).toBeVisible()
+      await expect(page.getByRole('button',{name:'Обновить участников канала'})).toHaveCount(0)
+      await page.screenshot({path:`node_modules/.cache/audit-ui/empty-${theme}-${size.width}.png`,fullPage:true,animations:'disabled'})
+      emit('voice.snapshot',{participants:[{connection_id:'joined',user_id:2,server_id:1,channel_id:1,self_mute:false,self_deaf:false}]})
+      await expect(card).toHaveCount(0)
+      await expect(page.locator('.voice-participant')).toHaveCount(1)
+    })
+  }
+}
+
+test('two tabs serialize rotation and share explicit logout',async({page,context})=>{
+  let requests=0
+  let release!:()=>void
+  const gate=new Promise<void>((resolve)=>{release=resolve})
+  await context.route('**/api/v1/auth/refresh',async(route)=>{
+    requests+=1
+    await gate
+    await route.fulfill({json:{token:'rotated',expires_at:Math.floor(Date.now()/1000)+3600}})
+  })
+  await context.route('**/api/v1/auth/logout',async(route)=>{await route.fulfill({status:204})})
+  await page.goto('/e2e/fixtures/auth-race.html')
+  await page.evaluate(()=>localStorage.setItem('voxhold.session.v1',JSON.stringify({user:{id:1,username:'Alice',created_at:1},session:{token:'old',expires_at:Math.floor(Date.now()/1000)+60}})))
+  await page.reload()
+  await expect.poll(()=>requests).toBe(1)
+  const second=await context.newPage()
+  await second.goto('/e2e/fixtures/auth-race.html')
+  await expect(second.getByText('loading',{exact:true})).toBeVisible()
+  expect(requests).toBe(1)
+  release()
+  await expect(page.getByText('rotated',{exact:true})).toBeVisible()
+  await expect(second.getByText('rotated',{exact:true})).toBeVisible()
+  expect(requests).toBe(1)
+  await page.getByRole('button',{name:'Logout'}).click()
+  await expect(second.getByText('logged-out',{exact:true})).toBeVisible()
+  await second.close()
 })

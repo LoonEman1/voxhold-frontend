@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
+import { useServerMembers } from '../hooks/useServerMembers'
 import { AvatarProvider } from '../components/AvatarProvider'
 import { CallControls } from '../components/CallControls'
 import { useCallRecordings } from '../hooks/useCallRecordings'
@@ -33,6 +34,7 @@ import { createMediaActivity, MediaActivityProvider, useSpeakingUsers } from '..
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { newerMessage, resolveReplyReferences, withReactions } from '../lib/messageRevisions'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
+import { mergeServerMember } from '../lib/serverMembers'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
@@ -90,7 +92,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [notificationChannel, setNotificationChannel] = useState<Channel | null>(null)
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null)
-  const [members, setMembers] = useState<ServerMember[]>([])
   const [rosterRevision, setRosterRevision] = useState(0)
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([])
   const [pinsLoading, setPinsLoading] = useState(false)
@@ -279,6 +280,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }).catch(() => undefined)
   }
 
+  const handleError = useCallback((error: unknown, fallback = 'Не удалось выполнить действие') => {
+    // 401 handled centrally: api.unwrap() notifies AuthProvider, which
+    // expires the session (see authEvents).
+    notify(error instanceof Error ? humanError(error) : fallback, 'error')
+  }, [notify])
+
+  const { members, setMembers, refreshMembers } = useServerMembers(api, token, selectedServerId, handleError)
+
   const selectedServer = servers.find((server) => server.id === selectedServerId) ?? null
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId) ?? null
   const canManage = selectedServer?.role === 'owner' || selectedServer?.role === 'admin'
@@ -286,14 +295,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const avatarVersions = useMemo(() => new Map(members.flatMap((member) => member.avatar_version ? [[member.user_id, member.avatar_version] as const] : [])), [members])
   const setMemberAvatar = useCallback((userId: number, version: string | null) => {
     setMembers((current) => current.map((member) => member.user_id === userId ? { ...member, avatar_version: version } : member))
-  }, [])
+  }, [setMembers])
   const pinnedMessageIds = useMemo(() => new Set(pinnedMessages.map((pin) => pin.message.id)), [pinnedMessages])
-
-  const handleError = useCallback((error: unknown, fallback = 'Не удалось выполнить действие') => {
-    // 401 handled centrally: api.unwrap() notifies AuthProvider, which
-    // expires the session (see authEvents).
-    notify(error instanceof Error ? humanError(error) : fallback, 'error')
-  }, [notify])
 
   // The backend is the single runtime source of ICE configuration. Media start
   // awaits this promise so peers never get created in an undefined race.
@@ -690,12 +693,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       const request = (channelRequestsRef.current.get(selectedServerId) ?? 0) + 1
       channelRequestsRef.current.set(selectedServerId, request)
       try {
-        const [nextChannels, nextMembers] = await Promise.all([
-          api.channels.list(token, selectedServerId, controller.signal),
-          api.servers.members(token, selectedServerId, controller.signal),
-        ])
+        const nextChannels = await api.channels.list(token, selectedServerId, controller.signal)
         if (controller.signal.aborted) return
-        setMembers(nextMembers)
         if (channelRequestsRef.current.get(selectedServerId) !== request) return
         historyStore.retainChannels(selectedServerId, new Set(nextChannels.map((channel) => channel.id)))
         nextChannels.sort((left, right) => left.position - right.position || left.id - right.id)
@@ -714,7 +713,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     void load()
     return () => controller.abort()
-  }, [api, token, selectedServerId, handleError, historyStore])
+  }, [api, token, selectedServerId, handleError, historyStore, setMembers])
 
   useEffect(() => {
     if (!token || !selectedServerId || !selectedChannelId || !chatVisible) return
@@ -759,21 +758,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         // Auth expiry must never trigger an automatic rejoin.
         recoveryRef.current?.cancel('unauthorized')
         setMediaRecovering(false)
-        expire()
+        expire(token)
       },
       onRecordingUpdated: recordingMerge,
       onAvatarUpdated: ({ user_id, version }) => setMemberAvatar(user_id, version ?? null),
       onReady: () => {
         setRosterRevision((current) => current + 1)
-        // Refresh durable last-seen values missed while signalling was offline.
-        // Merge timestamps only so an in-flight response cannot erase a newer
-        // membership/presence event or bring a removed member back.
         const serverId = activeServerRef.current
-        if (serverId) void api.servers.members(token, serverId).then((snapshot) => {
-          if (activeServerRef.current !== serverId) return
-          const byId = new Map(snapshot.map((member) => [member.user_id, member.last_seen_at]))
-          setMembers((current) => current.map((member) => ({ ...member, last_seen_at: Math.max(member.last_seen_at ?? 0, byId.get(member.user_id) ?? 0) || null })))
-        }).catch(() => undefined)
+        if (serverId) void refreshMembers()
         if (serverId) channelRefreshRef.current(serverId)
         if (voiceSessionRef.current && voiceSessionRef.current.serverId !== serverId) channelRefreshRef.current(voiceSessionRef.current.serverId)
         recordingSyncRef.current()
@@ -842,12 +834,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onServerMemberJoined: (event) => {
         if (event.server_id !== activeServerRef.current) return
         setMembers((current) => current.some((member) => member.user_id === event.member.user_id)
-          ? current.map((member) => member.user_id === event.member.user_id ? event.member : member)
+          ? current.map((member) => member.user_id === event.member.user_id ? mergeServerMember(member, event.member) : member)
           : [...current, event.member])
       },
       onServerMemberRoleUpdated: (event) => {
         if (event.server_id === activeServerRef.current) {
-          setMembers((current) => current.map((member) => member.user_id === event.member.user_id ? event.member : member))
+          setMembers((current) => current.map((member) => member.user_id === event.member.user_id ? mergeServerMember(member, event.member) : member))
           setViewedProfileRole((current) => viewedProfileRef.current?.user_id === event.member.user_id ? event.member.role : current)
         }
         if (event.member.user_id === user?.id) {
@@ -1147,7 +1139,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     realtimeRef.current = client
     client.connect()
     return () => { client.close(); realtimeRef.current = null }
-  }, [api.servers, historyStore, notificationCenter, recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
+  }, [api.servers, refreshMembers, setMembers, historyStore, notificationCenter, recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
 
   useEffect(() => {
     if (selectedServerId && selectedChannelId && chatVisible) realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
