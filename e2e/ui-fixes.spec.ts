@@ -152,6 +152,11 @@ test('participant volume updates in an open menu and the same menu opens on room
   await page.locator('.voice-participant').filter({ hasText: 'ОченьДлинноеИмяУчастника' }).click({ button: 'right' })
   await expect(slider).toHaveValue('100')
   await expect(menu.locator('.context-menu__volume em')).toHaveText('100%')
+  // Native focus can try to reveal overflowed content after the next menu opens.
+  // The viewport shell must stay fixed; individual panes still own their scroll.
+  await page.locator('.workspace').evaluate((element) => element.scrollTo(148, 0))
+  await expect.poll(() => page.locator('.workspace').evaluate((element) => element.scrollLeft)).toBe(0)
+  await expect(slider).toHaveValue('100')
   await mariaCard.click({ button: 'right' })
   await expect(slider).toHaveValue('190')
   await page.locator('.voice-participant').filter({ hasText: 'Александр' }).click({ button: 'right' })
