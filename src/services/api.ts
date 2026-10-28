@@ -6,6 +6,7 @@ import type {
   AuthPayload,
   Channel,
   ChannelAccess,
+  NewsSettings,
   NotificationMode,
   NotificationSettings,
   ChannelRead,
@@ -170,6 +171,12 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      unreadCounts: (token: string, serverId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/notification-counts`, signal }) as Promise<Array<{ channel_id: number; unread_count: number }>>,
+      news: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/news`, signal }) as Promise<NewsSettings>,
+      setNews: (token: string, serverId: number, channelId: number, settings: NewsSettings) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/news`, method: 'PUT', body: settings }) as Promise<NewsSettings>,
       notifications: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/notifications`, signal }) as Promise<NotificationSettings>,
       setNotifications: (token: string, serverId: number, channelId: number, mode: NotificationMode) =>
@@ -190,6 +197,8 @@ export function createApi(transport: Transport) {
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}`, method: 'DELETE' }) as Promise<void>,
     },
     messages: {
+      comments: (token: string, serverId: number, channelId: number, postId: number, beforeId?: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/${url(postId)}/comments${beforeId ? `?before_id=${beforeId}` : ''}`, signal }) as Promise<MessagePage>,
       setReaction: (token: string, serverId: number, channelId: number, messageId: number, emoji: string, active: boolean) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/${url(messageId)}/reactions/${url(emoji)}`, method: active ? 'PUT' : 'DELETE' }) as Promise<MessageReactions>,
       reactors: (token: string, serverId: number, channelId: number, messageId: number, emoji: string, signal: AbortSignal, after?: number) =>

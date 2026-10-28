@@ -3,7 +3,7 @@ services:
     build:
       context: ../Voxhold-backend
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.5}
+        GO_VERSION: ${GO_VERSION:-1.27.3}
     environment:
       DATABASE_PATH: /app/data/voxhold.db
       MIGRATIONS_PATH: /app/migrations
@@ -22,7 +22,7 @@ services:
     build:
       context: ../Voxhold-backend
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.5}
+        GO_VERSION: ${GO_VERSION:-1.27.3}
     environment:
       DATABASE_PATH: /app/data/voxhold.db
       MIGRATIONS_PATH: /app/migrations
@@ -80,7 +80,7 @@ services:
     build:
       context: ../Voxhold-backend
       args:
-        GO_VERSION: ${GO_VERSION:-1.26.5}
+        GO_VERSION: ${GO_VERSION:-1.27.3}
     environment:
       DATABASE_PATH: /app/data/voxhold.db
       INSTANCE_NAME: ${INSTANCE_NAME:-Voxhold}
