@@ -1,5 +1,5 @@
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Channel, ChannelRead, Message, MessageReply, ServerMember, ServerRole } from '../domain/types'
 import { formatDate, formatTime } from '../lib/format'
@@ -16,6 +16,11 @@ import { MessageQuote, ForwardAttribution, readableMessage } from './MessageQuot
 import { rememberReaction } from '../lib/reactionCatalog'
 
 interface ChatPanelProps {
+  canCompose?: boolean
+  allowPin?: boolean
+  readOnlyLabel?: string
+  emptyLabel?: string
+  renderComments?: (post: Message, onClose: () => void) => ReactNode
   pendingMessages?: PendingMessage[]
   onRetryPending?: (message: PendingMessage) => void
   onDismissPending?: (id: string) => void
@@ -65,8 +70,22 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
   return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
 }
 
-export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOnlyLabel, emptyLabel, renderComments, onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
+  const canCompose = composeOverride ?? (channel?.kind !== 'news' || channel.can_publish === true || canManage)
+  const canReply = canCompose && channel?.kind !== 'news' || channel?.kind === 'news' && !!channel.comments_enabled
+  const handledCommentFocus = useRef('')
+  const [discussion, setDiscussion] = useState<Message | null>(null)
+  const closeDiscussion = useCallback(() => setDiscussion(null), [])
+  useEffect(() => {
+    const target = messages.find((message) => message.id === focusedMessageId)
+    const focusKey = `${channel?.id}:${focusVersion}:${focusedMessageId}`
+    if (channel?.kind === 'news' && target?.thread_root_id && handledCommentFocus.current !== focusKey) {
+      handledCommentFocus.current = focusKey
+      const post = messages.find((message) => message.id === target.thread_root_id)
+      setDiscussion(post ?? { ...target, id: target.thread_root_id, thread_root_id: undefined, content: target.reply?.message_id === target.thread_root_id ? target.reply.content : 'Публикация', author: target.reply?.message_id === target.thread_root_id ? target.reply.author : target.author })
+    }
+  }, [channel?.id, channel?.kind, focusVersion, focusedMessageId, messages])
   const [draft, setDraft] = useState('')
   const [replyTarget, setReplyTarget] = useState<MessageReply | null>(null)
   const [composerFocus, setComposerFocus] = useState(0)
@@ -104,12 +123,13 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
   const directory = useMemo(() => mentionDirectory(members), [members])
   const ownRole = currentRole ?? members.find((member) => member.user_id === currentUserId)?.role
   const membersById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members])
-  const virtualized = messages.length > 0
-  const getMessageKey = useCallback((index: number) => messages[index]!.id, [messages])
-  const estimateMessageSize = useCallback((index: number) => 52 + Math.min(240, Math.floor((messages[index]?.content.length ?? 0) / 80) * 18) + (messages[index]?.reply ? 55 : 0) + (messages[index]?.forward ? 25 : 0) + (messages[index]?.reactions?.length ? 37 : 0), [messages])
+  const displayMessages = useMemo(() => channel?.kind === 'news' ? messages.filter((message) => !message.thread_root_id) : messages, [messages, channel?.kind])
+  const virtualized = displayMessages.length > 0
+  const getMessageKey = useCallback((index: number) => displayMessages[index]!.id, [displayMessages])
+  const estimateMessageSize = useCallback((index: number) => 52 + Math.min(240, Math.floor((displayMessages[index]?.content.length ?? 0) / 80) * 18) + (displayMessages[index]?.reply ? 55 : 0) + (displayMessages[index]?.forward ? 25 : 0) + (displayMessages[index]?.reactions?.length ? 37 : 0), [displayMessages])
   const getScrollElement = useCallback(() => scrollRef.current, [])
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: displayMessages.length,
     getScrollElement,
     getItemKey: getMessageKey,
     estimateSize: estimateMessageSize,
@@ -122,7 +142,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
     initialRect: { width: 800, height: 600 },
   })
   const virtualItems = virtualizer.getVirtualItems()
-  const visibleRows = virtualized ? virtualItems.map((item) => ({ index: item.index, key: item.key })) : messages.map((message, index) => ({ index, key: message.id }))
+  const visibleRows = virtualized ? virtualItems.map((item) => ({ index: item.index, key: item.key })) : displayMessages.map((message, index) => ({ index, key: message.id }))
 
   const scheduleReadCheck = () => {
     if (readFrameRef.current !== null) return
@@ -164,16 +184,16 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
       previousMessageCount.current = 0
       previousFocus.current = null
     }
-    if (loading || messages.length === 0) return
+    if (loading || displayMessages.length === 0) return
     if (!focusedMessageId) previousFocus.current = null
     if (focusedMessageId && previousFocus.current !== focusedMessageId) {
       if (virtualized) {
-        const index = messages.findIndex((message) => message.id === focusedMessageId)
+        const index = displayMessages.findIndex((message) => message.id === focusedMessageId)
         if (index >= 0) {
           virtualizer.scrollToIndex(index, { align: 'center' })
           previousFocus.current = focusedMessageId
           pendingChannelScroll.current = null
-          previousMessageCount.current = messages.length
+          previousMessageCount.current = displayMessages.length
           return
         }
       }
@@ -182,14 +202,14 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
         target.scrollIntoView({ block: 'center', behavior: 'auto' })
         previousFocus.current = focusedMessageId
         pendingChannelScroll.current = null
-        previousMessageCount.current = messages.length
+        previousMessageCount.current = displayMessages.length
         return
       }
     }
     if (pendingChannelScroll.current === channelId) {
       const saved = viewportToRestore.current
       viewportToRestore.current = undefined
-      const index = saved ? messages.findIndex((message) => message.id === saved.messageId) : -1
+      const index = saved ? displayMessages.findIndex((message) => message.id === saved.messageId) : -1
       if (saved && !saved.following && index >= 0) {
         virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' })
         let attempts = 0, stable = 0
@@ -211,15 +231,15 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
       } else if (virtualized) virtualizer.scrollToEnd()
       else container.scrollTop = container.scrollHeight
       pendingChannelScroll.current = null
-      previousMessageCount.current = messages.length
+      previousMessageCount.current = displayMessages.length
       return
     }
     const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 180
-    if (!virtualized && messages.length > previousMessageCount.current && wasNearBottom) {
+    if (!virtualized && displayMessages.length > previousMessageCount.current && wasNearBottom) {
       container.scrollTop = container.scrollHeight
     }
-    previousMessageCount.current = messages.length
-  }, [channelId, focusedMessageId, focusVersion, initialViewport, loading, messages, virtualized, virtualizer])
+    previousMessageCount.current = displayMessages.length
+  }, [channelId, focusedMessageId, focusVersion, initialViewport, loading, displayMessages, virtualized, virtualizer])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -275,6 +295,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
       document.removeEventListener('visibilitychange', check)
       window.removeEventListener('focus', check)
       if (readFrameRef.current !== null) window.cancelAnimationFrame(readFrameRef.current)
+      readFrameRef.current = null
     }
   }, [])
 
@@ -295,6 +316,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
 
   useEffect(() => {
     setDraft('')
+    setDiscussion(null)
     setReplyTarget(null); setMessageMenu(null); setReactionPending({}); reactionInFlight.current.clear()
     setSendError('')
     setEditingId(null)
@@ -334,6 +356,8 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
     setMessageMenu({ id: message.id, x: event.clientX || box.right - 12, y: event.clientY || box.bottom + 4, expanded })
   }
   const beginReply = (message: Message) => {
+    if (!canReply) return
+    if (channel?.kind === 'news') { setDiscussion(message); return }
     setReplyTarget({ message_id: message.id, author: message.author, content: message.content, revision: message.revision ?? 0, deleted: false })
     setComposerFocus((current) => current + 1); setSendError('')
   }
@@ -361,7 +385,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
   const submit = async (event?: FormEvent, encoded?: string) => {
     event?.preventDefault()
     const content = (encoded ?? draft).trim()
-    if (!content || sending) return
+    if (!content || sending || !canCompose) return
     if (reply?.deleted) { setSendError('Исходное сообщение удалено. Уберите ответ, чтобы отправить текст.'); return }
     const reference = reply
     setSending(true); setSendError('')
@@ -420,21 +444,21 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
     <section className="chat-panel">
       <div className="messages" ref={scrollRef} onScroll={() => { updateReturnVisibility(); scheduleReadCheck() }}>
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
-        {loading && messages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
-          <div className="channel-start"><span><Icon name="hash" size={30}/></span><h2>Начало канала #{channel.name}</h2><p>Первое сообщение задаёт настроение. Сделайте его хорошим.</p></div>
+        {loading && displayMessages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
+          <div className="channel-start"><span><Icon name="hash" size={30}/></span><h2>{emptyLabel ?? (channel.kind === 'news' ? `Новости «${channel.name}»` : `Начало канала #${channel.name}`)}</h2><p>{channel.kind === 'news' ? 'Здесь появятся публикации авторов канала.' : 'Первое сообщение задаёт настроение. Сделайте его хорошим.'}</p></div>
         ) : <>
         {virtualized && <div aria-hidden="true" style={{ height: virtualItems[0]?.start ?? 0 }}/>}
         {visibleRows.map(({ index, key }) => {
-          const message = messages[index]!
+          const message = displayMessages[index]!
           const role = membersById.get(message.author.user_id)?.role ?? 'member'
           const mine = message.author.user_id === currentUserId
           const mentions = parseMentions(message.content, directory).map((mention) => message.forward && mention.userId && message.forward.mention_names?.[mention.userId] ? { ...mention, label: message.forward.mention_names[mention.userId]! } : mention)
           const mentioned = !mine && !message.forward && (mentionsMe(mentions, currentUserId, ownRole) || !!message.reply && !message.reply.deleted && message.reply.author.user_id === currentUserId)
           const readers = mine ? members.filter((member) => member.user_id !== currentUserId && (channelReads[member.user_id]?.last_read_message_id ?? 0) >= message.id) : []
           const pinned = pinnedMessageIds.has(message.id)
-          const previous = messages[index - 1]
+          const previous = displayMessages[index - 1]
           const showDate = !previous || !sameDay(previous.created_at, message.created_at)
-          const grouped = !message.reply && !message.forward && !previous?.reply && !previous?.forward && previous && previous.author.user_id === message.author.user_id && message.created_at - previous.created_at < 300 && !showDate
+          const grouped = channel.kind !== 'news' && !message.reply && !message.forward && !previous?.reply && !previous?.forward && previous && previous.author.user_id === message.author.user_id && message.created_at - previous.created_at < 300 && !showDate
           return (
             <div key={key} data-index={index} ref={virtualized ? virtualizer.measureElement : undefined}>
               {showDate && <div className="date-divider"><span>{formatDate(message.created_at)}</span></div>}
@@ -450,6 +474,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
                     <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
                   </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
                   {editingId !== message.id && <MessageReactions message={message} currentUserId={currentUserId} pending={reactionPending[message.id]} onReact={onSetReaction ? (emoji) => { void react(message, emoji) } : undefined} loadReactors={onLoadReactors}/>}
+                  {channel.kind === 'news' && renderComments && (channel.comments_enabled || (message.comment_count ?? 0) > 0) && <button type="button" className="news-post-comments" onClick={() => setDiscussion(message)}><Icon name="chat" size={16}/><span>Комментарии{(message.comment_count ?? 0) > 0 ? ` · ${message.comment_count}` : ''}</span>{!channel.comments_enabled && <Icon name="lock" size={13}/>}<Icon name="chevron" size={14}/></button>}
                   {actionError?.id === message.id && <div className="message__error">{actionError.message}</div>}
                 </div>
                 {mine && editingId !== message.id && <>
@@ -458,7 +483,7 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
                 </>}
                 {grouped && <time className="message__hover-time">{formatTime(message.created_at)}</time>}
                 {editingId !== message.id && <div className="message__actions">
-                  <button type="button" onClick={() => beginReply(message)} title="Ответить" aria-label="Ответить на сообщение"><Icon name="reply" size={15}/></button>
+                  {canReply && <button type="button" onClick={() => beginReply(message)} title="Ответить" aria-label="Ответить на сообщение"><Icon name="reply" size={15}/></button>}
                   {onSetReaction && <button type="button" onClick={(event) => openMessageMenu(event, message, true)} title="Поставить реакцию" aria-label="Поставить реакцию"><Icon name="emoji" size={15}/></button>}
                   <button type="button" onClick={(event) => openMessageMenu(event, message)} title="Действия с сообщением" aria-label="Действия с сообщением"><Icon name="more" size={15}/></button>
                 </div>}
@@ -469,13 +494,14 @@ export function ChatPanel({ onSetReaction, onLoadReactors, onForward, onOpenMess
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} members={members} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} members={members} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
       {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, members)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); setComposerFocus((current) => current + 1) }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
-      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
-      <MentionComposer focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/>
+      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      {canCompose ? <MentionComposer focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
+      {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
     </section>
   )
 }

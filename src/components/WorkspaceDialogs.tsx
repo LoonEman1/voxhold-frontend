@@ -96,9 +96,10 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
       <form className="dialog-form" onSubmit={submit}>
         <fieldset className="channel-kind"><legend>Тип канала</legend>
           <label className={kind === 'text' ? 'is-selected' : ''}><input type="radio" name="kind" checked={kind === 'text'} onChange={() => setKind('text')}/><span className="kind-icon"><Icon name="hash"/></span><span><b>Текстовый</b><small>Сообщения, файлы и идеи</small></span><i/></label>
-          <label className={kind === 'voice' ? 'is-selected' : ''}><input type="radio" name="kind" checked={kind === 'voice'} onChange={() => setKind('voice')}/><span className="kind-icon"><Icon name="volume"/></span><span><b>Голосовой</b><small>Для живых разговоров</small></span><i/></label>
+          <label className={kind === 'news' ? 'is-selected' : ''}><input type="radio" name="kind" checked={kind === 'news'} onChange={() => setKind('news')}/><span className="kind-icon"><Icon name="news"/></span><span><b>Новостной</b><small>Публикации авторов, реакции и комментарии</small></span><i/></label>
+          <label className={kind === 'voice'  ? 'is-selected' : ''}><input type="radio" name="kind" checked={kind === 'voice'} onChange={() => setKind('voice')}/><span className="kind-icon"><Icon name="volume"/></span><span><b>Голосовой</b><small>Для живых разговоров</small></span><i/></label>
         </fieldset>
-        <label><span>Название канала</span><div className="input-with-prefix"><Icon name={kind === 'text' ? 'hash' : 'volume'} size={16}/><input value={name} onChange={(e) => setName(e.target.value)} placeholder="новый-канал" maxLength={80} required /></div></label>
+        <label><span>Название канала</span><div className="input-with-prefix"><Icon name={kind === 'news' ? 'news' : kind === 'text' ? 'hash' : 'volume'} size={16}/><input value={name} onChange={(e) => setName(e.target.value)} placeholder="новый-канал" maxLength={64} required /></div></label>
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Создать канал'}</button></div>
       </form>
@@ -187,10 +188,10 @@ export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemo
     try { await onRemove(); onClose() } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
   }
   return (
-    <Modal open={open} onClose={onClose} title="Изменить канал" eyebrow={channel?.kind === 'voice' ? 'ГОЛОСОВОЙ КАНАЛ' : 'ТЕКСТОВЫЙ КАНАЛ'} size="medium">
+    <Modal open={open} onClose={onClose} title="Изменить канал" eyebrow={channel?.kind === 'news' ? 'НОВОСТНОЙ КАНАЛ' : channel?.kind === 'voice' ? 'ГОЛОСОВОЙ КАНАЛ' : 'ТЕКСТОВЫЙ КАНАЛ'} size="medium">
       <form className="dialog-form settings-section" onSubmit={rename}>
         <div><h3>Название канала</h3><p>Тип канала останется прежним.</p></div>
-        <label><span>Название</span><div className="input-with-prefix"><Icon name={channel?.kind === 'voice' ? 'volume' : 'hash'} size={16}/><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required /></div></label>
+        <label><span>Название</span><div className="input-with-prefix"><Icon name={channel?.kind === 'news' ? 'news' : channel?.kind === 'voice' ? 'volume' : 'hash'} size={16}/><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required /></div></label>
         <button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button>
       </form>
       {accessPanel}

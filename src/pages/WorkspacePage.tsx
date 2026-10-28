@@ -8,6 +8,8 @@ import { Avatar } from '../components/Avatar'
 import { MembersSidebar } from '../components/MembersSidebar'
 import { Brand } from '../components/Brand'
 import { ChatPanel } from '../components/ChatPanel'
+import { NewsComments } from '../components/NewsComments'
+import { NewsChannelSettings } from '../components/NewsChannelSettings'
 import { ContextMenu, type ContextMenuItem, type ContextMenuState } from '../components/ContextMenu'
 import { Icon } from '../components/Icon'
 import { ModalLoading } from '../components/ModalLoading'
@@ -157,6 +159,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => notificationCenter.start(), [notificationCenter])
   const channelRefreshRef = useRef<(serverId: number) => void>(() => {})
   const channelRequestsRef = useRef(new Map<number, number>())
+  const counterRefreshRef = useRef<(serverId: number) => void>(() => {})
+  const counterTimersRef = useRef(new Map<number, number>())
+  const counterRequestsRef = useRef(new Map<number, AbortController>())
+  useEffect(() => () => {
+    counterTimersRef.current.forEach((timer) => window.clearTimeout(timer)); counterTimersRef.current.clear()
+    counterRequestsRef.current.forEach((request) => request.abort()); counterRequestsRef.current.clear()
+  }, [token])
   const recordingMerge = recording.merge
   const recordingSyncRef = useRef(recording.retry); recordingSyncRef.current = recording.retry
   const voicePreferencesRef = useRef(voicePreferences)
@@ -266,7 +275,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   hasNewerRef.current = hasNewer
   messageTargetRef.current = messageTarget
 
-  const chatVisible = voiceChatOpen || channels.some((channel) => channel.id === selectedChannelId && channel.kind === 'text')
+  const chatVisible = voiceChatOpen || channels.some((channel) => channel.id === selectedChannelId && channel.kind !== 'voice')
   const notificationChatVisible = chatVisible && !streamExpanded && !dialog && !notificationChannel && !recordingsOpen && !forwardSource && !messagePanel && !confirmRequest && !mobileNav
   useEffect(() => notificationCenter.contextChanged(), [notificationCenter, selectedServerId, selectedChannelId, notificationChatVisible])
   syncLatestRef.current = () => {
@@ -369,6 +378,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [recomputeSpeakingUsers])
 
   const applyChannelRead = useCallback((read: ChannelRead) => {
+    if (read.user_id === user?.id) counterRefreshRef.current(read.server_id)
     setChannelReads((current) => {
       const channelState = current[read.channel_id] ?? {}
       const existing = channelState[read.user_id]
@@ -377,7 +387,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       channelReadsRef.current = next
       return next
     })
-  }, [])
+  }, [user?.id])
 
   const recordLastMessage = useCallback((channelId: number, messageId: number) => {
     setChannels((current) => {
@@ -630,13 +640,37 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!token) return
     void api.channels.list(token, event.server_id).then((visible) => {
       if (!notificationCenter.isAvailable(event)) return
-      if (!visible.some((channel) => channel.id === event.channel_id && channel.kind === 'text')) throw new Error('Доступ к этому каналу больше недоступен')
+      if (!visible.some((channel) => channel.id === event.channel_id && channel.kind !== 'voice')) throw new Error('Доступ к этому каналу больше недоступен')
       setStreamExpanded(false); setStreamCinema(false); setDialog(null); setNotificationChannel(null); setRecordingsOpen(false); setForwardSource(null)
       if (document.fullscreenElement && document.exitFullscreen) void document.exitFullscreen().catch(() => undefined)
       if (activeServerRef.current !== event.server_id) { setChannels([]); setMembers([]) }
       setSelectedServerId(event.server_id); setSelectedChannelId(event.channel_id); setMessageTarget({ channelId: event.channel_id, messageId: event.message.id }); setFocusedMessageId(event.message.id); setMessagePanel(null); setMobileNav(false)
     }).catch((error: unknown) => handleError(error))
   }
+
+  counterRefreshRef.current = (serverId: number) => {
+    if (!token || serverId !== activeServerRef.current) return
+    const pending = counterTimersRef.current.get(serverId)
+    if (pending) return
+    // Bound network work during bursts and keep older responses from restoring
+    // a badge that was already cleared on another tab.
+    counterRequestsRef.current.get(serverId)?.abort()
+    counterTimersRef.current.set(serverId, window.setTimeout(() => {
+      counterTimersRef.current.delete(serverId)
+      const request = new AbortController(); counterRequestsRef.current.set(serverId, request)
+      void api.channels.unreadCounts(token, serverId, request.signal).then((counts) => {
+        if (request.signal.aborted || activeServerRef.current !== serverId) return
+        const values = new Map(counts.map((item) => [item.channel_id, item.unread_count]))
+        setChannels((current) => { const next = current.map((channel) => channel.server_id === serverId ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel); channelsRef.current = next; return next })
+      }).catch(() => undefined)
+    }, 80))
+  }
+
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === 'visible' && activeServerRef.current) counterRefreshRef.current(activeServerRef.current) }
+    window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh)
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh) }
+  }, [])
 
   channelRefreshRef.current = (serverId: number) => {
     if (!token) return
@@ -654,9 +688,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       const removed = new Set(channelsRef.current.filter((channel) => channel.server_id === serverId && !allowed.has(channel.id)).map((channel) => channel.id))
       const next = snapshot.map((channel) => ({ ...channel, access_revision: request })).sort((a, b) => a.position - b.position || a.id - b.id)
       channelsRef.current = next; setChannels(next)
+      counterRefreshRef.current(serverId)
       setEditingChannel((current) => current ? next.find((channel) => channel.id === current.id) ?? null : null)
       if (activeChannelRef.current && !allowed.has(activeChannelRef.current)) { setMessagePanel(null); setMessageTarget(null); setFocusedMessageId(null); setPinnedMessages([]) }
-      setSelectedChannelId((current) => current && allowed.has(current) ? current : next.find((channel) => channel.kind === 'text')?.id ?? next[0]?.id ?? null)
+      setSelectedChannelId((current) => current && allowed.has(current) ? current : next.find((channel) => channel.kind !== 'voice')?.id ?? next[0]?.id ?? null)
       setChannelReads((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !removed.has(Number(id)))))
       recordingSyncRef.current()
     }).catch((error: unknown) => handleError(error, 'Не удалось обновить доступ к каналам'))
@@ -712,7 +747,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         const currentChannelId = activeChannelRef.current
         const nextChannelId = nextChannels.some((item) => item.id === currentChannelId)
           ? currentChannelId
-          : (nextChannels.find((item) => item.kind === 'text')?.id ?? nextChannels[0]?.id ?? null)
+          : (nextChannels.find((item) => item.kind !== 'voice')?.id ?? nextChannels[0]?.id ?? null)
         if (nextChannelId !== currentChannelId) {
           setPinnedMessages([])
         }
@@ -786,10 +821,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onSubscribed: () => { syncLatestRef.current(); syncPinsRef.current() },
       onSyncRequired: ({ server_id, channel_id }) => {
+        counterRefreshRef.current(server_id)
         void historyStore.sync(server_id, channel_id).catch(() => undefined)
         if (channel_id === activeChannelRef.current) syncPinsRef.current()
       },
       onNotification: (event) => {
+        counterRefreshRef.current(event.server_id)
         recordLastMessage(event.channel_id, event.message.id)
         void notificationCenter.receive(event)
       },
@@ -808,6 +845,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setPinnedMessages((current) => current.map((pin) => pin.message.id === message.id ? { ...pin, message: newerMessage(pin.message, message) } : pin))
       },
       onMessageDeleted: (event) => {
+        const serverId = activeServerRef.current; if (serverId) counterRefreshRef.current(serverId)
         historyStore.remove(event.channel_id, event.message_id)
         if (event.channel_id !== activeChannelRef.current) return
         setPinnedMessages((current) => { const kept = current.filter((pin) => pin.message.id !== event.message_id); const resolved = resolveReplyReferences(kept.map((pin) => pin.message), [], new Set([event.message_id])); return kept.map((pin, index) => ({ ...pin, message: resolved[index]! })) })
@@ -946,7 +984,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           return next
         })
         if (activeChannelRef.current === event.channel_id) {
-          const nextChannel = remaining.find((channel) => channel.kind === 'text') ?? remaining[0] ?? null
+          const nextChannel = remaining.find((channel) => channel.kind !== 'voice') ?? remaining[0] ?? null
           setPinnedMessages([]); setFocusedMessageId(null); setSelectedChannelId(nextChannel?.id ?? null)
         }
       },
@@ -2072,12 +2110,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       {
         key: 'open',
         kind: 'action',
-        icon: channel.kind === 'text' ? 'hash' : 'volume',
-        label: channel.kind === 'text' ? 'Открыть канал' : 'Зайти в канал',
+        icon: channel.kind === 'news' ? 'news' : channel.kind === 'text' ? 'hash' : 'volume',
+        label: channel.kind !== 'voice' ? 'Открыть канал' : 'Зайти в канал',
         onSelect: () => selectChannel(channel.id),
       },
     ]
-    if (channel.kind === 'text') items.push({ key: 'notifications', kind: 'action', icon: 'bell', label: 'Уведомления', onSelect: () => { setNotificationSettings(null); setNotificationChannel(channel) } })
+    if (channel.kind !== 'voice') items.push({ key: 'notifications', kind: 'action', icon: 'bell', label: 'Уведомления', onSelect: () => { setNotificationSettings(null); setNotificationChannel(channel) } })
     if (canManage) {
       items.push({ key: 'sep-manage', kind: 'separator' })
       items.push({ key: 'edit', kind: 'action', icon: 'edit', label: 'Изменить канал', onSelect: () => openChannelSettings(channel) })
@@ -2255,7 +2293,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     const inRoom = !streamExpanded && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId
     openActiveVoiceChannel(); setStreamExpanded(false); setVoiceChatOpen((value) => inRoom ? !value : true)
   }} onShare={() => openStreamSettings(voiceSession.channelId)} onLeave={leaveVoiceChannel}/>
-  const channelChat = <ChatPanel key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusVersion={messageFocusVersion} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value); notificationCenter.contextChanged() }} onSend={sendMessage} onSetReaction={setMessageReaction} onLoadReactors={loadMessageReactors} onForward={(message) => { if (selectedServerId) setForwardSource({ serverId: selectedServerId, message }) }} onOpenMessage={(id) => { if (selectedChannelId) void openMessage(selectedChannelId, id) }} isMessageDeleted={(id) => !!selectedChannelId && historyStore.isDeleted(selectedChannelId, id)} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
+  const channelChat = <ChatPanel renderComments={token && selectedChannel ? (post, onClose) => <NewsComments key={`${selectedChannel.id}:${post.id}`} api={api} token={token} store={historyStore} channel={selectedChannel} post={post} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pending={history.pending} focusId={focusedMessageId} onClose={onClose} onOpenProfile={(id, _username, role) => { void openUserProfile(id, role) }}/> : undefined} key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage} members={members} pinnedMessageIds={pinnedMessageIds} focusVersion={messageFocusVersion} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value); notificationCenter.contextChanged() }} onSend={sendMessage} onSetReaction={setMessageReaction} onLoadReactors={loadMessageReactors} onForward={(message) => { if (selectedServerId) setForwardSource({ serverId: selectedServerId, message }) }} onOpenMessage={(id) => { if (selectedChannelId) void openMessage(selectedChannelId, id) }} isMessageDeleted={(id) => !!selectedChannelId && historyStore.isDeleted(selectedChannelId, id)} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
   const streamChannelIsOpen = !!voiceSession && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId && selectedChannel?.kind === 'voice'
   const canChangeViewedRole = !!selectedServer && selectedServer.role === 'owner' && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner'
   const canBanViewedMember = !!selectedServer && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner' && (selectedServer.role === 'owner' || (selectedServer.role === 'admin' && viewedProfileRole === 'member'))
@@ -2268,6 +2306,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         {selectedServer ? <>
           <header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={openServerSettings} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
           <div className="channel-scroll">
+            {channels.some((channel) => channel.kind === 'news') && <ChannelGroup title="Новостные каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
+              {channels.filter((channel) => channel.kind === 'news').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onContextMenu={(event) => openChannelMenu(event, channel)}/>)}
+            </ChannelGroup>}
             <ChannelGroup title="Текстовые каналы" canAdd={!!canManage} onAdd={() => setDialog('channel')}>
               {channels.filter((channel) => channel.kind === 'text').map((channel) => <ChannelButton key={channel.id} channel={channel} active={selectedChannelId === channel.id} unread={channelHasUnreadMessages(channel, user ? channelReads[channel.id]?.[user.id] : undefined)} canManage={!!canManage} onSelect={() => selectChannel(channel.id)} onEdit={() => openChannelSettings(channel)} onContextMenu={(event) => openChannelMenu(event, channel)}/>)}
             </ChannelGroup>
@@ -2285,11 +2326,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <section className="content-shell">
         {!selectedServer && instance?.initialized && <div className="instance-access-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ДОСТУП ОГРАНИЧЕН</span><h1>Нужно приглашение</h1><p>Ваш аккаунт пока не имеет доступа к этому инстансу. Обратитесь к администратору за ссылкой-приглашением.</p></div>}
         <header className="content-header">
-          <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
+          <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'news' ? 'news' : selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'news' ? 'Новости и объявления' : selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
           <div className="content-header__actions">
             {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
             {selectedServer && <button className="header-action" onMouseEnter={() => { void loadRecordingsDialog().catch(() => undefined) }} onFocus={() => { void loadRecordingsDialog().catch(() => undefined) }} onClick={() => { recordingSyncRef.current(); setRecordingsOpen(true) }} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
-            {chatVisible && selectedChannel?.kind === 'text' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
+            {chatVisible && selectedChannel?.kind !== 'voice' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
             <button className="header-action theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/><span>{theme === 'dark' ? 'Светлая' : 'Тёмная'}</span></button>
             {selectedServer && canManage && <button className="header-action" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
             <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
@@ -2339,7 +2380,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       {notificationChannel && token && <Suspense fallback={null}><ChannelNotificationsDialog key={notificationChannel.id} open channel={notificationChannel} api={api} token={token} liveSettings={notificationSettings} onSaved={(value) => { notificationCenter.setSettings(value); setNotificationSettings(value) }} onClose={() => setNotificationChannel(null)} onPreviewSound={() => uiSounds.play('message_notification', voicePreferencesRef.current.uiSoundVolume || 50, voicePreferencesRef.current.outputDeviceId)}/></Suspense>}
       {forwardSource && token && <Suspense fallback={<ModalLoading title="Переслать сообщение" onClose={() => setForwardSource(null)}/>}><ForwardMessageDialog key={`${forwardSource.serverId}:${forwardSource.message.id}`} source={forwardSource} servers={servers} members={members} api={api} token={token} onClose={() => setForwardSource(null)} onForward={forwardMessage}/></Suspense>}
       <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
-      <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} accessPanel={dialog === 'channelSettings' && editingChannel && token ? <Suspense fallback={<p>Загружаем…</p>}><ChannelAccessSettings key={editingChannel.id} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/></Suspense> : null} onRename={renameChannel} onRemove={deleteChannel}/>
+      <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} accessPanel={dialog === 'channelSettings' && editingChannel && token ? <Suspense fallback={<p>Загружаем…</p>}>{editingChannel.kind === 'news' && <NewsChannelSettings key={`news-${editingChannel.id}`} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/>}<ChannelAccessSettings key={editingChannel.id} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/></Suspense> : null} onRename={renameChannel} onRemove={deleteChannel}/>
       <InviteUserDialog onListLinks={listInviteLinks} onRevokeLink={revokeInviteLink} open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && avatarVersions.has(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog online={onlineUserIds.has(viewedProfile?.user_id ?? 0)} open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
@@ -2360,7 +2401,7 @@ function ChannelGroup({ title, canAdd, onAdd, children }: { title: string; canAd
 function ChannelButton({ recording = false, onWatch, channel, active, unread = false, canManage, canShare = false, participants = [], livePublisherId = null, members = [], currentVoiceConnectionId = null, speakingUserIds, onSelect, onEdit, onShare, onOpenProfile, onContextMenu, onParticipantContextMenu }: { recording?: boolean; onWatch?: () => void; channel: Channel; active: boolean; unread?: boolean; canManage: boolean; canShare?: boolean; participants?: VoiceParticipant[]; livePublisherId?: number | null; members?: ServerMember[]; currentVoiceConnectionId?: string | null; speakingUserIds?: number[]; onSelect: () => void; onEdit: () => void; onShare?: () => void; onOpenProfile?: (userId: number, role: ServerRole) => void; onContextMenu?: (event: ReactMouseEvent) => void; onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void }) {
   const speakers = useSpeakingUsers(speakingUserIds)
   const speakingUsers = useMemo(() => new Set(speakers), [speakers])
-  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'text' ? 'hash' : 'volume'} size={17}/><span>{channel.name}</span>{channel.access_restricted && <span className="channel-row__lock" title="Закрытый канал"><Icon name="lock" size={12}/></span>}{recording && <span className="record-dot is-active" title="Канал записывается" aria-label="Канал записывается"/>}{unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
+  return <div className="channel-entry"><div className={`channel-row ${active ? 'is-active' : ''} ${unread ? 'is-unread' : ''}`} onContextMenu={onContextMenu}><button className="channel-row__main" onClick={onSelect} aria-label={`${channel.name}${channel.access_restricted ? ', закрытый канал' : ''}${channel.unread_count ? `, непрочитанных уведомлений: ${channel.unread_count}` : unread ? ', есть непрочитанные сообщения' : ''}`}><Icon name={channel.kind === 'news' ? 'news' : channel.kind === 'text' ? 'hash' : 'volume'} size={17}/>{channel.access_restricted && <span className="channel-row__lock" title="Закрытый канал" aria-label="Закрытый канал"><Icon name="lock" size={17}/></span>}<span className="channel-row__name">{channel.name}</span>{recording && <span className="record-dot is-active" title="Канал записывается" aria-label="Канал записывается"/>}{(channel.unread_count ?? 0) > 0 ? <b className="channel-row__badge" title={`Непрочитанных уведомлений: ${channel.unread_count}`} aria-hidden="true">{channel.unread_count! > 99 ? '99+' : channel.unread_count}</b> : unread && <b className="channel-row__unread" aria-hidden="true"/>}{channel.kind === 'voice' && participants.length > 0 && <i>{participants.length}</i>}</button>{canShare && <button className="channel-row__share" onClick={onShare} title="Поделиться экраном" aria-label={`Поделиться экраном в ${channel.name}`}><Icon name="monitor" size={14}/></button>}{canManage && <button className="channel-row__edit" onClick={onEdit} title="Изменить канал" aria-label={`Изменить ${channel.name}`}><Icon name="edit" size={14}/></button>}</div>{channel.kind === 'voice' && participants.length > 0 && <div className="channel-voice-users">{participants.map((participant) => {
     const member = members.find((item) => item.user_id === participant.user_id)
     const username = member?.username ?? `Пользователь #${participant.user_id}`
     const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)

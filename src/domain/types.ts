@@ -69,11 +69,16 @@ export interface Server {
   joined_at: number
 }
 
-export type ChannelKind = 'text' | 'voice'
+export type ChannelKind = 'text' | 'voice' | 'news'
+
+export interface NewsSettings { publisher_ids: number[]; comments_enabled: boolean }
 
 export interface ChannelAccess { restricted: boolean; user_ids: number[]; roles: ServerRole[] }
 
 export interface Channel {
+  comments_enabled?: boolean
+  can_publish?: boolean
+  unread_count?: number
   access_restricted?: boolean
   access_revision?: number
   id: EntityId
@@ -110,6 +115,8 @@ export interface MessageReaction { emoji: string; count: number; me: boolean }
 export interface MessageReactions { channel_id: number; message_id: number; revision: number; reactions: MessageReaction[] }
 export interface ReactorPage { users: MessageAuthor[]; has_more: boolean; next_user_id: number | null }
 export interface Message {
+  thread_root_id?: number
+  comment_count?: number
   client_message_id?: string
   id: EntityId
   channel_id: EntityId
