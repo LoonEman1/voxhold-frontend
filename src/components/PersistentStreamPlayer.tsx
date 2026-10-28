@@ -6,6 +6,7 @@ import type { StreamQualityStats } from '../services/stream'
 import { useLiveDuration } from '../hooks/useLiveDuration'
 import { useMediaPlayback } from '../hooks/useMediaPlayback'
 import { pictureInPictureAvailable, togglePictureInPicture } from '../lib/pictureInPicture'
+import { StreamVolumeControl } from './StreamVolumeControl'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
 
@@ -49,7 +50,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   const isPublisher = role === 'publisher'
   const duration = useLiveDuration(stream?.started_at_ms)
   const canPictureInPicture = !isPublisher && pictureInPictureAvailable()
-  const wantMuted = isPublisher || preferences.playbackVolume === 0
+  const wantMuted = isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0)
   const { videoRef, state: playbackState, muted, attach, enableAudio } = useMediaPlayback({
     role,
     muted: wantMuted,
@@ -164,8 +165,22 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   }, [uiHidden])
 
   const updateVolume = (value: number) => {
-    onPreferencesChange({ ...preferences, playbackVolume: Math.max(0, Math.min(100, value)) })
+    const volume = Math.max(0, Math.min(100, value))
+    if (isPublisher) {
+      if (volume > 0) onPreferencesChange({ ...preferences, publishVolume: volume })
+      if ((volume === 0) !== audioMuted) onToggleAudio?.()
+    } else {
+      onPreferencesChange({ ...preferences, playbackVolume: volume || preferences.playbackVolume, playbackMuted: volume === 0 })
+    }
   }
+  const togglePlaybackAudio = () => onPreferencesChange({ ...preferences, playbackVolume: preferences.playbackVolume || 100, playbackMuted: !(preferences.playbackMuted || preferences.playbackVolume === 0) })
+  const volumeControl = (compact = false) => <StreamVolumeControl
+    compact={compact} publisher={!!isPublisher}
+    volume={isPublisher ? preferences.publishVolume : preferences.playbackVolume}
+    muted={isPublisher ? audioMuted : preferences.playbackMuted}
+    disabled={!stream?.has_audio} onVolumeChange={updateVolume}
+    onToggleMute={isPublisher ? () => onToggleAudio?.() : togglePlaybackAudio}/>
+
   const liveLabel = isPublisher
     ? audioMuted ? 'Ваш предпросмотр · звук выключен' : 'Ваш предпросмотр'
     : playbackState === 'playing'
@@ -175,7 +190,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   const audioBlockedOverlay = !isPublisher && playbackState === 'audio_blocked'
   const rangeLabel = quality?.dynamicRange === 'hdr10' ? 'HDR10' : quality?.dynamicRange === 'hlg' ? 'HLG' : quality?.dynamicRange === 'sdr' ? 'SDR' : ''
 
-  const publisherAudioControl = isPublisher && stream?.has_audio && onToggleAudio && <button type="button" className={mode === 'expanded' ? 'button button--ghost' : undefined} onClick={onToggleAudio} aria-pressed={audioMuted} aria-label={audioMuted ? 'Включить звук трансляции' : 'Выключить звук трансляции'} title={audioMuted ? 'Звук трансляции выключен — включить для зрителей' : 'Выключить звук трансляции для зрителей'}><Icon name={audioMuted ? 'volumeOff' : 'volume'} size={17}/>{mode === 'expanded' && <span>{audioMuted ? 'Звук выключен' : 'Звук трансляции'}</span>}</button>
+  const publisherAudioControl = isPublisher && stream?.has_audio && onToggleAudio && volumeControl(mode === 'mini')
 
   if (mode === 'mini') {
     return <aside className="stream-mini-player" aria-label={`Трансляция в канале ${channelName}`}>
@@ -187,7 +202,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         <span className="stream-mini-player__channel"><Icon name="volume" size={13}/>{channelName}</span>
       </button>
       <div className="stream-mini-player__actions">
-        {publisherAudioControl}
+        {isPublisher ? publisherAudioControl : stream?.has_audio && volumeControl(true)}
         {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Картинка в картинке" aria-label="Смотреть поверх других окон"><Icon name="pip" size={17}/></button>}
         <button type="button" onClick={onExpand} title="На весь экран" aria-label="Открыть трансляцию на весь экран"><Icon name="maximize" size={17}/></button>
         <button className="is-danger" type="button" onClick={onLeave} title={leaveLabel} aria-label={leaveLabel}><Icon name="logout" size={17}/></button>
@@ -223,10 +238,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         onPointerEnter={() => { controlsHoveredRef.current = true }}
         onPointerLeave={() => { controlsHoveredRef.current = false }}
       >
-        {!isPublisher && stream?.has_audio ? <label className="stream-cinema-controls__volume">
-          <Icon name={preferences.playbackVolume === 0 ? 'volumeOff' : 'volume'} size={17}/>
-          <input type="range" min="0" max="100" step="1" value={preferences.playbackVolume} aria-label="Громкость трансляции" onChange={(event) => updateVolume(Number(event.target.value))}/>
-        </label> : publisherAudioControl || <span/>}
+        {stream?.has_audio ? volumeControl() : <span/>}
         <button type="button" onClick={() => void restoreUI()} title="Выйти из полноэкранного режима (Esc или F)"><Icon name="minimize" size={16}/><span>Выйти из полного экрана</span></button>
         {callControls}
       </div>}
@@ -236,12 +248,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
       {callControls}
       {publisherAudioControl}
       <StreamQualitySummary stats={quality}/>
-      {!isPublisher && <label className={`stream-volume ${stream?.has_audio ? '' : 'is-disabled'}`}>
-        <Icon name="volume"/>
-        <span>Громкость трансляции</span>
-        <input type="range" min="0" max="100" step="1" value={preferences.playbackVolume} disabled={!stream?.has_audio} onChange={(event) => updateVolume(Number(event.target.value))}/>
-        <output>{stream?.has_audio ? `${preferences.playbackVolume}%` : 'Без звука'}</output>
-      </label>}
+      {!isPublisher && stream?.has_audio && volumeControl()}
       <div>
         <button className="button button--ghost" type="button" onClick={onCollapse}><Icon name="minimize"/>Свернуть</button>
         <button className="button button--danger" type="button" onClick={onLeave}>{leaveLabel}</button>

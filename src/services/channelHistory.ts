@@ -4,6 +4,7 @@ import { newerMessage, resolveReplyReferences, withReactions } from '../lib/mess
 
 export const MAX_CACHED_CHANNELS = 8
 export const MAX_CHANNEL_MESSAGES = 1_000
+export type HistoryUpdate = { type: 'message'; channelId: number; message: Message } | { type: 'deleted'; channelId: number; id: number } | { type: 'reactions'; channelId: number; reactions: MessageReactions } | { type: 'reset'; channelId: number }
 export interface ChatViewport { messageId: number; offset: number; following: boolean }
 export interface ForwardSource { server_id: number; channel_id: number; message_id: number; content: string; created_at: number; author: Message['author']; forward?: Message['forward'] }
 export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; reply?: MessageReply; forward?: ForwardSource }
@@ -32,6 +33,7 @@ interface Entry {
   sync?: Promise<void>
   syncAgain: boolean
   contextGeneration: number
+  contextRequest?: { messageId: number; controller: AbortController; promise: Promise<void> }
   forceSnapshot: boolean
 }
 const initial = (): ChannelHistoryState => ({ messages: [], cursor: null, nextBeforeId: null, hasMore: false, hasNewer: false, loading: false, loadingOlder: false, loadingNewer: false, pending: [] })
@@ -39,6 +41,9 @@ export const EMPTY_HISTORY = initial()
 
 /** A per-login, bounded cache. Requests always retain their original channel. */
 export class ChannelHistoryStore {
+  private observers = new Set<(event: HistoryUpdate) => void>()
+  observe(listener: (event: HistoryUpdate) => void) { this.observers.add(listener); return () => { this.observers.delete(listener) } }
+  private emit(event: HistoryUpdate) { this.observers.forEach((listener) => listener(event)) }
   private entries = new Map<number, Entry>()
   private closed = false
   private mounts = 0
@@ -84,6 +89,7 @@ export class ChannelHistoryStore {
         // Outbox entries survive LRU eviction, without retaining their history.
         entry.historyController.abort()
         entry.historyController = new AbortController()
+        entry.contextRequest?.controller.abort(); entry.contextRequest = undefined
         entry.contextGeneration++
         entry.sync = undefined
         entry.state = { ...initial(), pending: entry.state.pending }
@@ -106,6 +112,7 @@ export class ChannelHistoryStore {
   }
   receive(message: Message) {
     if (this.closed) return
+    this.emit({ type: 'message', channelId: message.channel_id, message })
     const entry = this.entries.get(message.channel_id)
     if (!entry || entry.tombstones.has(message.id)) return
     message = newerMessage(entry.live.get(message.id)?.message ?? entry.state.messages.find((value) => value.id === message.id), message)
@@ -127,6 +134,8 @@ export class ChannelHistoryStore {
     this.update(message.channel_id, { messages, pending, ...(truncated ? { hasMore: true, nextBeforeId: messages[0]!.id } : {}) })
   }
   reactions(event: MessageReactions) {
+    if (this.closed) return
+    this.emit({ type: 'reactions', channelId: event.channel_id, reactions: event })
     const entry = this.entries.get(event.channel_id)
     const current = entry?.state.messages.find((value) => value.id === event.message_id)
     if (!entry || this.closed || entry.tombstones.has(event.message_id)) return
@@ -142,6 +151,7 @@ export class ChannelHistoryStore {
   }
   isDeleted(channelId: number, messageId: number) { return this.entries.get(channelId)?.tombstones.has(messageId) ?? false }
   remove(channelId: number, messageId: number) {
+    this.emit({ type: 'deleted', channelId, id: messageId })
     const entry = this.entries.get(channelId)
     if (!entry) return
     entry.version++; entry.live.delete(messageId); entry.reactionSnapshots.delete(messageId); entry.tombstones.add(messageId)
@@ -184,6 +194,8 @@ export class ChannelHistoryStore {
     return promise
   }
   private applySync(channelId: number, entry: Entry, page: MessageSyncPage, version: number, generation: number) {
+    page.messages.forEach((message) => this.emit({ type: 'message', channelId, message }))
+    if (page.reset) this.emit({ type: 'reset', channelId })
     page.deleted_ids.forEach((id) => this.remove(channelId, id))
     // A reset is authoritative. Replay only live events that raced its request.
     const reset = page.reset && generation === entry.contextGeneration && !(entry.state.cursor === null && entry.state.hasNewer)
@@ -207,15 +219,40 @@ export class ChannelHistoryStore {
       ...(preserveWindow && page.messages.some((message) => message.id > (messages.at(-1)?.id ?? 0)) ? { hasNewer: true } : {}),
     })
   }
-  async context(serverId: number, channelId: number, messageId: number) {
-    const entry = this.entry(serverId, channelId), generation = ++entry.contextGeneration
-    this.update(channelId, { loading: true })
-    try {
-      const page = await this.api.messages.context(this.token, serverId, channelId, messageId, 25, 25, entry.historyController.signal)
-      if (entry.controller.signal.aborted || generation !== entry.contextGeneration) return
-      const { messages } = this.merge(entry, page.messages, true)
-      this.update(channelId, { messages, nextBeforeId: messages[0]?.id ?? null, hasMore: page.target_index >= 25, hasNewer: page.messages.length - page.target_index - 1 >= 25 })
-    } finally { if (generation === entry.contextGeneration && this.entries.get(channelId) === entry) this.update(channelId, { loading: false }); this.trim() }
+  context(serverId: number, channelId: number, messageId: number): Promise<void> {
+    const entry = this.entry(serverId, channelId)
+    if (entry.contextRequest?.messageId === messageId) return entry.contextRequest.promise
+    const generation = ++entry.contextGeneration
+    entry.contextRequest?.controller.abort()
+    entry.contextRequest = undefined
+    // A virtualized row may be outside the viewport but already in memory.
+    // Preserve the window and pagination when jumping to a loaded message.
+    if (entry.state.messages.some((message) => message.id === messageId)) {
+      this.update(channelId, { loading: false, loadingOlder: false, loadingNewer: false })
+      return Promise.resolve()
+    }
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, entry.historyController.signal])
+    this.update(channelId, { loading: true, loadingOlder: false, loadingNewer: false })
+    const run = async () => {
+      try {
+        const page = await this.api.messages.context(this.token, serverId, channelId, messageId, 25, 25, signal)
+        if (signal.aborted || generation !== entry.contextGeneration) return
+        const { messages } = this.merge(entry, page.messages, true)
+        this.update(channelId, { messages, nextBeforeId: messages[0]?.id ?? null, hasMore: page.target_index >= 25, hasNewer: page.messages.length - page.target_index - 1 >= 25 })
+      } catch (error) {
+        if (!signal.aborted && generation === entry.contextGeneration) throw error
+      } finally {
+        if (generation === entry.contextGeneration && this.entries.get(channelId) === entry) {
+          entry.contextRequest = undefined
+          this.update(channelId, { loading: false })
+        }
+        this.trim()
+      }
+    }
+    const promise = run()
+    entry.contextRequest = { messageId, controller, promise }
+    return promise
   }
   async older(serverId: number, channelId: number) {
     const entry = this.entry(serverId, channelId)
@@ -244,6 +281,7 @@ export class ChannelHistoryStore {
   }
   async latest(serverId: number, channelId: number) {
     const entry = this.entry(serverId, channelId)
+    entry.contextRequest?.controller.abort(); entry.contextRequest = undefined
     entry.contextGeneration++; entry.viewport = undefined
     entry.forceSnapshot = true
     this.update(channelId, { cursor: null, hasNewer: false })
@@ -312,5 +350,5 @@ export class ChannelHistoryStore {
       this.update(id, initial()); entry.controller.abort(); entry.historyController.abort(); this.entries.delete(id); entry.listeners.forEach((listener) => listener())
     }
   }
-  close() { this.closed = true; this.entries.forEach((entry) => { entry.controller.abort(); entry.historyController.abort() }); this.entries.clear() }
+  close() { this.closed = true; this.observers.clear(); this.entries.forEach((entry) => { entry.controller.abort(); entry.historyController.abort() }); this.entries.clear() }
 }

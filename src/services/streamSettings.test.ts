@@ -23,6 +23,8 @@ describe('stream preferences', () => {
       videoBitrateKbps: 12000,
       includeAudio: true,
       audioBitrateKbps: 320,
+      publishVolume: 100,
+      playbackMuted: false,
       playbackVolume: 37,
     })
     expect(loadStreamPreferences()).toEqual({
@@ -35,6 +37,8 @@ describe('stream preferences', () => {
       videoBitrateKbps: 12000,
       includeAudio: true,
       audioBitrateKbps: 320,
+      publishVolume: 100,
+      playbackMuted: false,
       playbackVolume: 37,
     })
   })

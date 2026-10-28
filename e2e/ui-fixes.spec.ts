@@ -47,7 +47,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
     else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
     else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: options.channelMemberIds ?? [1, 2, 3] }
     else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: now - 5 * 60 }))
-    else if (path.endsWith('/recordings')) json = { recordings: [] }
+    else if (path.endsWith('/recordings')) json = { recordings: [], quota_bytes: 8 * 2 ** 30, max_file_bytes: 2 ** 31, retention_seconds: 86400 }
     else if (path.endsWith('/pins')) json = []
     else if (path.endsWith('/messages/sync')) json = { messages: [], deleted_ids: [], cursor: 0, reset: true, has_more: false, has_older: false }
     else if (path.endsWith('/messages')) json = { messages: [], pagination: { has_more: false, next_before_id: null } }
@@ -702,4 +702,143 @@ test('two tabs serialize rotation and share explicit logout',async({page,context
   await page.getByRole('button',{name:'Logout'}).click()
   await expect(second.getByText('logged-out',{exact:true})).toBeVisible()
   await second.close()
+})
+
+for (const role of ['owner', 'member'] as const) {
+  test(`${role} sees the configured recording storage quota`, async ({ page }) => {
+    await openCallWorkspace(page, { role })
+    await page.getByRole('button', { name: 'Список записей' }).click()
+    await expect(page.locator('.recordings-hint')).toContainText('Лимит хранилища на сервере — 8 ГБ')
+    await expect(page.locator('.recordings-hint')).not.toContainText('до 2 ГБ')
+  })
+}
+
+test('publisher mixer reveals on hover and restores the selected volume after mute', async ({ page }) => {
+  await page.goto('/e2e/fixtures/channel-access.html')
+  const tile = page.locator('.call-stream-tile')
+  const control = tile.locator('.stream-volume-control')
+  const slider = control.getByRole('slider', { name: 'Исходящая громкость трансляции' })
+  await expect(slider).toBeHidden()
+  await control.hover()
+  await expect(slider).toBeVisible()
+  await slider.fill('37')
+  await expect(control.locator('output')).toHaveText('37%')
+  await control.getByRole('button', { name: 'Выключить звук трансляции' }).click()
+  await expect(slider).toHaveValue('0')
+  await control.getByRole('button', { name: 'Включить звук трансляции' }).click()
+  await expect(slider).toHaveValue('37')
+  await page.screenshot({ path: 'node_modules/.cache/stream-volume-hover.png', animations: 'disabled' })
+  await tile.getByRole('button', { name: 'Развернуть: Вы показываете экран' }).click()
+  const player = page.getByRole('dialog')
+  await player.locator('.stream-volume-control').hover()
+  await expect(player.getByRole('slider')).toHaveValue('37')
+  await page.setViewportSize({ width: 375, height: 812 })
+  await player.getByRole('button', { name: 'Выключить звук трансляции' }).click()
+  await expect(player.getByRole('slider')).toHaveValue('0')
+  await player.getByRole('button', { name: 'Включить звук трансляции' }).click()
+  await expect(player.getByRole('slider')).toHaveValue('37')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('news channels appear first, keep reader permissions and hide the empty group', async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const { emit } = await openCallWorkspace(page, { role: 'member' })
+  await expect(page.locator('.channel-group > header')).toHaveText(['Текстовые каналы', 'Голосовые каналы'])
+  const voice = { id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }
+  const text = { ...voice, id: 2, name: 'обсуждения', kind: 'text', position: 1 }
+  const news = { ...voice, id: 3, name: 'новости-команды', kind: 'news', position: 2, access_restricted: true, can_publish: false, comments_enabled: true, unread_count: 123, last_message_id: 10 }
+  let channels = [voice, text, news], unread = 123
+  const post = { id: 10, channel_id: 3, content: 'Обновление Voxhold: новости теперь в отдельном канале', author: { user_id: 2, username: 'Мария' }, created_at: 1700000000, edited_at: null, revision: 2, comment_count: 1, reactions: [{ emoji: '👍', count: 2, me: false }] }
+  const comment = { ...post, id: 11, content: 'Отлично, теперь всё важное легко найти', thread_root_id: 10, comment_count: 0, reply: { message_id: 10, author: post.author, content: post.content, revision: 2, deleted: false } }
+  await page.route('**/api/v1/servers/1/channels', (route) => route.fulfill({ json: channels }))
+  await page.route('**/api/v1/servers/1/notification-counts', (route) => route.fulfill({ json: [{ channel_id: 3, unread_count: unread }] }))
+  await page.route('**/api/v1/servers/1/channels/3/messages/sync**', (route) => route.fulfill({ json: { messages: [post], deleted_ids: [], cursor: 2, reset: true, has_more: false, has_older: false } }))
+  await page.route('**/api/v1/servers/1/channels/3/messages/10/comments**', (route) => route.fulfill({ json: { messages: [comment], pagination: { has_more: false, next_before_id: null } } }))
+  await page.route('**/api/v1/servers/1/channels/3/messages/10/context**', (route) => route.fulfill({ json: { messages: [post], target_message_id: 10, target_index: 0 } }))
+  await page.route('**/api/v1/servers/1/channels/3/read', async (route) => {
+    unread = 0
+    await route.fulfill({ json: { server_id: 1, channel_id: 3, user_id: 1, last_read_message_id: route.request().postDataJSON().last_read_message_id, updated_at: 1700000001 } })
+  })
+  emit('channels.changed', { server_id: 1 })
+  await expect(page.locator('.channel-group > header')).toHaveText(['Новостные каналы', 'Текстовые каналы', 'Голосовые каналы'])
+  const row = page.locator('.channel-row').filter({ hasText: 'новости-команды' })
+  await expect(row.locator('.channel-row__badge')).toHaveText('99+')
+  const lock = await row.locator('.channel-row__lock').boundingBox(), label = await row.locator('.channel-row__name').boundingBox()
+  expect(lock && label && lock.width >= 20 && label.x - lock.x - lock.width < 12).toBeTruthy()
+  await row.locator('.channel-row__main').click()
+  await expect(page.getByText(post.content, { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Сообщение в новости-команды')).toHaveCount(0)
+  await expect(page.getByText('Публикуют назначенные авторы.', { exact: false })).toBeVisible()
+  await page.bringToFront()
+  await page.locator('[data-message-id="10"]').click()
+  await expect(row.locator('.channel-row__badge')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('news-channel-desktop.png') })
+  await page.getByRole('button', { name: 'Комментарии · 1', exact: true }).click()
+  const panel = page.getByRole('complementary', { name: 'Комментарии к публикации' })
+  await expect(panel.getByText(comment.content, { exact: true })).toBeVisible()
+  await expect(panel.getByLabel('Сообщение в новости-команды')).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('news-comments-desktop.png') })
+  channels = [voice, text, { ...news, comments_enabled: false, unread_count: 0 }]
+  emit('channels.changed', { server_id: 1 })
+  await expect(panel.getByText('Только чтение', { exact: true })).toBeVisible()
+  await expect(panel.getByLabel('Сообщение в новости-команды')).toHaveCount(0)
+  await page.setViewportSize({ width: 375, height: 812 })
+  expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+  await expect(page.locator('.channel-sidebar')).not.toBeInViewport()
+  await page.screenshot({ path: testInfo.outputPath('news-comments-mobile.png'), animations: 'disabled' })
+  await panel.getByRole('button', { name: 'Закрыть комментарии' }).click()
+  channels = [voice, text]
+  emit('channels.changed', { server_id: 1 })
+  await expect(page.locator('.channel-group > header')).toHaveText(['Текстовые каналы', 'Голосовые каналы'])
+  expect(errors).toEqual([])
+})
+
+
+test('call controls show microphone, sound, screen and leave labels', async ({ page }, testInfo) => {
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  const controls = page.getByLabel('Управление звонком')
+  await expect(controls.locator('button small')).toHaveText(['Микрофон', 'Звук', 'Экран', 'Стоп', 'Записи', 'Чат', 'Выйти'])
+  await page.screenshot({ path: testInfo.outputPath('call-controls-labels.png'), animations: 'disabled' })
+  await page.setViewportSize({ width: 375, height: 812 })
+  expect(await controls.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+})
+
+test('news channel creation configures publishers and comments', async ({ page }, testInfo) => {
+  const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message))
+  await openCallWorkspace(page)
+  const voice = { id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }
+  const channels = [voice]
+  let settings = { publisher_ids: [] as number[], comments_enabled: false }
+  await page.route('**/api/v1/servers/1/channels', async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON()
+      expect(input.kind).toBe('news')
+      const created = { ...voice, id: 3, position: 1, ...input, comments_enabled: settings.comments_enabled, can_publish: true }
+      channels.push(created)
+      await route.fulfill({ status: 201, json: created })
+    } else await route.fulfill({ json: channels.map((channel) => channel.id === 3 ? { ...channel, comments_enabled: settings.comments_enabled, can_publish: true } : channel) })
+  })
+  await page.route('**/api/v1/servers/1/channels/3/news', async (route) => {
+    if (route.request().method() === 'PUT') settings = route.request().postDataJSON()
+    await route.fulfill({ json: settings })
+  })
+  await page.route('**/api/v1/servers/1/channels/3/access', (route) => route.fulfill({ json: { restricted: false, user_ids: [], roles: [] } }))
+  await page.getByRole('button', { name: 'Добавить: Текстовые каналы', exact: true }).click()
+  const creation = page.getByRole('dialog', { name: 'Создать канал', exact: true })
+  await creation.getByText('Новостной', { exact: true }).click()
+  await creation.getByPlaceholder('новый-канал').fill('новости')
+  await creation.getByRole('button', { name: 'Создать канал', exact: true }).click()
+  await expect(page.locator('.channel-group > header')).toHaveText(['Новостные каналы', 'Текстовые каналы', 'Голосовые каналы'])
+  await expect(page.getByLabel('Сообщение в новости', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Изменить новости', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Изменить канал', exact: true })
+  await dialog.getByRole('checkbox', { name: /Мария/ }).check()
+  await dialog.getByText('Разрешить комментарии', { exact: true }).click()
+  const request = page.waitForRequest((request) => request.method() === 'PUT' && request.url().endsWith('/channels/3/news'))
+  await dialog.getByRole('button', { name: 'Сохранить публикации', exact: true }).click()
+  expect((await request).postDataJSON()).toEqual({ publisher_ids: [2], comments_enabled: true })
+  await expect(dialog.getByText('Настройки публикаций сохранены.', { exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('news-channel-settings.png'), animations: 'disabled' })
+  expect(errors).toEqual([])
 })

@@ -94,6 +94,7 @@ describe('PersistentStreamPlayer', () => {
     expect(handlers.onPreferencesChange).toHaveBeenCalledWith({
       ...DEFAULT_STREAM_PREFERENCES,
       playbackVolume: 42,
+      playbackMuted: false,
     })
   })
 

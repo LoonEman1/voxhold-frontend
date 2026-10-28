@@ -5,8 +5,8 @@ import { QUICK_REACTIONS, REACTION_CATALOG, reactionLabel, recentReactions, type
 import { Icon, type IconName } from './Icon'
 
 interface Action { key: string; label: string; icon: IconName; danger?: boolean; run: () => void }
-export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, pinned, pending, onClose, onReact, onReply, onEdit, onPin, onCopy, onForward, onDelete }: {
-  message: Message; x: number; y: number; expanded?: boolean; canEdit: boolean; canDelete: boolean; canPin: boolean; pinned: boolean
+export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onReply, onEdit, onPin, onCopy, onForward, onDelete }: {
+  message: Message; x: number; y: number; expanded?: boolean; canEdit: boolean; canDelete: boolean; canPin: boolean; canReply?: boolean; pinned: boolean
   pending: Readonly<Record<string, boolean>>; onClose: () => void; onReact?: (emoji: string) => void
   onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onDelete: () => void
 }) {
@@ -19,7 +19,7 @@ export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded 
   const options = useMemo(() => REACTION_CATALOG.filter((option) => (category === 'all' || category === 'recent' && recents.includes(option.emoji) || option.category === category) && `${option.label} ${option.emoji}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [category, query, recents])
   const selected = new Set(message.reactions?.filter((reaction) => reaction.me).map((reaction) => reaction.emoji))
   const actions: Action[] = [
-    { key: 'reply', label: 'Ответить', icon: 'reply', run: onReply },
+    ...(canReply ? [{ key: 'reply', label: 'Ответить', icon: 'reply' as const, run: onReply }] : []),
     ...(canEdit ? [{ key: 'edit', label: 'Изменить', icon: 'edit' as const, run: onEdit }] : []),
     ...(canPin ? [{ key: 'pin', label: pinned ? 'Открепить' : 'Закрепить', icon: 'pin' as const, run: onPin }] : []),
     { key: 'copy', label: 'Копировать текст', icon: 'copy', run: onCopy },

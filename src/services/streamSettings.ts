@@ -34,6 +34,8 @@ export interface StreamPreferences {
   videoBitrateKbps: StreamVideoBitrate
   includeAudio: boolean
   audioBitrateKbps: StreamAudioBitrate
+  publishVolume: number
+  playbackMuted: boolean
   playbackVolume: number
 }
 
@@ -47,6 +49,8 @@ export const DEFAULT_STREAM_PREFERENCES: StreamPreferences = {
   videoBitrateKbps: 6000,
   includeAudio: true,
   audioBitrateKbps: 128,
+  publishVolume: 100,
+  playbackMuted: false,
   playbackVolume: 100,
 }
 
@@ -102,6 +106,9 @@ export function normalizeStreamPreferences(value: unknown): StreamPreferences {
     audioBitrateKbps: STREAM_AUDIO_BITRATES.includes(source.audioBitrateKbps as StreamAudioBitrate)
       ? source.audioBitrateKbps as StreamAudioBitrate
       : DEFAULT_STREAM_PREFERENCES.audioBitrateKbps,
+    publishVolume: typeof source.publishVolume === 'number' && Number.isFinite(source.publishVolume)
+      ? Math.max(0, Math.min(100, Math.round(source.publishVolume))) : 100,
+    playbackMuted: source.playbackMuted === true,
     playbackVolume: typeof source.playbackVolume === 'number' && Number.isFinite(source.playbackVolume)
       ? Math.max(0, Math.min(100, Math.round(source.playbackVolume)))
       : DEFAULT_STREAM_PREFERENCES.playbackVolume,

@@ -53,3 +53,19 @@ test('workspace retries a lost send response with one saved message', async ({ p
   await expect(page.locator('[data-message-id="501"]')).toContainText('Повтор без дубля')
   expect(await page.evaluate(() => window.reliabilityFixture.sentCount())).toBe(1)
 })
+
+test('rapid reply clicks keep mounted history and reuse a cached target', async ({ page }) => {
+  await page.goto('/e2e/fixtures/reliability.html')
+  await expect(page.locator('[data-message-id="500"]')).toBeVisible()
+  await page.locator('.messages').evaluate((root) => {
+    Object.assign(window, { replySkeletons: 0 })
+    new MutationObserver(() => {
+      if (root.querySelector('.message-skeletons')) (window as unknown as { replySkeletons: number }).replySkeletons++
+    }).observe(root, { childList: true, subtree: true })
+  })
+  const quote = page.getByRole('button', { name: 'Перейти к сообщению Alice', exact: true })
+  for (let index = 0; index < 30; index++) await quote.click({ force: true })
+  await expect(page.locator('[data-message-id="490"]')).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { replySkeletons: number }).replySkeletons)).toBe(0)
+  expect(await page.evaluate(() => window.reliabilityFixture.requests.filter((path) => path.includes('/context')).length)).toBe(0)
+})

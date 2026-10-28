@@ -1,53 +1,109 @@
-# Voxhold Frontend
+English | [Русский](README.ru.md)
 
-Production-ready React-клиент для `Voxhold-backend`: авторизация, серверы, каналы, участники, профиль, приглашения, история сообщений, редактирование/удаление/закрепление, полнотекстовый поиск, realtime-синхронизация и голосовые комнаты WebRTC/Opus.
+# Voxhold frontend
 
-Поиск выполняется по всем текстовым каналам выбранного сервера. Нажатие на результат или закреп загружает контекст сообщения, переключает канал и подсвечивает найденное сообщение.
+Web client for a self-hosted Voxhold instance, built with React, TypeScript and
+Vite. It connects to the Voxhold HTTP API, WebSocket events and WebRTC media.
 
-Непрочитанные текстовые каналы выделяются жирным шрифтом и индикатором. Клиент
-сравнивает `last_message_id` из списка каналов с собственным
-`last_read_message_id`, не загружая историю каждого канала отдельным запросом.
+**Related repositories:** [Backend](https://github.com/LoonEman1/voxhold-backend)
+· [Production deployment](https://github.com/LoonEman1/voxhold-deploy).
 
-## Быстрый запуск
+Use the backend repository for API and database changes. Use the deployment
+repository to install the complete application on a Linux server with HTTPS,
+backups, TURN and coordinated updates from published images.
 
-Если backend уже работает на `localhost:8080`:
+## Features
+
+- Invite-only registration, account sessions, profiles and avatars.
+- Spaces with member roles, private channels and access settings.
+- Text, voice and news channels. The news group appears above text and voice
+  groups only when the selected space has an accessible news channel.
+- News publishers, reactions and optional per-post comments. Readers can react;
+  channel managers select publishers and enable or disable new comments.
+- Message replies, forwarding, reactions, editing, deletion, pins and search.
+- Read receipts and persistent unread-notification badges, displayed up to `99+`.
+- WebRTC voice, microphone/output controls and server-relayed or P2P screen sharing.
+- Channel recordings with local/server copies, previews and download recovery.
+- Dark/light themes, adjustable sidebars, mobile layouts and media reconnection.
+
+Federation is currently a
+[design proposal](https://github.com/LoonEman1/voxhold-backend/blob/main/docs/federation-concept.ru.md),
+not a released client capability. This version connects to one instance.
+
+## Interface examples
+
+These screenshots use deterministic test fixtures and sample accounts.
+
+### News feed and private channels
+
+![News channel with a visible private-channel lock, reactions and a comments button](docs/screenshots/news-channel.png)
+
+<details>
+<summary>Post comments and call controls</summary>
+
+Comments open beside the feed; disabling comments keeps the discussion history
+available for reading.
+
+![Comments beside a news publication](docs/screenshots/news-comments.png)
+
+The call toolbar labels microphone, sound, screen sharing, recording, archive,
+chat and leave actions.
+
+![Voice room with labelled call controls](docs/screenshots/voice-room.png)
+
+</details>
+
+## Quick start with an existing backend
+
+Requirements: Docker Engine and Docker Compose v2. The default configuration
+expects a backend reachable at `host.docker.internal:8080` from the container.
 
 ```bash
 cp .env.example .env
 docker compose up --build -d
 ```
 
-Сайт откроется на [http://localhost:3000](http://localhost:3000). Nginx внутри контейнера отдаёт SPA и проксирует `/api`/WebSocket в backend, поэтому CORS не требуется.
+Open [http://localhost:3000](http://localhost:3000). Container Nginx serves the SPA
+and proxies `/api` and WebSocket to the backend. Set `BACKEND_UPSTREAM` in `.env`
+if the backend runs on another host or port.
 
-Если frontend и backend опубликованы на разных origin, владелец инстанса может
-добавить адрес сайта в «Настройки сервера → Доступ внешних клиентов». Список
-загружается и применяется backend в рантайме; перезапуск контейнеров не нужен.
-
-Чтобы поднять frontend, backend и миграции одной командой (репозитории должны лежать рядом):
+For a complete local stack, clone the frontend and
+[backend](https://github.com/LoonEman1/voxhold-backend) into sibling directories
+named `Voxhold-frontend` and `Voxhold-backend`, then run from the frontend directory:
 
 ```bash
 docker compose -f compose.fullstack.yaml up --build -d
+docker compose -f compose.fullstack.yaml logs bootstrap
 ```
 
-Остановить стек:
+Save the generated owner password if `BOOTSTRAP_PASSWORD` was left empty. To stop
+the stack without removing its SQLite volume:
 
 ```bash
 docker compose -f compose.fullstack.yaml down
 ```
 
-Данные SQLite находятся в Docker volume `voxhold_data`; `down` их не удаляет.
+For a public installation, follow
+[Voxhold deploy](https://github.com/LoonEman1/voxhold-deploy#one-command-installation-without-git).
+HTTPS is required for browser microphone and screen capture outside localhost.
+Publish voice UDP `50000` and screen-sharing UDP `50001`, and set
+`WEBRTC_PUBLIC_IP` to an address reachable by your users.
 
-## Приглашения
+## Invitations and access
 
-Созданное приглашение ведёт на веб-страницу текущего инстанса: `https://chat.example.com/#/invite/TOKEN`. Страница проверяет токен и предлагает открыть нативный Voxhold либо остаться на сайте для входа или регистрации. Прямой `voxhold://` используется только после нажатия «Открыть приложение»; если desktop-клиент не установлен, пользователь может продолжить в браузере.
+Invitations use a web URL such as `https://chat.example.com/#/invite/TOKEN`.
+The landing page validates the invitation and lets the recipient continue in
+the browser or explicitly open the native client. Registration requires a valid
+invitation; knowing an instance address does not grant membership or channel access.
+Owners and administrators can inspect and revoke active invitation links.
 
-Для корректных публичных ссылок frontend и `/api` рекомендуется публиковать на одном origin через входящий в проект Nginx. Отдельный адрес веб-клиента в настройках пользователя не нужен.
+Prefer one public origin for the frontend and `/api`. For a separate browser
+origin, the instance owner can allow it under server settings → external client
+access. The backend applies this CORS/Origin allow-list at runtime.
 
-Для голоса fullstack-compose публикует один UDP-порт `50000`. При локальном запуске Docker Desktop и браузера на той же машине используйте `WEBRTC_PUBLIC_IP=127.0.0.1`. Для клиентов из локальной сети укажите LAN IPv4 Windows-хоста и разрешите выбранный UDP-порт в firewall. При развёртывании на VPS укажите публичный IP сервера и также откройте UDP-порт. Доступ к микрофону вне `localhost` браузеры дают только по HTTPS.
+## Local development
 
-## Локальная разработка
-
-Нужен Node.js 24 и запущенный backend:
+Requirements: Node.js 24, npm and a running backend.
 
 ```bash
 npm ci
@@ -55,78 +111,75 @@ cp .env.example .env
 npm run dev
 ```
 
-Команды проверки:
+Validation:
 
 ```bash
 npm run typecheck
+npm run lint
 npm test
 npm run build
 ```
 
-## Конфигурация
+Browser regressions use Playwright and isolated fixtures; a production backend
+is not needed:
 
-| Переменная | По умолчанию | Назначение |
-|---|---:|---|
-| `VITE_API_BASE_URL` | пусто | Публичный origin API. Пустое значение включает same-origin `/api` и рекомендуется для Docker. |
-| `VITE_DEV_API_PROXY` | `http://localhost:8080` | Backend для Vite dev-server. |
-| `BACKEND_UPSTREAM` | `host.docker.internal:8080` | Адрес backend из контейнера Nginx. |
-| `FRONTEND_PORT` | `3000` | Порт сайта на хосте. |
-| `WEBRTC_PUBLIC_IP` | `127.0.0.1` | IP, который backend публикует в ICE-кандидате. На VPS укажите публичный IP. |
-| `WEBRTC_UDP_PORT` | `50000` | Единый UDP-порт медиатрафика WebRTC. |
-| `WEBRTC_MAX_PARTICIPANTS` | `32` | Максимум одновременных соединений в голосовой комнате. |
-| `WEBRTC_MAX_AUDIO_BITRATE_KBPS` | `128` | Серверный максимум входящего Opus-битрейта одного микрофона. |
-| `WEBRTC_ICE_SERVERS` | пусто | Опциональные STUN/TURN URL через запятую для backend. Браузер получает их в рантайме через `GET /api/v1/webrtc/config`; пересборка frontend при смене TURN не нужна. |
+```bash
+npx playwright install chromium
+npm run test:e2e:ui
+npm run test:e2e:performance
+```
 
-## Подготовка к Wails
+## Configuration
 
-UI и доменные типы не зависят от браузерного HTTP напрямую. Точка интеграции — интерфейс `Transport` в `src/platform/transport.ts`. Для Wails реализуйте `Transport.request` через сгенерированные Wails bindings и передайте его в `createApi`. Текущая реализация `createFetchTransport` останется для сайта. Хранилище сессии также вынесено в `SessionStorageAdapter` и может быть заменено на native secure storage.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VITE_API_BASE_URL` | empty | Build-time API origin; empty uses same-origin `/api`. |
+| `VITE_DEV_API_PROXY` | `http://localhost:8080` | Backend used by Vite during development. |
+| `BACKEND_UPSTREAM` | `host.docker.internal:8080` | Backend reachable from container Nginx. |
+| `FRONTEND_PORT` | `3000` | Frontend port on the host. |
+| `WEBRTC_PUBLIC_IP` | `127.0.0.1` | Local-stack backend address advertised to media clients. |
+| `WEBRTC_UDP_PORT` | `50000` | Voice UDP port in the local full-stack Compose file. |
+| `WEBRTC_STREAM_UDP_PORT` | `50001` | Screen-sharing UDP port in the local full-stack Compose file. |
 
-WebSocket-клиент находится отдельно в `src/services/realtime.ts`. Когда нативный backend будет встроен в процесс Wails, ему можно передать локальный WebSocket URL или заменить этот сервис без изменений UI.
+ICE/TURN configuration is fetched at runtime from
+`GET /api/v1/webrtc/config`; changing backend ICE settings does not require a
+frontend rebuild. See [`.env.example`](.env.example) and the
+[deployment configuration](https://github.com/LoonEman1/voxhold-deploy/blob/main/.env.example)
+for media limits, TURN and production settings.
 
-## Восстановление после обрыва
+The HTTP transport and session storage adapters are defined in
+[`src/platform/transport.ts`](src/platform/transport.ts); WebSocket transport is
+in [`src/services/realtime.ts`](src/services/realtime.ts).
 
-Короткая потеря WebSocket (до 60 секунд) не выбрасывает пользователя из голоса и трансляции: peer-соединения закрываются, но захваченный микрофон (`BrowserVoiceInput`) и экран остаются жить; после переподключения сессия автоматически пересоздаётся на новом connection id без повторного запроса разрешений. Если микрофон пропал (устройство отключено), выполняется попытка перезахвата выбранного устройства, затем устройства по умолчанию; при неудаче отправка отключается, приём чужого звука продолжается и появляется кнопка «Повторить». Блокировка автовоспроизведения не выглядит как чёрный экран: видео показывается без звука с явной кнопкой «Включить звук».
+## Releases and upgrading
 
-## Production
+Frontend and backend share **2.2.0**. Install backend **2.2.0**, including migrations
+**000025–000026**, before this frontend. The migrations add news-channel settings,
+comments and durable notification counters. Existing messages are not replayed as
+new notifications. Retain a verified backup before upgrading.
 
-- multi-stage образ: Node используется только на этапе сборки;
-- runtime работает на unprivileged Nginx, с read-only root filesystem и без Linux capabilities;
-- immutable cache для hashed assets и `no-cache` для HTML;
-- CSP и базовые security headers;
-- `/healthz` для оркестратора;
-- same-origin reverse proxy с поддержкой WebSocket;
-- экспоненциальное переподключение realtime и автоматическое обновление сессии.
+The published frontend image is `ghcr.io/looneman1/voxhold-frontend:2.2.0`;
+`2.2` and `latest` are moving tags. To update an existing production deployment:
 
-Перед публичным развёртыванием поставьте TLS-терминатор (Caddy, Traefik, Cloudflare или ingress) перед контейнером и не публикуйте backend-порт наружу.
-# Screen sharing
+```bash
+./update.sh --backend-version 2.2.0 --frontend-version 2.2.0
+```
 
-Screen sharing is available inside an active voice channel. It supports
-server-forwarded and P2P modes, 720p/1080p/1440p, 30/60 FPS, video rates up to
-12 Mbit/s, and separate system-audio rates up to 320 Kbit/s. Server mode also
-requires UDP `${WEBRTC_STREAM_UDP_PORT:-50001}` to be reachable.
+Run that command from the
+[deploy repository](https://github.com/LoonEman1/voxhold-deploy), not this source
+checkout. Review [release notes](RELEASE_NOTES.md) and the
+[shared release workflow](docs/release-workflow.md). Changes pass through a PR to
+`dev`, then a release PR to `main`; successful main CI publishes images, tags and
+GitHub Releases automatically.
 
-## Производительность клиента
+## Documentation
 
-Оптимизации чата, AudioWorklet, обработки видео и метрик качества описаны в [docs/client-performance.md](docs/client-performance.md). Изолированные браузерные проверки запускаются командой `npm run test:e2e:performance` и не требуют backend.
-
-Запись и повторное скачивание, локальные и серверные копии, аватары и интерфейс звонка: [подробное описание](docs/calls-recordings.md).
-
-## v1.11.0 — call layout and instance invitations
-
-Participant tiles have a bounded square layout with larger avatars and names.
-Both sidebars use larger participant names and avatars. Voice-channel chat
-opens from the bottom call controls; its pins replace chat content inside the
-same dock, including on narrow screens. The header no longer repeats its chat
-button. Single-instance invitations use registration links; the unused inbox
-and invitations by username have been removed from the workspace.
-
-Messages retain the highest server revision across WebSocket events and HTTP
-history/mutation responses. Deploy backend **v0.10.0** and migration **000019**
-before this frontend to enable that ordering guarantee. Existing backends
-remain compatible with the additive revision field.
-
-Карточки участников стали квадратнее, аватары и имена увеличены. Чат звонка
-открывается из нижней панели, а закрепы переключаются внутри той же боковой
-области. Входящие приглашения и приглашения по имени убраны; новые участники
-регистрируются по ссылке. Для защиты от устаревших правок сообщений сначала
-обновите backend до v0.10.0 и примените миграцию 000019.
+- [Channel history, synchronization and retries](docs/channel-history.md)
+- [Private channels and stream tiles](docs/channel-access-and-stream-tiles.md)
+- [Message replies, forwarding and reactions](docs/message-interactions.md)
+- [Notification settings](docs/channel-notifications.md)
+- [News channels, permissions, comments and counter API](https://github.com/LoonEman1/voxhold-backend/blob/main/docs/news-channels.md)
+- [Calls, recordings and avatars](docs/calls-recordings.md)
+- [Media recovery and channel members](docs/media-recovery-and-members.md)
+- [Client performance](docs/client-performance.md)
+- [Contributing](CONTRIBUTING.md)

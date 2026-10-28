@@ -2,9 +2,11 @@ import type {
   ApiErrorPayload,
   ChannelRecording,
   RecordingStorage,
+  RecordingLimits,
   AuthPayload,
   Channel,
   ChannelAccess,
+  NewsSettings,
   NotificationMode,
   NotificationSettings,
   ChannelRead,
@@ -152,7 +154,7 @@ export function createApi(transport: Transport) {
       remove: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}`, method: 'DELETE' }) as Promise<ChannelRecording>,
       storage: (token: string, signal?: AbortSignal) => authorized(token, { path: '/api/v1/instance/recording-storage', signal }) as Promise<RecordingStorage>,
       setQuota: (token: string, quota_bytes: number) => authorized(token, { path: '/api/v1/instance/recording-storage', method: 'PUT', body: { quota_bytes } }) as Promise<RecordingStorage>,
-      list: (token: string, serverId: number, signal?: AbortSignal) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/recordings`, signal }) as Promise<{ recordings: ChannelRecording[] }>,
+      list: (token: string, serverId: number, signal?: AbortSignal) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/recordings`, signal }) as Promise<{ recordings: ChannelRecording[] } & Partial<RecordingLimits>>,
       start: (token: string, serverId: number, channelId: number, mime_type: string) => authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/recordings`, method: 'POST', body: { mime_type } }) as Promise<ChannelRecording>,
       heartbeat: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}/heartbeat`, method: 'POST' }),
       stop: (token: string, id: string, size_bytes: number, duration_ms: number, local_only = false) => authorized(token, { path: `/api/v1/recordings/${url(id)}/stop`, method: 'POST', body: { size_bytes, duration_ms, local_only } }) as Promise<ChannelRecording>,
@@ -169,6 +171,12 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      unreadCounts: (token: string, serverId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/notification-counts`, signal }) as Promise<Array<{ channel_id: number; unread_count: number }>>,
+      news: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/news`, signal }) as Promise<NewsSettings>,
+      setNews: (token: string, serverId: number, channelId: number, settings: NewsSettings) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/news`, method: 'PUT', body: settings }) as Promise<NewsSettings>,
       notifications: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/notifications`, signal }) as Promise<NotificationSettings>,
       setNotifications: (token: string, serverId: number, channelId: number, mode: NotificationMode) =>
@@ -189,6 +197,8 @@ export function createApi(transport: Transport) {
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}`, method: 'DELETE' }) as Promise<void>,
     },
     messages: {
+      comments: (token: string, serverId: number, channelId: number, postId: number, beforeId?: number, signal?: AbortSignal) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/${url(postId)}/comments${beforeId ? `?before_id=${beforeId}` : ''}`, signal }) as Promise<MessagePage>,
       setReaction: (token: string, serverId: number, channelId: number, messageId: number, emoji: string, active: boolean) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages/${url(messageId)}/reactions/${url(emoji)}`, method: active ? 'PUT' : 'DELETE' }) as Promise<MessageReactions>,
       reactors: (token: string, serverId: number, channelId: number, messageId: number, emoji: string, signal: AbortSignal, after?: number) =>

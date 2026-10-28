@@ -1,6 +1,7 @@
 import type { SVGProps } from 'react'
 
 export type IconName =
+  | 'news'
   | 'record'
   | 'recordStop'
   | 'recordings'
@@ -45,6 +46,7 @@ export type IconName =
   | 'pip'
 
 const paths: Record<IconName, React.ReactNode> = {
+  news: <><path d="M3 9v6h4l10 5V4L7 9H3Z"/><path d="m7 15 2 6h3l-2-5M20 8v8"/></>,
   record: <><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/></>,
   recordStop: <><rect x="3" y="5" width="18" height="14" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor" stroke="none"/></>,
   recordings: <><path d="M6 3h12M4 6h16"/><rect x="3" y="9" width="18" height="12" rx="2"/><path d="m10 12 5 3-5 3Z"/></>,
