@@ -77,6 +77,11 @@ export function createApi(transport: Transport) {
     unwrap(transport, { ...request, token })
 
   return {
+    community: {
+      request: <T>(token: string, path: string, method: TransportRequest['method'] = 'GET', body?: unknown, signal?: AbortSignal) => unwrap<T>(transport, { token, path: `/api/v1${path}`, method, body, signal }),
+      upload: (token: string, channelId: number, id: string, file: File, onUploadProgress: (fraction: number) => void, signal?: AbortSignal, conversationId?: number) => unwrap<import('../domain/community').Attachment>(transport, { token, path: `/api/v1/${conversationId ? `conversations/${conversationId}` : `channels/${channelId}`}/attachments/${id}?filename=${encodeURIComponent(file.name)}`, method: 'PUT', rawBody: file, contentType: file.type || 'application/octet-stream', onUploadProgress, signal }),
+      content: (token: string, id: string, signal?: AbortSignal) => unwrap<Blob>(transport, { token, path: `/api/v1/attachments/${encodeURIComponent(id)}/content`, responseType: 'blob', signal }),
+    },
     instance: {
       get: (signal?: AbortSignal) =>
         unwrap<InstanceMetadata>(transport, { path: '/api/v1/instance', signal }),
@@ -215,11 +220,11 @@ export function createApi(transport: Transport) {
           signal,
         }) as Promise<MessagePage>
       },
-      create: (token: string, serverId: number, channelId: number, content: string, clientMessageId?: string, signal?: AbortSignal, replyToMessageId?: number) =>
+      create: (token: string, serverId: number, channelId: number, content: string, clientMessageId?: string, signal?: AbortSignal, replyToMessageId?: number, threadRootId?: number, attachmentIds?: string[]) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/messages`,
           method: 'POST',
-          body: { content, ...(clientMessageId ? { client_message_id: clientMessageId } : {}), ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}) },
+          body: { content, ...(clientMessageId ? { client_message_id: clientMessageId } : {}), ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}), ...(threadRootId ? { thread_root_id: threadRootId } : {}), ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}) },
           ...(signal ? { signal } : {}),
         }) as Promise<Message>,
       update: (token: string, serverId: number, channelId: number, messageId: number, content: string) =>
