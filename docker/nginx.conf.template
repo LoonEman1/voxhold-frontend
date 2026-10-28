@@ -18,6 +18,10 @@ server {
     }
 
     location /api/ {
+        # Raw attachment bodies use the backend's 64 MiB boundary. Stream them
+        # upstream so the unprivileged proxy does not spool videos to disk.
+        client_max_body_size 64m;
+        proxy_request_buffering off;
         proxy_pass http://${BACKEND_UPSTREAM};
         proxy_http_version 1.1;
         # Preserve the public port so the backend WebSocket origin check sees
