@@ -34,3 +34,8 @@ Validation: `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`,
 `npm run test:e2e:ui`, `npm run test:e2e:performance` and the optional isolated
 `npm run test:e2e:community` fullstack scenario. The backend documentation explains
 how to create public fixture data in a fresh directory; never use production data.
+
+The production nginx API proxy streams request bodies upstream and accepts the
+same 64 MiB boundary as the backend. `node scripts/test-upload-proxy.mjs` exercises
+the actual production template in containers: 6/64 MiB succeed and 65 MiB returns
+413. The `Upload proxy regression` CI gate must pass before image publication.
