@@ -76,6 +76,7 @@ export interface NewsSettings { publisher_ids: number[]; comments_enabled: boole
 export interface ChannelAccess { restricted: boolean; user_ids: number[]; roles: ServerRole[] }
 
 export interface Channel {
+ permissions?: number
   comments_enabled?: boolean
   can_publish?: boolean
   unread_count?: number
@@ -114,7 +115,10 @@ export interface MessageForward { author: MessageAuthor; created_at: number; men
 export interface MessageReaction { emoji: string; count: number; me: boolean }
 export interface MessageReactions { channel_id: number; message_id: number; revision: number; reactions: MessageReaction[] }
 export interface ReactorPage { users: MessageAuthor[]; has_more: boolean; next_user_id: number | null }
+export type { Attachment } from './community'
+
 export interface Message {
+  attachments?: import('./community').Attachment[]
   thread_root_id?: number
   comment_count?: number
   client_message_id?: string

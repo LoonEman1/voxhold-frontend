@@ -1,3 +1,4 @@
+import { useThreadFollow } from './ThreadFollow'
 import { useEffect, useRef, useState } from 'react'
 import type { Channel, Message, MessageReply, ServerMember, ServerRole } from '../domain/types'
 import type { VoxholdApi } from '../services/api'
@@ -23,14 +24,8 @@ export function NewsComments({ api, token, store, channel, post, currentUserId, 
   const live = useRef(new Map<number, Message>()), deleted = useRef(new Set<number>())
   const controller = useRef<AbortController | null>(null)
   const cursor = useRef<number | null>(null)
-  const readCursor = useRef(0), readTimer = useRef<number | null>(null)
-  useEffect(() => () => { if (readTimer.current !== null) window.clearTimeout(readTimer.current) }, [])
-  const markRead = (id: number) => {
-    if (id <= readCursor.current) return
-    readCursor.current = id
-    if (readTimer.current !== null) window.clearTimeout(readTimer.current)
-    readTimer.current = window.setTimeout(() => { readTimer.current = null; void api.reads.mark(token, channel.server_id, channel.id, readCursor.current).catch(() => { readCursor.current = 0 }) }, 220)
-  }
+  const thread = useThreadFollow(api, token, channel.id, post.id)
+  const markRead = thread.markRead
   const merge = (values: Message[], incoming: Message[]) => {
     const map = new Map(values.map((value) => [value.id, value]))
     for (const value of incoming) if (!deleted.current.has(value.id)) map.set(value.id, newerMessage(map.get(value.id), value))
@@ -76,9 +71,10 @@ export function NewsComments({ api, token, store, channel, post, currentUserId, 
   }
   const postReply: MessageReply = { message_id: rootPost.id, author: rootPost.author, content: rootPost.content, revision: rootPost.revision ?? 0, deleted: removed }
   return <aside className="news-comments" aria-label="Комментарии к публикации">
-    <header className="news-comments__header"><div><Icon name="chat" size={21}/><b>Комментарии</b>{!channel.comments_enabled && <small>Только чтение</small>}</div><button type="button" className="icon-button" onClick={onClose} aria-label="Закрыть комментарии"><Icon name="close"/></button></header>
+    <header className="news-comments__header"><div><Icon name="chat" size={21}/><b>Комментарии</b>{channel.kind === 'news' && !channel.comments_enabled && <small>Только чтение</small>}</div><button type="button" className="icon-button" onClick={onClose} aria-label="Закрыть комментарии"><Icon name="close"/></button></header>
     <div className="news-comments__post"><b>Публикация · {rootPost.author.username}</b><p>{readableMessage(rootPost.content, members, rootPost.forward?.mention_names)}</p></div>
+    {thread.control}
     {error && <div className="form-error" role="alert">{error}<button type="button" onClick={() => setRevision((n) => n + 1)}>Повторить</button></div>}
-    {removed ? <p className="news-readonly">Публикация удалена. Обсуждение закрыто.</p> : <ChatPanel channel={{ ...channel, kind: 'text' }} messages={messages} loading={loading} loadingOlder={older} hasMore={hasMore} loadingNewer={false} hasNewer={false} currentUserId={currentUserId} currentRole={currentRole} canManage={canManage} members={members} pinnedMessageIds={new Set()} focusedMessageId={focused} channelReads={{}} canCompose={!!channel.comments_enabled} readOnlyLabel="Комментарии отключены. История обсуждения доступна для чтения." emptyLabel="Комментариев пока нет" pendingMessages={pending.filter((item) => item.reply && (item.reply.message_id === post.id || messages.some((value) => value.id === item.reply?.message_id)))} onLoadOlder={loadOlder} onLoadNewer={async () => undefined} onReturnToLatest={async () => undefined} onReadThrough={markRead} onSend={async (content, reply) => { await store.send(channel.server_id, channel.id, content, undefined, reply ?? postReply) }} onRetryPending={(item) => { void store.send(channel.server_id, channel.id, item.content, item.id) }} onDismissPending={(id) => store.dismiss(channel.id, id)} onSetReaction={async (id, emoji, active) => { const state = await api.messages.setReaction(token, channel.server_id, channel.id, id, emoji, active); store.reactions(state) }} onLoadReactors={(id, emoji, signal, after) => api.messages.reactors(token, channel.server_id, channel.id, id, emoji, signal, after)} onEdit={async (id, content) => { const value = await api.messages.update(token, channel.server_id, channel.id, id, content); store.receive(value) }} onDelete={async (id) => { await api.messages.delete(token, channel.server_id, channel.id, id); store.remove(channel.id, id) }} onTogglePin={async () => undefined} allowPin={false} onOpenMessage={setFocused} isMessageDeleted={(id) => store.isDeleted(channel.id, id)} onOpenProfile={onOpenProfile}/>}
+    {removed ? <p className="news-readonly">Публикация удалена. Обсуждение закрыто.</p> : <ChatPanel threadRootId={post.id} channel={{ ...channel, kind: 'text' }} messages={messages} loading={loading} loadingOlder={older} hasMore={hasMore} loadingNewer={false} hasNewer={false} currentUserId={currentUserId} currentRole={currentRole} canManage={canManage} members={members} pinnedMessageIds={new Set()} focusedMessageId={focused} channelReads={{}} canCompose={(channel.kind === 'text' || !!channel.comments_enabled)} readOnlyLabel="Комментарии отключены. История обсуждения доступна для чтения." emptyLabel="Комментариев пока нет" pendingMessages={pending.filter((item) => item.threadRootId === post.id || item.reply && (item.reply.message_id === post.id || messages.some((value) => value.id === item.reply?.message_id)))} onLoadOlder={loadOlder} onLoadNewer={async () => undefined} onReturnToLatest={async () => undefined} onReadThrough={markRead} onSend={async (content, reply) => { await store.send(channel.server_id, channel.id, content, undefined, reply ?? postReply, undefined, undefined, post.id) }} onRetryPending={(item) => { void store.send(channel.server_id, channel.id, item.content, item.id) }} onDismissPending={(id) => store.dismiss(channel.id, id)} onSetReaction={async (id, emoji, active) => { const state = await api.messages.setReaction(token, channel.server_id, channel.id, id, emoji, active); store.reactions(state) }} onLoadReactors={(id, emoji, signal, after) => api.messages.reactors(token, channel.server_id, channel.id, id, emoji, signal, after)} onEdit={async (id, content) => { const value = await api.messages.update(token, channel.server_id, channel.id, id, content); store.receive(value) }} onDelete={async (id) => { await api.messages.delete(token, channel.server_id, channel.id, id); store.remove(channel.id, id) }} onTogglePin={async () => undefined} allowPin={false} onOpenMessage={setFocused} isMessageDeleted={(id) => store.isDeleted(channel.id, id)} onOpenProfile={onOpenProfile}/>}
   </aside>
 }

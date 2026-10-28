@@ -317,8 +317,13 @@ export class RealtimeClient {
           this.options.onAvatarUpdated?.(payload.data as { user_id: number; version?: string | null })
         } else if (payload.type === 'channel.sync_required' && payload.data) {
           this.options.onSyncRequired?.(payload.data as { server_id: number; channel_id: number })
+        } else if (payload.type?.startsWith('conversation.')) {
+          window.dispatchEvent(new Event('voxhold:community'))
+        } else if (payload.type === 'attachments.changed') {
+          window.dispatchEvent(new Event('voxhold:attachments'))
         } else if (payload.type === 'notification.message' && payload.data) {
           this.options.onNotification?.(payload.data as MessageNotification)
+          window.dispatchEvent(new Event('voxhold:community'))
         } else if (payload.type === 'notification.settings_updated' && payload.data) {
           this.options.onNotificationSettings?.(payload.data as NotificationSettings)
         } else if (payload.type === 'message.created' && payload.data) {

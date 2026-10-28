@@ -1,3 +1,5 @@
+import { CustomRoleBadges } from './Community'
+import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -16,6 +18,7 @@ import { MessageQuote, ForwardAttribution, readableMessage } from './MessageQuot
 import { rememberReaction } from '../lib/reactionCatalog'
 
 interface ChatPanelProps {
+  threadRootId?: number
   canCompose?: boolean
   allowPin?: boolean
   readOnlyLabel?: string
@@ -70,9 +73,10 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
   return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
 }
 
-export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOnlyLabel, emptyLabel, renderComments, onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
+export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin = true, readOnlyLabel, emptyLabel, renderComments, onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
 	const channelId = channel?.id ?? null
-  const canCompose = composeOverride ?? (channel?.kind !== 'news' || channel.can_publish === true || canManage)
+  const canCompose = composeOverride ?? (channel?.can_publish !== false && (channel?.kind !== 'news' || channel.can_publish === true || canManage))
+  const attachmentUpload = useAttachmentUpload(channel, canCompose, threadRootId)
   const canReply = canCompose && channel?.kind !== 'news' || channel?.kind === 'news' && !!channel.comments_enabled
   const handledCommentFocus = useRef('')
   const [discussion, setDiscussion] = useState<Message | null>(null)
@@ -80,12 +84,12 @@ export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOn
   useEffect(() => {
     const target = messages.find((message) => message.id === focusedMessageId)
     const focusKey = `${channel?.id}:${focusVersion}:${focusedMessageId}`
-    if (channel?.kind === 'news' && target?.thread_root_id && handledCommentFocus.current !== focusKey) {
+    if (renderComments && target?.thread_root_id && handledCommentFocus.current !== focusKey) {
       handledCommentFocus.current = focusKey
       const post = messages.find((message) => message.id === target.thread_root_id)
       setDiscussion(post ?? { ...target, id: target.thread_root_id, thread_root_id: undefined, content: target.reply?.message_id === target.thread_root_id ? target.reply.content : 'Публикация', author: target.reply?.message_id === target.thread_root_id ? target.reply.author : target.author })
     }
-  }, [channel?.id, channel?.kind, focusVersion, focusedMessageId, messages])
+  }, [channel?.id, channel?.kind, focusVersion, focusedMessageId, messages, renderComments])
   const [draft, setDraft] = useState('')
   const [replyTarget, setReplyTarget] = useState<MessageReply | null>(null)
   const [composerFocus, setComposerFocus] = useState(0)
@@ -123,7 +127,7 @@ export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOn
   const directory = useMemo(() => mentionDirectory(members), [members])
   const ownRole = currentRole ?? members.find((member) => member.user_id === currentUserId)?.role
   const membersById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members])
-  const displayMessages = useMemo(() => channel?.kind === 'news' ? messages.filter((message) => !message.thread_root_id) : messages, [messages, channel?.kind])
+  const displayMessages = useMemo(() => renderComments ? messages.filter((message) => !message.thread_root_id) : messages, [messages, renderComments])
   const virtualized = displayMessages.length > 0
   const getMessageKey = useCallback((index: number) => displayMessages[index]!.id, [displayMessages])
   const estimateMessageSize = useCallback((index: number) => 52 + Math.min(240, Math.floor((displayMessages[index]?.content.length ?? 0) / 80) * 18) + (displayMessages[index]?.reply ? 55 : 0) + (displayMessages[index]?.forward ? 25 : 0) + (displayMessages[index]?.reactions?.length ? 37 : 0), [displayMessages])
@@ -441,7 +445,7 @@ export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOn
   if (!channel) return <section className="chat-panel"><EmptyState icon="message" title="Выберите канал">Откройте текстовый канал слева, чтобы начать разговор.</EmptyState></section>
 
   return (
-    <section className="chat-panel">
+    <section className="chat-panel" onPaste={attachmentUpload.onPaste} onDrop={attachmentUpload.onDrop} onDragOver={attachmentUpload.onDragOver}>
       <div className="messages" ref={scrollRef} onScroll={() => { updateReturnVisibility(); scheduleReadCheck() }}>
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
         {loading && displayMessages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
@@ -465,7 +469,7 @@ export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOn
               <article data-message-id={message.id} onContextMenu={(event) => openMessageMenu(event, message)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); setMessageMenu({ id: message.id, x: box.left + 40, y: box.top + 20, expanded: false }) } }} className={`message ${mentioned ? 'message--mentioned' : ''} ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
                 {!grouped && <button className="message__avatar-button" onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)} aria-label={`Открыть профиль ${message.author.username}`}><Avatar userId={message.author.user_id} name={message.author.username}/></button>}
                 <div className="message__body">
-                  {!grouped && <header><button className={`message__author message__author--${role}`} onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)}>{message.author.username}</button><span className={`role-badge role-badge--${role}`}>{roleMeta[role].shortLabel}</span>{mine && <span className="you-tag">вы</span>}<time dateTime={new Date(message.created_at * 1000).toISOString()}>{formatTime(message.created_at)}</time></header>}
+                  {!grouped && <header><button className={`message__author message__author--${role}`} onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)}>{message.author.username}</button><span className={`role-badge role-badge--${role}`}>{roleMeta[role].shortLabel}</span><CustomRoleBadges userId={message.author.user_id}/>{mine && <span className="you-tag">вы</span>}<time dateTime={new Date(message.created_at * 1000).toISOString()}>{formatTime(message.created_at)}</time></header>}
                   {pinned && <span className="message__pin-label"><Icon name="pin" size={11}/> Закреплено</span>}
                   {message.forward && <ForwardAttribution message={message}/>}
                   {message.reply && <MessageQuote reference={message.reply} members={members} onOpen={onOpenMessage}/>}
@@ -473,8 +477,9 @@ export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOn
                     <MentionComposer draft={editDraft} onChange={setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void saveEdit(message.id, content) }} sending={pendingActionId === message.id} channelName={channel.name} members={members} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => setEditingId(null)}/>
                     <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
                   </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
+                  <MessageAttachments attachments={message.attachments}/>
                   {editingId !== message.id && <MessageReactions message={message} currentUserId={currentUserId} pending={reactionPending[message.id]} onReact={onSetReaction ? (emoji) => { void react(message, emoji) } : undefined} loadReactors={onLoadReactors}/>}
-                  {channel.kind === 'news' && renderComments && (channel.comments_enabled || (message.comment_count ?? 0) > 0) && <button type="button" className="news-post-comments" onClick={() => setDiscussion(message)}><Icon name="chat" size={16}/><span>Комментарии{(message.comment_count ?? 0) > 0 ? ` · ${message.comment_count}` : ''}</span>{!channel.comments_enabled && <Icon name="lock" size={13}/>}<Icon name="chevron" size={14}/></button>}
+                  {renderComments && !message.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (message.comment_count ?? 0) > 0) && <button type="button" className="news-post-comments" onClick={() => setDiscussion(message)}><Icon name="chat" size={16}/><span>{channel.kind === 'text' ? 'Обсудить' : 'Комментарии'}{(message.comment_count ?? 0) > 0 ? ` · ${message.comment_count}` : ''}</span>{channel.kind === 'news' && !channel.comments_enabled && <Icon name="lock" size={13}/>}<Icon name="chevron" size={14}/></button>}
                   {actionError?.id === message.id && <div className="message__error">{actionError.message}</div>}
                 </div>
                 {mine && editingId !== message.id && <>
@@ -500,6 +505,7 @@ export function ChatPanel({ canCompose: composeOverride, allowPin = true, readOn
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
       {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, members)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); setComposerFocus((current) => current + 1) }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
       {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      {attachmentUpload.control}
       {canCompose ? <MentionComposer focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
     </section>
