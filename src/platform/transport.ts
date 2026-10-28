@@ -9,6 +9,7 @@ export interface TransportRequest {
   contentType?: string
   responseType?: 'blob'
   signal?: AbortSignal
+  onUploadProgress?: (fraction: number) => void
 }
 
 export interface TransportResponse<T> {
@@ -60,6 +61,7 @@ export function createFetchTransport(baseUrl = ''): Transport {
   return {
     resolveURL: (path) => `${normalizedBase}${path}`,
     async request<T>(request: TransportRequest) {
+      if (request.onUploadProgress && request.rawBody !== undefined) return uploadRequest<T>(`${normalizedBase}${request.path}`, request)
       const { path, method = 'GET', token, body, rawBody, signal } = request
       const startedAt = performance.now()
       const route = path.split('?')[0] || '/'
@@ -116,4 +118,24 @@ export function createFetchTransport(baseUrl = ''): Transport {
       return { status: response.status, data }
     },
   }
+}
+
+function uploadRequest<T>(url: string, request: TransportRequest): Promise<TransportResponse<T>> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(request.method ?? 'PUT', url)
+    xhr.timeout = 120_000
+    xhr.setRequestHeader('Content-Type', request.contentType ?? 'application/octet-stream')
+    if (request.token) xhr.setRequestHeader('Authorization', `Bearer ${request.token}`)
+    const abort = () => xhr.abort()
+    const done = () => request.signal?.removeEventListener('abort', abort)
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) request.onUploadProgress?.(event.loaded / event.total) }
+    xhr.onload = () => { done(); let data: T | null = null; try { data = JSON.parse(xhr.responseText) as T } catch { /* Non-JSON failure. */ } resolve({ status: xhr.status, data }) }
+    xhr.onerror = () => { done(); reject(new Error('Соединение прервано. Повторите загрузку.')) }
+    xhr.ontimeout = xhr.onerror
+    xhr.onabort = () => { done(); reject(new DOMException('Upload aborted', 'AbortError')) }
+    request.signal?.addEventListener('abort', abort, { once: true })
+    if (request.signal?.aborted) { done(); reject(new DOMException('Upload aborted', 'AbortError')); return }
+    xhr.send(request.rawBody as XMLHttpRequestBodyInit)
+  })
 }

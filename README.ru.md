@@ -152,17 +152,16 @@ HTTP transport и адаптер хранения сессии находятс�
 
 ## Релизы и обновление
 
-Frontend и backend выпускаются с общим номером **2.2.0**. Перед этим frontend
-установите backend **2.2.0** и примените миграции **000025–000026**. Они добавляют
-настройки новостных каналов, комментарии и счётчики уведомлений. Старые сообщения
-не воспроизводятся как новые уведомления. Перед обновлением сохраните проверенный бэкап.
+Frontend и backend выпускаются с общим номером **2.3.0**. Перед этим frontend
+установите backend **2.3.0** и примените миграции **000027–000030**. Они добавляют
+роли, подписки обсуждений, личные беседы и вложения. Перед обновлением сохраните проверенный бэкап.
 
-Образ frontend: `ghcr.io/looneman1/voxhold-frontend:2.2.0`.
-Теги `2.2` и `latest` перемещаются при публикации новых релизов.
+Образ frontend: `ghcr.io/looneman1/voxhold-frontend:2.3.0`.
+Теги `2.3` и `latest` перемещаются при публикации новых релизов.
 Для существующей production-установки:
 
 ```bash
-./update.sh --backend-version 2.2.0 --frontend-version 2.2.0
+./update.sh --backend-version 2.3.0 --frontend-version 2.3.0
 ```
 
 Команда запускается из [репозитория deploy](https://github.com/LoonEman1/voxhold-deploy),
@@ -182,3 +181,6 @@ Frontend и backend выпускаются с общим номером **2.2.0*
 - [Восстановление медиа и участники каналов](docs/media-recovery-and-members.md)
 - [Производительность клиента](docs/client-performance.md)
 - [Участие в разработке](CONTRIBUTING.ru.md)
+
+
+Community 2.3: [attachments, conversations, inbox, roles and text threads](docs/community-2.3.md).

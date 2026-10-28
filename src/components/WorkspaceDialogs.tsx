@@ -1,3 +1,5 @@
+import { CustomRoleBadges } from './Community'
+import { StorageManager } from './CommunitySettings'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import type { Channel, ChannelKind, Profile, RecordingStorage, Server, ServerRole } from '../domain/types'
 import { countryByCode } from '../lib/countries'
@@ -133,7 +135,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
+export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
   const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
@@ -164,6 +166,7 @@ export function MemberProfileDialog({ online = false, open, onClose, profile, ro
         <section className="profile-about"><span>ОБО МНЕ</span><p>{profile.about || 'Пользователь пока ничего о себе не рассказал.'}</p></section>
         {(canChangeRole || canBan) && <section className="member-management">
           <div><span>УПРАВЛЕНИЕ УЧАСТНИКОМ</span><p>Изменения сразу увидят все участники сервера.</p></div>
+          <CustomRoleBadges userId={profile.user_id}/>{onMessage && <button className="button button--primary" onClick={onMessage}>Написать</button>}
           {canChangeRole && <div className="member-role-control"><span>Роль</span><div><button className={role === 'member' ? 'is-active' : ''} onClick={() => void changeRole('member')} disabled={pending}>Участник</button><button className={role === 'admin' ? 'is-active' : ''} onClick={() => void changeRole('admin')} disabled={pending}>Администратор</button></div></div>}
           {canBan && <div className="member-kick-control">{confirmKick ? <><span>Забанить аккаунт {profile.username} на всём инстансе?</span><button className="button button--danger button--small" onClick={() => void ban()} disabled={pending}>{pending ? <span className="spinner"/> : 'Забанить'}</button><button className="button button--ghost button--small" onClick={() => setConfirmKick(false)} disabled={pending}>Отмена</button></> : <button className="button button--danger-outline button--small" onClick={() => setConfirmKick(true)}>Забанить аккаунт</button>}</div>}
           {manageError && <div className="form-error" role="alert">{manageError}</div>}
@@ -211,6 +214,8 @@ interface ServerSettingsDialogProps extends AsyncDialogProps {
   onSaveCorsOrigins(origins: string[]): Promise<string[]>
   recordingStorage?: RecordingStorage | null
   onSaveRecordingQuota?(quotaBytes: number): Promise<void>
+  storageApi?: import('../services/api').VoxholdApi
+  storageToken?: string
 }
 
 const GIB = 2 ** 30
@@ -228,6 +233,7 @@ export function ServerSettingsDialog({
   onSaveCorsOrigins,
   recordingStorage = null,
   onSaveRecordingQuota,
+  storageApi, storageToken,
 }: ServerSettingsDialogProps) {
   const [name, setName] = useState('')
   const [corsValue, setCorsValue] = useState('')
@@ -290,7 +296,8 @@ export function ServerSettingsDialog({
     <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
       {owner && <form className="dialog-form settings-section" onSubmit={rename}><div><h3>Название</h3><p>Его увидят все участники пространства.</p></div><label><span>Название сервера</span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required /></label><button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button></form>}
       {owner && <form className="dialog-form settings-section" onSubmit={saveCorsOrigins}><div><h3>Доступ внешних клиентов</h3><p>Разрешите браузерным клиентам на других доменах обращаться к API и WebSocket этого инстанса.</p></div><label><span>Разрешённые origin</span><textarea rows={5} value={corsValue} onChange={(event) => setCorsValue(event.target.value)} disabled={corsOriginsLoading || corsPending} placeholder={corsOriginsLoading ? 'Загрузка…' : 'https://client.example.com\nhttp://localhost:5173'} spellCheck={false}/></label><small className="field-hint">По одному точному origin на строку: схема, домен и необязательный порт. Без пути и wildcard.</small><button className="button button--secondary align-self-end" disabled={corsOriginsLoading || corsPending}>{corsPending ? <span className="spinner"/> : 'Сохранить CORS'}</button></form>}
-      {owner && onSaveRecordingQuota && <form className="dialog-form settings-section" onSubmit={saveRecordingQuota}><div><h3>Хранилище записей</h3><p>Сколько места на сервере можно занять копиями записей звонков. Копия хранится 24 часа; файл больше 2 ГБ или сверх лимита остаётся только у записавшего.</p></div><label><span>Лимит, ГБ</span><input type="number" inputMode="numeric" step={1} min={recordingStorage ? recordingStorage.min_quota_bytes / GIB : 1} max={recordingStorage ? recordingStorage.max_quota_bytes / GIB : undefined} value={quotaValue} onChange={(event) => setQuotaValue(event.target.value)} disabled={!recordingStorage || quotaPending} placeholder={recordingStorage ? undefined : 'Загрузка…'}/></label><small className="field-hint">{recordingStorage ? `Занято ${gib(recordingStorage.used_bytes)} из ${gib(recordingStorage.quota_bytes)} ГБ · по умолчанию ${gib(recordingStorage.default_quota_bytes)} ГБ. Уменьшение не удаляет уже сохранённые копии — они исчезнут по истечении 24 часов.` : 'Загружаем текущий лимит…'}</small><button className="button button--secondary align-self-end" disabled={!recordingStorage || quotaPending}>{quotaPending ? <span className="spinner"/> : 'Сохранить лимит'}</button></form>}
+      {owner && storageApi && storageToken && <StorageManager api={storageApi} token={storageToken}/>}
+      {owner && !storageApi && onSaveRecordingQuota && <form className="dialog-form settings-section" onSubmit={saveRecordingQuota}><div><h3>Хранилище записей</h3><p>Сколько места на сервере можно занять копиями записей звонков. Копия хранится 24 часа; файл больше 2 ГБ или сверх лимита остаётся только у записавшего.</p></div><label><span>Лимит, ГБ</span><input type="number" inputMode="numeric" step={1} min={recordingStorage ? recordingStorage.min_quota_bytes / GIB : 1} max={recordingStorage ? recordingStorage.max_quota_bytes / GIB : undefined} value={quotaValue} onChange={(event) => setQuotaValue(event.target.value)} disabled={!recordingStorage || quotaPending} placeholder={recordingStorage ? undefined : 'Загрузка…'}/></label><small className="field-hint">{recordingStorage ? `Занято ${gib(recordingStorage.used_bytes)} из ${gib(recordingStorage.quota_bytes)} ГБ · по умолчанию ${gib(recordingStorage.default_quota_bytes)} ГБ. Уменьшение не удаляет уже сохранённые копии — они исчезнут по истечении 24 часов.` : 'Загружаем текущий лимит…'}</small><button className="button button--secondary align-self-end" disabled={!recordingStorage || quotaPending}>{quotaPending ? <span className="spinner"/> : 'Сохранить лимит'}</button></form>}
       {owner && <div className="dialog-form settings-section"><div><h3>Диагностика клиентов</h3><p>HTTP, WebSocket и WebRTC-метрики автоматически хранятся на сервере 24 часа. Секреты, сообщения, SDP и ICE-адреса удаляются.</p></div><button className="button button--secondary align-self-end" type="button" disabled={diagnosticsPending} onClick={() => void downloadDiagnostics()}>{diagnosticsPending ? <span className="spinner"/> : 'Скачать JSON'}</button></div>}
       {!owner && <div className="danger-zone"><div><h3>Удалить аккаунт</h3><p>Профиль, настройки и доступ к этому инстансу будут удалены. Старые сообщения останутся обезличенными.</p></div>{confirming ? <div className="danger-confirm"><span>Удалить аккаунт без возможности восстановления?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить аккаунт'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить аккаунт</button>}</div>}
       {owner && <div className="instance-notice"><Icon name="lock"/><div><b>Владелец инстанса</b><p>Владелец не может удалить пространство или свой аккаунт из приложения.</p></div></div>}

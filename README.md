@@ -153,16 +153,15 @@ in [`src/services/realtime.ts`](src/services/realtime.ts).
 
 ## Releases and upgrading
 
-Frontend and backend share **2.2.0**. Install backend **2.2.0**, including migrations
-**000025–000026**, before this frontend. The migrations add news-channel settings,
-comments and durable notification counters. Existing messages are not replayed as
-new notifications. Retain a verified backup before upgrading.
+Frontend and backend share **2.3.0**. Install backend **2.3.0**, including migrations
+**000027–000030**, before this frontend. The migrations add custom roles, thread
+subscriptions, personal conversations and attachment metadata. Retain a verified backup before upgrading.
 
-The published frontend image is `ghcr.io/looneman1/voxhold-frontend:2.2.0`;
-`2.2` and `latest` are moving tags. To update an existing production deployment:
+The published frontend image is `ghcr.io/looneman1/voxhold-frontend:2.3.0`;
+`2.3` and `latest` are moving tags. To update an existing production deployment:
 
 ```bash
-./update.sh --backend-version 2.2.0 --frontend-version 2.2.0
+./update.sh --backend-version 2.3.0 --frontend-version 2.3.0
 ```
 
 Run that command from the
@@ -183,3 +182,6 @@ GitHub Releases automatically.
 - [Media recovery and channel members](docs/media-recovery-and-members.md)
 - [Client performance](docs/client-performance.md)
 - [Contributing](CONTRIBUTING.md)
+
+
+Community 2.3: [attachments, conversations, inbox, roles and text threads](docs/community-2.3.md).
