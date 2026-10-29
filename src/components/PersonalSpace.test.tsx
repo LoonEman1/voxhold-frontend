@@ -98,3 +98,20 @@ it('keeps a created role available when assigning it fails, so retry does not cr
   expect(screen.queryByRole('button', { name: 'Создать и назначить' })).toBeNull()
   expect(create).toHaveBeenCalledOnce()
 })
+
+it('does not resurrect exhausted older-history pagination on a background refresh', async () => {
+  const message = (id: number) => ({ id, conversation_id: 7, author: { user_id: 2, username: 'Лера' }, content: `message-${id}`, created_at: id, client_message_id: String(id) })
+  let latestLoads = 0
+  setup((path, method) => {
+    if (path.endsWith('/conversations') && method === 'POST') return { id: 7 }
+    if (path.includes('/messages?before=')) return { messages: [message(1)], has_more: false }
+    if (path.endsWith('/messages')) { latestLoads++; return { messages: [message(2), message(3)], has_more: true } }
+  })
+  act(() => window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: 2 })))
+  fireEvent.click(await screen.findByRole('button', { name: 'Раньше' }))
+  await screen.findByText('message-1')
+  expect(screen.queryByRole('button', { name: 'Раньше' })).toBeNull()
+  act(() => window.dispatchEvent(new Event('focus')))
+  await waitFor(() => expect(latestLoads).toBeGreaterThan(1))
+  expect(screen.queryByRole('button', { name: 'Раньше' })).toBeNull()
+})

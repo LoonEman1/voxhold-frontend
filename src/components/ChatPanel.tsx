@@ -7,6 +7,7 @@ import type { Channel, ChannelRead, Message, MessageReply, ServerMember, ServerR
 import { formatDate, formatTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
+import { MessageAvatar, MessageHeader } from './MessageIdentity'
 import { mentionDirectory, parseMentions, mentionsMe } from '../lib/mentions'
 import { MessageMentions } from './MessageMentions'
 import { MentionComposer } from './MentionComposer'
@@ -467,9 +468,9 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
             <div key={key} data-index={index} ref={virtualized ? virtualizer.measureElement : undefined}>
               {showDate && <div className="date-divider"><span>{formatDate(message.created_at)}</span></div>}
               <article data-message-id={message.id} onContextMenu={(event) => openMessageMenu(event, message)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); setMessageMenu({ id: message.id, x: box.left + 40, y: box.top + 20, expanded: false }) } }} className={`message ${mentioned ? 'message--mentioned' : ''} ${grouped ? 'message--grouped' : ''} ${mine ? 'message--mine' : ''} ${pinned ? 'message--pinned' : ''} ${focusedMessageId === message.id ? 'message--focused' : ''}`}>
-                {!grouped && <button className="message__avatar-button" onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)} aria-label={`Открыть профиль ${message.author.username}`}><Avatar userId={message.author.user_id} name={message.author.username}/></button>}
+                {!grouped && <MessageAvatar userId={message.author.user_id} name={message.author.username} onOpen={() => onOpenProfile(message.author.user_id, message.author.username, role)}/>}
                 <div className="message__body">
-                  {!grouped && <header><button className={`message__author message__author--${role}`} onClick={() => onOpenProfile(message.author.user_id, message.author.username, role)}>{message.author.username}</button><span className={`role-badge role-badge--${role}`}>{roleMeta[role].shortLabel}</span><CustomRoleBadges userId={message.author.user_id}/>{mine && <span className="you-tag">вы</span>}<time dateTime={new Date(message.created_at * 1000).toISOString()}>{formatTime(message.created_at)}</time></header>}
+                  {!grouped && <MessageHeader name={message.author.username} createdAt={message.created_at} mine={mine} role={role} badges={<CustomRoleBadges userId={message.author.user_id}/>} onOpen={() => onOpenProfile(message.author.user_id, message.author.username, role)}/>}
                   {pinned && <span className="message__pin-label"><Icon name="pin" size={11}/> Закреплено</span>}
                   {message.forward && <ForwardAttribution message={message}/>}
                   {message.reply && <MessageQuote reference={message.reply} members={members} onOpen={onOpenMessage}/>}
