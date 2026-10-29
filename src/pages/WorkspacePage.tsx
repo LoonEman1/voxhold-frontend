@@ -8,6 +8,8 @@ import { Avatar } from '../components/Avatar'
 import { MembersSidebar } from '../components/MembersSidebar'
 import { Brand } from '../components/Brand'
 import { ChatPanel } from '../components/ChatPanel'
+import { VoiceSettingsDialog } from '../components/VoiceSettingsDialog'
+import { WorkspaceDialogBoundary } from '../components/WorkspaceDialogBoundary'
 import { WorkspaceContentBoundary } from '../components/WorkspaceContentBoundary'
 import { MemberCard } from '../components/MemberCard'
 import { CommunityProvider, CommunityNavigation, CommunitySidebar, CommunityContent, openCommunityChannels } from '../components/Community'
@@ -63,7 +65,6 @@ const ChannelAccessSettings = lazy(() => import('../components/ChannelAccessSett
 const loadRecordingsDialog = () => import('../components/RecordingsDialog').then((module) => ({ default: module.RecordingsDialog }))
 const RecordingsDialog = lazy(loadRecordingsDialog)
 const StreamSettingsDialog = lazy(() => import('../components/StreamSettingsDialog').then((module) => ({ default: module.StreamSettingsDialog })))
-const VoiceSettingsDialog = lazy(() => import('../components/VoiceSettingsDialog').then((module) => ({ default: module.VoiceSettingsDialog })))
 
 type Dialog = 'server' | 'channel' | 'channelSettings' | 'invite' | 'profile' | 'userProfile' | 'settings' | 'voiceSettings' | 'streamSettings' | 'logout' | null
 type MessagePanel = 'search' | 'pins' | null
@@ -629,7 +630,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const refreshVoiceDevices = useCallback(async (requestPermission = false) => {
     setVoiceDevicesLoading(true)
     try {
-      setVoiceDevices(await enumerateVoiceDevices(requestPermission && !voiceMediaRef.current))
+      setVoiceDevices(await enumerateVoiceDevices(requestPermission && !voiceInputRef.current?.isHealthy))
     } catch (error) {
       notify(voiceErrorMessage(error), 'error')
     } finally {
@@ -1298,6 +1299,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           setVoiceStatus('signaling')
         }
       },
+      onInputError: (error) => { if (voiceMediaRef.current === media) { setMicUnavailable(true); setVoiceError(voiceErrorMessage(error)) } },
       onError: fail,
       onInputLevel: (level) => {
         voiceInputLevelRef.current = level
@@ -1726,6 +1728,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
             setVoiceStatus('signaling')
           }
         },
+        onInputError: (error) => { if (voiceMediaRef.current === media) { setMicUnavailable(true); setVoiceError(voiceErrorMessage(error)) } },
         onError: () => undefined,
         onRemoteLevels: applyRemoteLevels,
         onPlaybackBlocked: () => setVoicePlaybackBlocked(true),
@@ -1894,6 +1897,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }
 
   const openVoiceSettings = () => {
+    clientDiagnostics.record('media', 'voice_settings_opened', 'info', { voice_active: !!voiceSessionRef.current, stream_role: streamRoleRef.current ?? null })
     setDialog('voiceSettings')
     void refreshVoiceDevices(false)
   }
@@ -2351,7 +2355,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   if (initialLoading) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div><span>Собираем ваши комнаты…</span></div>
 
   return (
-    <CommunityProvider onViewChange={(active) => { personalOpenRef.current = active; setPersonalOpen(active); setMobileNav(false); setMessagePanel(null) }} api={api} token={token ?? ''} userId={user?.id ?? 0} serverId={selectedServerId} owner={selectedServer?.role === 'owner'} members={members} onMessage={(message) => historyStore.receive(message)} onNavigate={(item) => { setSelectedServerId(item.server_id); setSelectedChannelId(item.channel_id); setMessageTarget({ channelId: item.channel_id, messageId: item.message_id }); setFocusedMessageId(item.message_id); setMessagePanel(null); setMobileNav(false) }}><MediaActivityProvider value={mediaActivity}><AvatarProvider api={api} token={token ?? ''} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()} onPointerDownCapture={(event) => { memberAnchor.current = { x: event.clientX, y: event.clientY } }}>
+    <CommunityProvider onOpenProfile={(id, _name, role) => void openUserProfile(id, role)} onViewChange={(active) => { personalOpenRef.current = active; setPersonalOpen(active); setMobileNav(false); setMessagePanel(null) }} api={api} token={token ?? ''} userId={user?.id ?? 0} serverId={selectedServerId} owner={selectedServer?.role === 'owner'} members={members} onMessage={(message) => historyStore.receive(message)} onNavigate={(item) => { setSelectedServerId(item.server_id); setSelectedChannelId(item.channel_id); setMessageTarget({ channelId: item.channel_id, messageId: item.message_id }); setFocusedMessageId(item.message_id); setMessagePanel(null); setMobileNav(false) }}><MediaActivityProvider value={mediaActivity}><AvatarProvider api={api} token={token ?? ''} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()} onPointerDownCapture={(event) => { memberAnchor.current = { x: event.clientX, y: event.clientY } }}>
       <CommunityNavigation/>
       <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
@@ -2401,7 +2405,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       </aside>}
 
       </CommunityContent></WorkspaceContentBoundary>
-      {memberCardOpen && <MemberCard key={profileGeneration.current} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} online={onlineUserIds.has(viewedProfile?.user_id ?? 0)} anchor={memberCardAnchor} onClose={() => setMemberCardOpen(false)} onOpenProfile={() => { setMemberCardOpen(false); setDialog('userProfile') }} onMessage={() => { if (viewedProfile) window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: viewedProfile.user_id })); setMemberCardOpen(false) }}/>}
+      {memberCardOpen && <WorkspaceDialogBoundary resetKey={`member:${profileGeneration.current}`} onClose={() => setMemberCardOpen(false)}><MemberCard key={profileGeneration.current} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} online={onlineUserIds.has(viewedProfile?.user_id ?? 0)} anchor={memberCardAnchor} onClose={() => setMemberCardOpen(false)} onOpenProfile={() => { setMemberCardOpen(false); setDialog('userProfile') }} onMessage={() => { if (viewedProfile) window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: viewedProfile.user_id })); setMemberCardOpen(false) }}/></WorkspaceDialogBoundary>}
       {mobileNav && <button className="mobile-scrim" aria-label="Закрыть меню" onClick={() => setMobileNav(false)}/>}
 
       {/* Mini and expanded layouts render different <video> elements; the key
@@ -2428,6 +2432,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         onLeave={leaveStream}
       />}
 
+      <WorkspaceDialogBoundary resetKey={`${dialog}:${recordingsOpen}:${notificationChannel?.id ?? ''}:${forwardSource?.message.id ?? ''}`} onClose={() => { setDialog(null); setRecordingsOpen(false); setNotificationChannel(null); setForwardSource(null) }}>
       {recordingsOpen && <Suspense fallback={<ModalLoading title="Записи сервера" eyebrow="ЗАПИСИ ЗВОНКОВ" onClose={() => setRecordingsOpen(false)}/>}> <RecordingsDialog limits={recordingStorage ?? recording.limits} channels={channels} open={recordingsOpen} onClose={() => setRecordingsOpen(false)} records={recording.records} locals={recording.locals} serverId={selectedServerId} progress={recording.progress} voiceActive={!!voiceSession} onDownload={recording.download} onRemoveLocal={recording.removeLocal} onRetry={recording.retry} loadPreview={recording.loadPreview} currentUserId={user?.id} onRemoveServer={recording.removeServer}/> </Suspense>}
       <MessageNotifications center={notificationCenter} userId={user?.id ?? 0}/>
       {notificationChannel && token && <Suspense fallback={null}><ChannelNotificationsDialog key={notificationChannel.id} open channel={notificationChannel} api={api} token={token} liveSettings={notificationSettings} onSaved={(value) => { notificationCenter.setSettings(value); setNotificationSettings(value) }} onClose={() => setNotificationChannel(null)} onPreviewSound={() => uiSounds.play('message_notification', voicePreferencesRef.current.uiSoundVolume || 50, voicePreferencesRef.current.outputDeviceId)}/></Suspense>}
@@ -2437,12 +2442,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <InviteUserDialog onListLinks={listInviteLinks} onRevokeLink={revokeInviteLink} open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <ProfileDialog open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && avatarVersions.has(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog onMessage={viewedProfile && viewedProfile.user_id !== user?.id ? () => { window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: viewedProfile.user_id })); setDialog(null) } : undefined} online={onlineUserIds.has(viewedProfile?.user_id ?? 0)} open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
-      {dialog === 'voiceSettings' && <Suspense fallback={<ModalLoading title="Настройки голоса" onClose={() => setDialog(null)}/>}> <VoiceSettingsDialog open={dialog === 'voiceSettings'} onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/> </Suspense>}
+      {dialog === 'voiceSettings' && <VoiceSettingsDialog open onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>}
       {dialog === 'streamSettings' && <Suspense fallback={<ModalLoading title="Трансляция экрана" onClose={() => setDialog(null)}/>}> <StreamSettingsDialog open={dialog === 'streamSettings'} busy={streamStatus !== 'idle'} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/> </Suspense>}
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
       {contextMenu && <ContextMenu menu={contextMenu} onClose={() => setContextMenu(null)}/>}
       {confirmRequest && <ConfirmDialog open title={confirmRequest.title} description={confirmRequest.description} confirmLabel={confirmRequest.confirmLabel} onClose={() => setConfirmRequest(null)} onConfirm={confirmRequest.action}/>}
       <ServerSettingsDialog storageApi={api} storageToken={token ?? undefined} open={dialog === 'settings'} onClose={() => setDialog(null)} server={selectedServer} corsOrigins={corsOrigins} corsOriginsLoading={corsOriginsLoading} onRename={async (name) => { if (!token || !selectedServer) return; const updated = await api.servers.update(token, selectedServer.id, name); setServers((current) => current.map((item) => item.id === selectedServer.id ? { ...item, ...updated } : item)); notify('Название обновлено', 'success') }} onDeleteAccount={async () => { if (!token) return; await api.account.delete(token); expire() }} onDownloadDiagnostics={downloadClientDiagnostics} onSaveCorsOrigins={saveCorsOrigins} recordingStorage={recordingStorage} onSaveRecordingQuota={saveRecordingQuota}/>
+      </WorkspaceDialogBoundary>
     </main></AvatarProvider></MediaActivityProvider></CommunityProvider>
   )
 }
