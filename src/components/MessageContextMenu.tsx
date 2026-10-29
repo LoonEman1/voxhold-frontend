@@ -5,10 +5,10 @@ import { QUICK_REACTIONS, REACTION_CATALOG, reactionLabel, recentReactions, type
 import { Icon, type IconName } from './Icon'
 
 interface Action { key: string; label: string; icon: IconName; danger?: boolean; run: () => void }
-export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onDiscuss, onReply, onEdit, onPin, onCopy, onForward, onDelete }: {
+export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onDiscuss, onReply, onEdit, onPin, onCopy, onForward, onSave, onDelete }: {
   message: Message; x: number; y: number; expanded?: boolean; canEdit: boolean; canDelete: boolean; canPin: boolean; canReply?: boolean; pinned: boolean
   pending: Readonly<Record<string, boolean>>; onClose: () => void; onReact?: (emoji: string) => void
-  onDiscuss?: () => void; onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onDelete: () => void
+  onDiscuss?: () => void; onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onSave?: () => void; onDelete: () => void
 }) {
   const root = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState(initiallyExpanded), [query, setQuery] = useState('')
@@ -24,6 +24,7 @@ export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded 
     ...(canEdit ? [{ key: 'edit', label: 'Изменить', icon: 'edit' as const, run: onEdit }] : []),
     ...(canPin ? [{ key: 'pin', label: pinned ? 'Открепить' : 'Закрепить', icon: 'pin' as const, run: onPin }] : []),
     { key: 'copy', label: 'Копировать текст', icon: 'copy', run: onCopy },
+    ...(onSave ? [{ key: 'save', label: 'В избранное', icon: 'pin' as const, run: onSave }] : []),
     ...(onForward ? [{ key: 'forward', label: 'Переслать', icon: 'forward' as const, run: onForward }] : []),
     ...(canDelete ? [{ key: 'delete', label: 'Удалить', icon: 'trash' as const, run: onDelete, danger: true }] : []),
   ]
@@ -35,7 +36,18 @@ export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded 
     const previous = document.activeElement as HTMLElement | null
     root.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
     const pointer = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) close.current() }
-    const scroll = (event: Event) => { if (!root.current?.contains(event.target as Node)) close.current() }
+    // A scroll event queued before the menu opened can arrive after focus moved
+    // into it. Dismiss only when a known scroll container actually moved.
+    const offsets = new WeakMap<Element, { top: number; left: number }>()
+    for (const element of document.querySelectorAll('.messages, .personal-scroll, .channel-sidebar, .members-sidebar, .news-comments, .message-panel')) offsets.set(element, { top: element.scrollTop, left: element.scrollLeft })
+    if (document.scrollingElement) offsets.set(document.scrollingElement, { top: document.scrollingElement.scrollTop, left: document.scrollingElement.scrollLeft })
+    const scroll = (event: Event) => {
+      if (root.current?.contains(event.target as Node)) return
+      const element = event.target instanceof Element ? event.target : document.scrollingElement
+      const before = element && offsets.get(element)
+      if (element && before && before.top === element.scrollTop && before.left === element.scrollLeft) return
+      close.current()
+    }
     const dismiss = () => close.current()
     window.addEventListener('pointerdown', pointer, true); document.addEventListener('scroll', scroll, true)
     window.addEventListener('blur', dismiss); window.addEventListener('resize', dismiss)
