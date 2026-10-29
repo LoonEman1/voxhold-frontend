@@ -124,6 +124,15 @@ describe('DecodeWatchdog', () => {
     watchdog.stop()
   })
 
+  it('keeps a previously decoded static screen on a healthy connection without restarting ICE', async () => {
+    const samples = Array.from({ length: 60 }, () => ({ bytesReceived: 1000, framesDecoded: 10 }))
+    const watchdog = createWatchdog(samples, counters, { getConnectionState: () => 'connected' })
+    watchdog.start(); await runTicks(60)
+    expect(counters.iceRestarts).toBe(0)
+    expect(counters.rewatches).toBe(0)
+    watchdog.stop()
+  })
+
   it('limits keyframe requests inside the rolling window', async () => {
     // Bytes keep flowing so the keyframe path is exercised exclusively.
     let byteCounter = 3000

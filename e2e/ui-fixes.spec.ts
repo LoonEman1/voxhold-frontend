@@ -490,6 +490,19 @@ test('background desktop notifications require explicit permission and use reada
   await foreground.close()
 })
 
+test('personal space keeps channel mentions unread and a notification returns to that channel', async ({ page }) => {
+  const fixture = await openTextNotifications(page)
+  await page.getByRole('button', { name: 'Личная панель' }).click()
+  await page.getByRole('button', { name: 'Личные сообщения', exact: true }).click()
+  await expect(page.locator('.personal-content')).toBeVisible()
+  fixture.emit('notification.message', fixture.notification(810, 2))
+  await expect(page.locator('.message-notification')).toHaveCount(1)
+  await page.locator('.message-notification__open').click()
+  await expect(page.locator('.personal-content')).toHaveCount(0)
+  await expect(page.locator('.content-header h1')).toHaveText('общий')
+  await expect(page.locator('[data-message-id="810"]')).toBeVisible()
+})
+
 test('a covering dialog does not suppress mentions in the selected text channel', async ({ page }) => {
   const fixture = await openTextNotifications(page)
   await page.bringToFront()

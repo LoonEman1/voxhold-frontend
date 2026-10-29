@@ -1,3 +1,4 @@
+import { recordRenderError } from './services/renderDiagnostics'
 import { Component, Suspense, lazy, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Brand } from './components/Brand'
@@ -82,10 +83,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
   static getDerivedStateFromError() { return { failed: true } }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    clientDiagnostics.record('client', 'render_error', 'error', {
-      error_name: error.name,
-      component_stack_present: !!info.componentStack,
-    })
+    recordRenderError(error, info, 'app')
     console.error('Voxhold render error', error, info)
   }
 

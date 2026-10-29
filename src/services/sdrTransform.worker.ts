@@ -12,6 +12,8 @@ self.onmessage = async ({ data }: MessageEvent<TransformRequest>) => {
   let writer: WritableStreamDefaultWriter<VideoFrame> | undefined
   let refresh: ReturnType<typeof setInterval> | undefined
   let writing = false
+  let writeStartedAt = 0
+  let failureReported = false
   let hasPicture = false
   let lastTimestamp = -Infinity
   let lastEmittedAt = 0
@@ -25,6 +27,7 @@ self.onmessage = async ({ data }: MessageEvent<TransformRequest>) => {
     const emit = async (timestamp: number, duration?: number) => {
       if (writing) return
       writing = true
+      writeStartedAt = performance.now()
       const output = new VideoFrame(lastPicture ?? canvas, { timestamp: Math.max(timestamp, lastTimestamp + 1), duration, alpha: 'discard' })
       lastTimestamp = output.timestamp
       lastEmittedAt = performance.now()
@@ -32,6 +35,7 @@ self.onmessage = async ({ data }: MessageEvent<TransformRequest>) => {
     }
     self.postMessage({ type: 'ready' })
     refresh = setInterval(() => {
+      if (writing && !failureReported && performance.now() - writeStartedAt >= 8_000) { failureReported = true; self.postMessage({ type: 'error', reason: 'SDR writer stopped consuming frames' }); return }
       const elapsed = performance.now() - lastEmittedAt
       if (hasPicture && !writing && elapsed >= data.idleRefreshMs) {
         void emit(lastTimestamp + Math.max(1, Math.round(elapsed * 1000))).catch(() => self.postMessage({ type: 'error', reason: 'SDR output stopped' }))
