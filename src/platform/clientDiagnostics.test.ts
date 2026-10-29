@@ -30,6 +30,18 @@ describe('client diagnostics', () => {
     expect(writes).toHaveBeenCalledTimes(2)
   })
 
+  it('finishes persistence and disposes timers after its browser window detaches', () => {
+    vi.useFakeTimers()
+    const diagnostics = new ClientDiagnostics()
+    diagnostics.configure('/backend')
+    diagnostics.record('client', 'detached_window')
+    vi.stubGlobal('window', undefined)
+    expect(() => vi.advanceTimersByTime(250)).not.toThrow()
+    diagnostics.record('client', 'late_event')
+    expect(() => diagnostics.dispose()).not.toThrow()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('redacts signaling and user content recursively', () => {
     expect(sanitizeDiagnosticDetails({
       route: '/api/v1/messages',

@@ -117,30 +117,36 @@ export class ClientDiagnostics {
   private baseURL = ''
   private token = ''
   private flushing = false
-  private timer: number | null = null
+  private cancelTimer: (() => void) | null = null
   private listenersInstalled = false
-  private persistenceTimer: number | null = null
+  private cancelPersistence: (() => void) | null = null
   private readonly cleanupListeners: Array<() => void> = []
   private performanceObserver: PerformanceObserver | null = null
   private longTaskCount = 0
   private longTaskMs = 0
 
   private persistPending() {
-    if (this.persistenceTimer !== null) window.clearTimeout(this.persistenceTimer)
-    this.persistenceTimer = null
+    this.cancelPersistence?.()
+    this.cancelPersistence = null
     storeJSON(EVENTS_STORAGE_KEY, this.pending)
   }
 
   private schedulePersistence() {
-    if (typeof window === 'undefined' || this.persistenceTimer !== null) return
-    this.persistenceTimer = window.setTimeout(() => this.persistPending(), 250)
+    if (typeof window === 'undefined' || this.cancelPersistence !== null) return
+    // Keep cancellation bound to the window that created this timer. A late
+    // callback/dispose can run after that window is detached or replaced.
+    const clear = window.clearTimeout.bind(window)
+    const id = window.setTimeout(() => { this.cancelPersistence = null; this.persistPending() }, 250)
+    this.cancelPersistence = () => clear(id)
   }
 
   configure(baseURL: string) {
     this.baseURL = baseURL.replace(/\/$/, '')
     if (typeof window === 'undefined' || this.listenersInstalled) return
     this.listenersInstalled = true
-    this.timer = window.setInterval(() => {
+    const ownerWindow = window, ownerDocument = document
+    const clearInterval = ownerWindow.clearInterval.bind(ownerWindow)
+    const timer = ownerWindow.setInterval(() => {
       if (this.longTaskCount > 0) {
         this.record('client', 'main_thread_load', 'info', { long_task_count: this.longTaskCount, long_task_ms: Math.round(this.longTaskMs), interval_ms: FLUSH_INTERVAL_MS })
         this.longTaskCount = 0
@@ -148,8 +154,9 @@ export class ClientDiagnostics {
       }
       void this.flush()
     }, FLUSH_INTERVAL_MS)
+    this.cancelTimer = () => clearInterval(timer)
     const online = () => { void this.flush() }
-    const hidden = () => { if (document.visibilityState === 'hidden') { this.persistPending(); void this.flush(true) } }
+    const hidden = () => { if (ownerDocument.visibilityState === 'hidden') { this.persistPending(); void this.flush(true) } }
     const pageHide = () => { this.persistPending(); void this.flush(true) }
     const error = (event: ErrorEvent) => {
       this.record('client', 'uncaught_error', 'error', {
@@ -164,22 +171,22 @@ export class ClientDiagnostics {
         error_name: event.reason instanceof Error ? event.reason.name : typeof event.reason,
       })
     }
-    window.addEventListener('online', online)
-    window.addEventListener('pagehide', pageHide)
-    document.addEventListener('visibilitychange', hidden)
-    window.addEventListener('error', error)
-    window.addEventListener('unhandledrejection', rejection)
+    ownerWindow.addEventListener('online', online)
+    ownerWindow.addEventListener('pagehide', pageHide)
+    ownerDocument.addEventListener('visibilitychange', hidden)
+    ownerWindow.addEventListener('error', error)
+    ownerWindow.addEventListener('unhandledrejection', rejection)
     this.cleanupListeners.push(() => {
-      window.removeEventListener('online', online)
-      window.removeEventListener('pagehide', pageHide)
-      document.removeEventListener('visibilitychange', hidden)
-      window.removeEventListener('error', error)
-      window.removeEventListener('unhandledrejection', rejection)
+      ownerWindow.removeEventListener('online', online)
+      ownerWindow.removeEventListener('pagehide', pageHide)
+      ownerDocument.removeEventListener('visibilitychange', hidden)
+      ownerWindow.removeEventListener('error', error)
+      ownerWindow.removeEventListener('unhandledrejection', rejection)
     })
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
       try {
         this.performanceObserver = new PerformanceObserver((list) => {
-          if (document.visibilityState !== 'visible') return
+          if (ownerDocument.visibilityState !== 'visible') return
           for (const entry of list.getEntries()) { this.longTaskCount += 1; this.longTaskMs += entry.duration }
         })
         this.performanceObserver.observe({ type: 'longtask' })
@@ -261,8 +268,8 @@ export class ClientDiagnostics {
   }
 
   dispose() {
-    if (this.timer !== null) window.clearInterval(this.timer)
-    this.timer = null
+    this.cancelTimer?.()
+    this.cancelTimer = null
     this.persistPending()
     this.cleanupListeners.splice(0).forEach((cleanup) => cleanup())
     this.performanceObserver?.disconnect()
