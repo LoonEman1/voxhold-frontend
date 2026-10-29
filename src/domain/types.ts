@@ -118,6 +118,7 @@ export interface ReactorPage { users: MessageAuthor[]; has_more: boolean; next_u
 export type { Attachment } from './community'
 
 export interface Message {
+  poll?: import('./community').Poll
   attachments?: import('./community').Attachment[]
   thread_root_id?: number
   comment_count?: number

@@ -625,7 +625,8 @@ test('reply composer tracks deletions and sends a quoted message', async ({ page
 test('forward dialog retries the same request and retains original attribution', async ({ page }) => {
   await openTextNotifications(page)
   const attempts: Record<string, unknown>[] = []
-  await page.route('**/channels/3/messages/forward', async (route) => {
+  await page.route('**/me/forward-destinations', async (route) => route.fulfill({ json: [{kind:'channel', id:3, server_id:1, name:'проекты'}] }))
+  await page.route('**/me/forward', async (route) => {
     const body = route.request().postDataJSON(); attempts.push(body)
     if (attempts.length === 1) { await route.fulfill({ status: 503, json: { error: 'temporary failure' } }); return }
     await route.fulfill({ status: 201, json: { id: 121, channel_id: 3, content: 'Nikita, проверь пожалуйста макет — @Nikita', author: { user_id: 2, username: 'Nikita' }, forward: { author: { user_id: 1, username: 'Александр' }, created_at: 1800000000 }, created_at: 1800000001, revision: 1, edited_at: null, reactions: [], reactions_revision: 1 } })
@@ -641,7 +642,7 @@ test('forward dialog retries the same request and retains original attribution',
   await expect(dialog).toHaveCount(0)
   expect(attempts).toHaveLength(2)
   expect(attempts[0]).toEqual(attempts[1])
-  expect(attempts[0]?.source_message_id).toBe(1)
+  expect(attempts[0]?.source).toEqual({kind:'channel',id:1})
   await page.route('**/channels/3/messages/sync**', async (route) => route.fulfill({ json: { messages: [{ id: 121, channel_id: 3, content: 'Nikita, проверь пожалуйста макет — @Nikita', author: { user_id: 2, username: 'Nikita' }, forward: { author: { user_id: 1, username: 'Александр' }, created_at: 1800000000 }, created_at: 1800000001, revision: 1, edited_at: null, reactions: [], reactions_revision: 1 }], deleted_ids: [], cursor: 5, reset: true, has_more: false, has_older: false } }))
   await page.getByRole('button', { name: /^проекты(?:,|$)/ }).click()
   const row = page.locator('[data-message-id="121"]')
