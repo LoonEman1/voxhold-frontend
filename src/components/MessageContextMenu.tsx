@@ -5,10 +5,10 @@ import { QUICK_REACTIONS, REACTION_CATALOG, reactionLabel, recentReactions, type
 import { Icon, type IconName } from './Icon'
 
 interface Action { key: string; label: string; icon: IconName; danger?: boolean; run: () => void }
-export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onReply, onEdit, onPin, onCopy, onForward, onDelete }: {
+export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onDiscuss, onReply, onEdit, onPin, onCopy, onForward, onDelete }: {
   message: Message; x: number; y: number; expanded?: boolean; canEdit: boolean; canDelete: boolean; canPin: boolean; canReply?: boolean; pinned: boolean
   pending: Readonly<Record<string, boolean>>; onClose: () => void; onReact?: (emoji: string) => void
-  onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onDelete: () => void
+  onDiscuss?: () => void; onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onDelete: () => void
 }) {
   const root = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState(initiallyExpanded), [query, setQuery] = useState('')
@@ -19,6 +19,7 @@ export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded 
   const options = useMemo(() => REACTION_CATALOG.filter((option) => (category === 'all' || category === 'recent' && recents.includes(option.emoji) || option.category === category) && `${option.label} ${option.emoji}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [category, query, recents])
   const selected = new Set(message.reactions?.filter((reaction) => reaction.me).map((reaction) => reaction.emoji))
   const actions: Action[] = [
+    ...(onDiscuss ? [{ key: 'discuss', label: (message.comment_count ?? 0) > 0 ? 'Открыть обсуждение' : 'Начать обсуждение', icon: 'chat' as const, run: onDiscuss }] : []),
     ...(canReply ? [{ key: 'reply', label: 'Ответить', icon: 'reply' as const, run: onReply }] : []),
     ...(canEdit ? [{ key: 'edit', label: 'Изменить', icon: 'edit' as const, run: onEdit }] : []),
     ...(canPin ? [{ key: 'pin', label: pinned ? 'Открепить' : 'Закрепить', icon: 'pin' as const, run: onPin }] : []),

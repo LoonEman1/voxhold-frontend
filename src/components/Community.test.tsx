@@ -2,10 +2,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createApi } from '../services/api'
-import { CommunityNavigation, CommunityProvider } from './Community'
+import { CommunityContent, CommunityNavigation, CommunityProvider } from './Community'
 import { StorageManager } from './CommunitySettings'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
-import type { Message } from '../domain/types'
 
 afterEach(cleanup)
 function fixture(request: (input: { path: string; method?: string; body?: unknown; rawBody?: BodyInit; onUploadProgress?: (n: number) => void }) => unknown) {
@@ -21,7 +20,7 @@ it('opens a direct conversation from a member action and retains the same retry 
     if (path.endsWith('/messages')) return { messages: [], has_more: false }
     return defaults(path)
   })
-  render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><CommunityNavigation/></CommunityProvider>)
+  render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><CommunityNavigation/><CommunityContent><div>Каналы</div></CommunityContent></CommunityProvider>)
   act(() => window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: 2 })))
   const input = await screen.findByLabelText('Сообщение в беседу')
   fireEvent.change(input, { target: { value: 'hello' } }); fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
@@ -37,14 +36,52 @@ it('invalidates a cleanup preview when category changes and only submits the rev
   fireEvent.click(screen.getByRole('button', { name: 'Рассчитать очистку' })); fireEvent.click(await screen.findByRole('button', { name: /Подтвердить удаление/ }))
   await waitFor(() => expect(calls.find((c) => c.path.endsWith('/cleanup'))?.body).toEqual({ token: 'reviewed-plan' }))
 })
-function UploadFixture() { const upload = useAttachmentUpload({ id: 2, server_id: 1, name: 'chat', kind: 'text', position: 0, created_by: 1, created_at: 1 }, true); return <section onPaste={upload.onPaste} onDrop={upload.onDrop} onDragOver={upload.onDragOver}>{upload.control}</section> }
-it('retries an interrupted file upload with its original attachment and message keys', async () => {
-  const uploads: string[] = [], messages: string[] = [], received = vi.fn()
-  const api = fixture(({ path, body, onUploadProgress }) => { if (path.includes('/attachments/')) { uploads.push(path); if (uploads.length === 1) throw new Error('connection lost'); onUploadProgress?.(1); return { id: 'a', filename: 'a.txt', mime_type: 'text/plain', size_bytes: 2 } }; if (path.endsWith('/messages')) { messages.push((body as { client_message_id: string }).client_message_id); return { id: 5, channel_id: 2, attachments: [{ id: 'a' }] } as Message }; return defaults(path) })
-  const { container } = render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={received} onNavigate={() => undefined}><UploadFixture/></CommunityProvider>)
+function UploadFixture({ onSend }: { onSend: (ids: string[]) => void | Promise<void> }) { const upload = useAttachmentUpload({ id: 2, server_id: 1, name: 'chat', kind: 'text', position: 0, created_by: 1, created_at: 1 }, true); return <section onPaste={upload.onPaste} onDrop={upload.onDrop} onDragOver={upload.onDragOver}>{upload.control}<button disabled={upload.preparing} onClick={() => { void upload.prepare().then(async (ids) => { await onSend(ids); upload.commit(ids) }).finally(upload.release) }}>Отправить набор</button></section> }
+it('stages files until sending and retries upload with its original attachment key', async () => {
+  const uploads: string[] = [], received = vi.fn(), messages = vi.fn()
+  const api = fixture(({ path, onUploadProgress }) => { if (path.includes('/attachments/')) { uploads.push(path); if (uploads.length === 1) throw new Error('connection lost'); onUploadProgress?.(1); return { id: 'a', filename: 'a.txt', mime_type: 'text/plain', size_bytes: 2 } }; if (path.endsWith('/messages')) messages(); return defaults(path) })
+  const { container } = render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><UploadFixture onSend={received}/></CommunityProvider>)
   fireEvent.change(container.querySelector('input[type=file]')!, { target: { files: [new File(['hi'], 'a.txt', { type: 'text/plain' })] } }); fireEvent.click(await screen.findByRole('button', { name: 'Повторить' }))
-  await waitFor(() => expect(received).toHaveBeenCalledTimes(1)); expect(uploads).toHaveLength(2); expect(uploads[0]).toBe(uploads[1]); expect(messages).toHaveLength(1)
+  await screen.findByText(/Готово к отправке/)
+  expect(received).not.toHaveBeenCalled(); expect(messages).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить набор' }))
+  await waitFor(() => expect(received).toHaveBeenCalledWith(['a'])); expect(uploads).toHaveLength(2); expect(uploads[0]).toBe(uploads[1])
 })
 it('renders a permanent server-removal placeholder without fetching deleted content', () => {
   render(<MessageAttachments attachments={[{ id: 'removed', filename: 'old.png', mime_type: 'image/png', size_bytes: 99, deleted: true }]}/>); expect(screen.getByText(/Вложение удалено сервером/)).toBeTruthy(); expect(screen.queryByRole('img')).toBeNull()
+})
+
+it('retains a pasted file for the next draft while a text message is being sent', async () => {
+  let finish!: () => void
+  const pending = new Promise<void>((resolve) => { finish = resolve })
+  const received = vi.fn().mockImplementationOnce(() => pending)
+  const api = fixture(({ path }) => path.includes('/attachments/') ? { id: 'next', filename: 'next.txt', mime_type: 'text/plain', size_bytes: 2 } : defaults(path))
+  const { container } = render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><UploadFixture onSend={received}/></CommunityProvider>)
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить набор' }))
+  await waitFor(() => expect(received).toHaveBeenCalledWith([]))
+  fireEvent.paste(container.querySelector('section')!, { clipboardData: { files: [new File(['hi'], 'next.txt', { type: 'text/plain' })] } })
+  await screen.findByText(/Готово к отправке/)
+  await act(async () => { finish(); await pending })
+  expect(screen.getByText('next.txt')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить набор' }))
+  await waitFor(() => expect(received).toHaveBeenLastCalledWith(['next']))
+})
+it('snapshots the attachment batch before awaiting uploads and leaves later pastes unsent', async () => {
+  let finish!: (value: unknown) => void
+  const pending = new Promise((resolve) => { finish = resolve })
+  const received = vi.fn()
+  let uploadNumber = 0
+  const realApi = fixture(({ path }) => path.includes('/attachments/') ? ++uploadNumber === 1 ? pending : { id: 'later', filename: 'later.txt', mime_type: 'text/plain', size_bytes: 2 } : defaults(path))
+  const { container } = render(<CommunityProvider api={realApi} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><UploadFixture onSend={received}/></CommunityProvider>)
+  fireEvent.change(container.querySelector('input[type=file]')!, { target: { files: [new File(['hi'], 'first.txt', { type: 'text/plain' })] } })
+  await waitFor(() => expect(uploadNumber).toBe(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить набор' }))
+  fireEvent.paste(container.querySelector('section')!, { clipboardData: { files: [new File(['hi'], 'later.txt', { type: 'text/plain' })] } })
+  await act(async () => { finish({ id: 'first', filename: 'first.txt', mime_type: 'text/plain', size_bytes: 2 }); await pending })
+  await waitFor(() => expect(received).toHaveBeenCalledWith(['first']))
+  expect(screen.queryByText('first.txt')).toBeNull()
+  expect(screen.getByText('later.txt')).toBeTruthy()
+  await screen.findByText(/Готово к отправке/)
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить набор' }))
+  await waitFor(() => expect(received).toHaveBeenLastCalledWith(['later']))
 })

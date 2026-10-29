@@ -8,7 +8,7 @@ const page = (messages: Message[] = [], extra: Partial<MessageSyncPage> = {}): M
 const deferred = <T,>() => { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 const stores: ChannelHistoryStore[] = []
 function setup(sync = vi.fn(async () => page())) {
-  const create = vi.fn(async (_token: string, _server: number, channel: number, _content: string, _key?: string, _signal?: AbortSignal) => message(1, channel))
+  const create = vi.fn(async (_token: string, _server: number, channel: number, _content: string, _key?: string, _signal?: AbortSignal, _reply?: number, _thread?: number, _attachmentIds?: string[]) => message(1, channel))
   const context = vi.fn(async () => ({ messages: [message(20)], target_index: 0, target_message_id: 20 }))
   const list = vi.fn(async () => ({ messages: [message(1)], pagination: { next_before_id: null, has_more: false } }))
   const forward = vi.fn(async (_token: string, _server: number, channel: number, _sourceServer: number, _sourceChannel: number, _sourceMessage: number, _key: string, _signal?: AbortSignal) => ({ ...message(90, channel), forward: { author: message(1).author, created_at: 1 } }))
@@ -152,6 +152,18 @@ describe('outgoing message acknowledgement', () => {
     expect(create.mock.calls[0]![4]).toBe(create.mock.calls[1]![4])
     expect(store.snapshot(2).pending).toEqual([])
     expect(store.snapshot(2).messages).toHaveLength(1)
+  })
+  it('retries one mixed message with the same file IDs, caption and idempotency key', async () => {
+    const { store, create } = setup()
+    create.mockRejectedValueOnce(new Error('network'))
+    await store.send(1, 2, 'Фото и документ', undefined, undefined, undefined, undefined, undefined, ['image-id', 'file-id'])
+    const pending = store.snapshot(2).pending[0]!
+    expect(pending.attachmentIds).toEqual(['image-id', 'file-id'])
+    await store.send(1, 2, pending.content, pending.id)
+    expect(create.mock.calls[0]![4]).toBe(create.mock.calls[1]![4])
+    expect(create.mock.calls[1]![3]).toBe('Фото и документ')
+    expect(create.mock.calls[1]![8]).toEqual(['image-id', 'file-id'])
+    expect(store.snapshot(2).pending).toEqual([])
   })
   it('accepts a WS acknowledgement even when the HTTP response is lost', async () => {
     const response = deferred<Message>()

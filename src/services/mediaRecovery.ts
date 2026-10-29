@@ -19,6 +19,7 @@ export interface DecodeWatchdogOptions {
   requestIceRestart?: () => void
   /** One bounded full session recreation (server-mode viewer). */
   requestFullRewatch?: () => void
+  getConnectionState?: () => RTCPeerConnectionState
   sampleIntervalMs?: number
   keyframeCooldownMs?: number
   iceCooldownMs?: number
@@ -127,6 +128,16 @@ export class DecodeWatchdog {
 
     // Feature detection: missing cumulative counters must not look like zeros.
     if (bytes === undefined && frames === undefined) return
+
+    // Screen capture can legitimately stop producing RTP on an unchanged
+    // picture. Preserve its last decoded frame while the transport is healthy;
+    // restarting ICE here turns a harmless static screen into a black rewatch.
+    if (this.options.getConnectionState?.() === 'connected' && frames !== undefined && frames > 0
+      && frames === this.lastFrames && bytes !== undefined && bytes === this.lastBytes
+      && this.phase !== 'ice_recovery' && this.phase !== 'rewatching') {
+      this.bytesStalled = 0; this.framesStalled = 0; this.phase = 'healthy'
+      return
+    }
 
     if (bytes !== undefined) {
       if (this.lastBytes !== null && bytes > this.lastBytes) {

@@ -1,0 +1,19 @@
+.attachment-drafts { display: flex; width: 100%; gap: 10px; padding: 6px 0; overflow-x: auto; }
+.attachment-draft { position: relative; display: flex; width: 240px; min-width: 220px; align-items: center; gap: 12px; padding: 12px 28px 12px 12px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface-2); }
+.attachment-draft > img, .attachment-draft__icon { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; border-radius: 8px; color: var(--violet); background: var(--surface-3); object-fit: cover; }
+.attachment-draft > div { display: grid; min-width: 0; flex: 1; gap: 5px; }
+.attachment-draft b { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-draft small { font-size: 9px; line-height: 1.5; }
+.attachment-draft progress { width: 100%; height: 4px; accent-color: var(--lime); }
+.attachment-draft.is-failed { border-color: var(--danger); }
+.attachment-draft [role="alert"] { color: var(--danger); }
+.attachment-draft button { width: fit-content; padding: 0; border: 0; color: var(--lime); background: transparent; font-size: 10px; cursor: pointer; }
+.attachment-draft > .attachment-draft__remove { position: absolute; top: 6px; right: 6px; display: grid; width: 20px; height: 20px; place-items: center; border-radius: 5px; color: var(--muted); }
+.attachment-draft__remove:hover { color: var(--text); background: var(--surface-3); }
+.attachment-picker.is-disabled { cursor: wait; opacity: .6; }
+
+.workspace-content-error { display: flex; min-width: 0; min-height: 0; grid-column: 2 / -1; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; text-align: center; background: var(--surface); }
+.workspace-content-error > span { color: var(--violet); }
+.workspace-content-error h2 { margin: 0; font-size: 22px; }
+.workspace-content-error p { max-width: 420px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+@media (max-width: 760px) { .workspace-content-error { grid-column: 1 / -1; } }
