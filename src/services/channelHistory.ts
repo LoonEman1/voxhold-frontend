@@ -7,7 +7,7 @@ export const MAX_CHANNEL_MESSAGES = 1_000
 export type HistoryUpdate = { type: 'message'; channelId: number; message: Message } | { type: 'deleted'; channelId: number; id: number } | { type: 'reactions'; channelId: number; reactions: MessageReactions } | { type: 'reset'; channelId: number }
 export interface ChatViewport { messageId: number; offset: number; following: boolean }
 export interface ForwardSource { server_id: number; channel_id: number; message_id: number; content: string; created_at: number; author: Message['author']; forward?: Message['forward'] }
-export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; reply?: MessageReply; forward?: ForwardSource; threadRootId?: number }
+export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; attachmentIds?: string[]; reply?: MessageReply; forward?: ForwardSource; threadRootId?: number }
 export interface ChannelHistoryState {
   messages: Message[]
   cursor: number | null
@@ -287,7 +287,7 @@ export class ChannelHistoryStore {
     this.update(channelId, { cursor: null, hasNewer: false })
     await this.sync(serverId, channelId)
   }
-  async send(serverId: number, channelId: number, content: string, retryId?: string, reply?: MessageReply, forward?: ForwardSource, newId?: string, threadRootId?: number) {
+  async send(serverId: number, channelId: number, content: string, retryId?: string, reply?: MessageReply, forward?: ForwardSource, newId?: string, threadRootId?: number, attachmentIds?: string[]) {
     const entry = this.entry(serverId, channelId)
     if (!retryId && [...this.entries.values()].reduce((count, value) => count + value.state.pending.length, 0) >= 20) throw new Error('Сначала повторите или удалите неотправленные сообщения')
     const id = retryId ?? newId ?? crypto.randomUUID()
@@ -296,13 +296,14 @@ export class ChannelHistoryStore {
     const reference = pending?.reply ?? reply
     const forwarded = pending?.forward ?? forward
     const thread = pending?.threadRootId ?? threadRootId
-    this.update(channelId, { pending: [...entry.state.pending.filter((item) => item.id !== id), { id, content, status: 'sending', ...(thread ? { threadRootId: thread } : {}), ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }] })
+    const attachments = pending?.attachmentIds ?? attachmentIds
+    this.update(channelId, { pending: [...entry.state.pending.filter((item) => item.id !== id), { id, content, status: 'sending', ...(attachments?.length ? { attachmentIds: [...attachments] } : {}), ...(thread ? { threadRootId: thread } : {}), ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }] })
     const timeout = new AbortController()
     const abort = () => timeout.abort()
     entry.controller.signal.addEventListener('abort', abort, { once: true })
     const timer = setTimeout(abort, 15_000)
     try {
-      const message = await (forwarded ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, timeout.signal) : reference ? this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, reference.message_id, thread) : this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, undefined, thread))
+      const message = await (forwarded ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, timeout.signal) : reference ? this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, reference.message_id, thread, attachments) : this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, undefined, thread, attachments))
       if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
       this.receive({ ...message, client_message_id: id })
       this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id) })

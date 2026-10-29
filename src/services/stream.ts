@@ -4,6 +4,7 @@ import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './w
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
+import { PublisherWatchdog } from './publisherWatchdog'
 import { DecodeWatchdog, sampleInboundVideoStats } from './mediaRecovery'
 import { detectHDRCapabilities, probeCapturedHDRTrack, rememberHDRCaptureProbe } from './hdrCapabilities'
 import { tunePublisherRemoteDescription } from './sdpTuning'
@@ -394,7 +395,7 @@ function wirePeer(
   diagnosticContext: Record<string, unknown> = {},
 ) {
   const remote = new MediaStream()
-  diagnosticContext = { ...diagnosticContext, media_attempt_id: mediaAttemptID() }
+  diagnosticContext = { ...diagnosticContext, media_attempt_id: diagnosticContext.media_attempt_id ?? mediaAttemptID() }
   clientDiagnostics.record('webrtc', 'stream_connection_attempt', 'info', diagnosticContext)
   const startedAt = performance.now()
   let connectedOnce = false
@@ -565,6 +566,7 @@ interface ServerSessionOptions extends MediaCallbacks {
   onRequestRecovery?: (action: 'keyframe' | 'ice_restart') => void
   /** Server-mode viewer only: one full leaveStream -> watchStream recreation. */
   onRequestRewatch?: () => void
+  onPublisherStalled?: () => Promise<void>
 }
 
 export class BrowserServerStreamSession {
@@ -576,6 +578,7 @@ export class BrowserServerStreamSession {
   private readonly stopQualityMonitor: () => void
   private readonly stopDiagnosticMonitor: () => void
   private readonly watchdog: DecodeWatchdog | null
+  private readonly publisherWatchdog: PublisherWatchdog | null
 
   constructor(private readonly options: ServerSessionOptions) {
     this.peer = new RTCPeerConnection(
@@ -583,13 +586,17 @@ export class BrowserServerStreamSession {
     )
     const context = {
       transport: 'server',
+      media_attempt_id: mediaAttemptID(),
       role: options.localStream ? 'publisher' : 'viewer',
     }
-    wirePeer(this.peer, options, undefined, context)
+    wirePeer(this.peer, options, (state) => { if (!options.localStream && state === 'connected') options.onRequestRecovery?.('keyframe') }, context)
+    this.publisherWatchdog = options.localStream && options.onPublisherStalled ? new PublisherWatchdog(this.peer, options.onPublisherStalled) : null
+    this.publisherWatchdog?.start()
     if (!options.localStream) {
       // Viewer-only: detect RTP flowing but no decodable frames (black live).
       this.watchdog = new DecodeWatchdog({
         getSample: () => sampleInboundVideoStats(this.peer),
+        getConnectionState: () => this.peer.connectionState,
         requestKeyframe: () => options.onRequestRecovery?.('keyframe'),
         requestIceRestart: () => options.onRequestRecovery?.('ice_restart'),
         requestFullRewatch: () => options.onRequestRewatch?.(),
@@ -617,6 +624,16 @@ export class BrowserServerStreamSession {
   }
 
   recoverPlayback() { this.watchdog?.recoverPlayback() }
+
+  async replacePublisherVideoTrack(track: MediaStreamTrack) {
+    if (this.closed || !this.options.localStream) throw new Error('Трансляция уже завершена')
+    const sender = this.peer.getSenders().find((value) => value.track?.kind === 'video')
+    if (!sender) throw new Error('Видеодорожка трансляции ещё не согласована')
+    await sender.replaceTrack(track)
+    if (this.closed) return
+    this.options.localStream.getVideoTracks().forEach((old) => this.options.localStream!.removeTrack(old))
+    this.options.localStream.addTrack(track)
+  }
 
   acceptOffer(sdp: string) {
     const operation = this.offerQueue.then(async () => {
@@ -706,6 +723,7 @@ export class BrowserServerStreamSession {
       role: this.options.localStream ? 'publisher' : 'viewer',
     })
     this.watchdog?.stop()
+    this.publisherWatchdog?.stop()
     this.stopQualityMonitor()
     this.stopDiagnosticMonitor()
     this.peer.close()

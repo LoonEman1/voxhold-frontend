@@ -152,6 +152,7 @@ function createFrameCanvas(width: number, height: number): Canvas2DTarget | null
 const IDLE_REFRESH_MS = 500
 
 export interface SDRPipelineOptions {
+  preferCanvas?: boolean
   idleRefreshMs?: number
 }
 
@@ -308,12 +309,12 @@ export async function createSDRPublishPipeline(
   const idleRefreshMs = options.idleRefreshMs ?? IDLE_REFRESH_MS
   const sourceTrack = capture.getVideoTracks()[0]
   if (!sourceTrack) throw new Error('Источник экрана не предоставил видеодорожку')
-  const workerPipeline = await createWorkerSDRPipeline(capture, codec, onFailure, idleRefreshMs)
+  const workerPipeline = options.preferCanvas ? null : await createWorkerSDRPipeline(capture, codec, onFailure, idleRefreshMs)
   if (workerPipeline) return workerPipeline
   // A frame-driven transform is independent of page visibility. Unlike
   // requestVideoFrameCallback/requestAnimationFrame, it continues to receive
   // the active getDisplayMedia track while the publisher opens another tab.
-  const frameDriven = createFrameDrivenSDRPipeline(capture, codec, onFailure, idleRefreshMs)
+  const frameDriven = options.preferCanvas ? null : createFrameDrivenSDRPipeline(capture, codec, onFailure, idleRefreshMs)
   if (frameDriven) {
     clientDiagnostics.record('media', 'stream_processing_path', 'info', { path: 'compatibility_frame_transform' })
     return frameDriven

@@ -48,7 +48,7 @@ interface ChatPanelProps {
   onLoadNewer: () => Promise<void>
   onReturnToLatest: () => Promise<void>
   onReadThrough: (messageId: number) => void
-  onSend: (content: string, reply?: MessageReply) => Promise<void>
+  onSend: (content: string, reply?: MessageReply, attachmentIds?: string[]) => Promise<void>
   onSetReaction?: (messageId: number, emoji: string, active: boolean) => Promise<void>
   onLoadReactors?: ReactorLoader
   onForward?: (message: Message) => void
@@ -389,14 +389,14 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const submit = async (event?: FormEvent, encoded?: string) => {
     event?.preventDefault()
     const content = (encoded ?? draft).trim()
-    if (!content || sending || !canCompose) return
+    if ((!content && !attachmentUpload.hasItems) || sending || !canCompose) return
     if (reply?.deleted) { setSendError('Исходное сообщение удалено. Уберите ответ, чтобы отправить текст.'); return }
     const reference = reply
     setSending(true); setSendError('')
     setDraft(''); setReplyTarget(null)
-    try { await (reference ? onSend(content, reference) : onSend(content)) }
+    try { const ids = await attachmentUpload.prepare(); await (ids.length ? onSend(content, reference ?? undefined, ids) : reference ? onSend(content, reference) : onSend(content)); attachmentUpload.commit(ids) }
     catch (error) { setDraft((current) => current || content); setReplyTarget((current) => current ?? reference); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') }
-    finally { setSending(false) }
+    finally { attachmentUpload.release(); setSending(false) }
   }
 
   const saveEdit = async (messageId: number, encoded?: string) => {
@@ -479,7 +479,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
                   </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
                   <MessageAttachments attachments={message.attachments}/>
                   {editingId !== message.id && <MessageReactions message={message} currentUserId={currentUserId} pending={reactionPending[message.id]} onReact={onSetReaction ? (emoji) => { void react(message, emoji) } : undefined} loadReactors={onLoadReactors}/>}
-                  {renderComments && !message.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (message.comment_count ?? 0) > 0) && <button type="button" className="news-post-comments" onClick={() => setDiscussion(message)}><Icon name="chat" size={16}/><span>{channel.kind === 'text' ? 'Обсудить' : 'Комментарии'}{(message.comment_count ?? 0) > 0 ? ` · ${message.comment_count}` : ''}</span>{channel.kind === 'news' && !channel.comments_enabled && <Icon name="lock" size={13}/>}<Icon name="chevron" size={14}/></button>}
+                  {renderComments && !message.thread_root_id && (channel.kind === 'text' ? (message.comment_count ?? 0) > 0 : channel.comments_enabled || (message.comment_count ?? 0) > 0) && <button type="button" className="news-post-comments" onClick={() => setDiscussion(message)}><Icon name="chat" size={16}/><span>{channel.kind === 'text' ? 'Обсуждение' : 'Комментарии'}{(message.comment_count ?? 0) > 0 ? ` · ${message.comment_count}` : ''}</span>{channel.kind === 'news' && !channel.comments_enabled && <Icon name="lock" size={13}/>}<Icon name="chevron" size={14}/></button>}
                   {actionError?.id === message.id && <div className="message__error">{actionError.message}</div>}
                 </div>
                 {mine && editingId !== message.id && <>
@@ -499,14 +499,14 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} members={members} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} members={members} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
       {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, members)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); setComposerFocus((current) => current + 1) }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
-      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
       {attachmentUpload.control}
-      {canCompose ? <MentionComposer focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
+      {canCompose ? <MentionComposer hasAttachments={attachmentUpload.hasItems} focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
     </section>
   )

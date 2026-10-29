@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['client-performance.spec.ts', 'client-reliability.spec.ts'],
+  testMatch: ['client-performance.spec.ts', 'client-reliability.spec.ts', 'media-recovery.spec.ts'],
   timeout: 30_000,
   workers: 1,
   outputDir: 'node_modules/.cache/playwright-performance',
