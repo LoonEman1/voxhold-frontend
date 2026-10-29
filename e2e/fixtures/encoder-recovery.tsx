@@ -28,11 +28,15 @@ function Fixture() {
     const remote = new MediaStream()
     receiver.ontrack = (event) => { remote.addTrack(event.track); if (video.current) { video.current.srcObject = remote; void video.current.play().catch(fail) } }
     let repairs = 0
+    // Real signalling queues candidates until its SDP answer has been applied.
+    // Linux can gather ICE before setRemoteDescription resolves.
+    let answerReady!: () => void
+    const remoteAnswer = new Promise<void>((resolve) => { answerReady = resolve })
     const session: BrowserServerStreamSession = new BrowserServerStreamSession({
       localStream: frozen, preferences: DEFAULT_STREAM_PREFERENCES, codec: 'vp8',
       onConnectionStateChange: setConnection, onError: fail,
-      onAnswer: (sdp) => { void receiver.setRemoteDescription({ type: 'answer', sdp }).catch(fail) },
-      onICECandidate: (candidate) => { void receiver.addIceCandidate({ candidate: candidate.candidate, sdpMid: candidate.sdp_mid, sdpMLineIndex: candidate.sdp_mline_index, usernameFragment: candidate.username_fragment }).catch(fail) },
+      onAnswer: (sdp) => { void receiver.setRemoteDescription({ type: 'answer', sdp }).then(answerReady).catch(fail) },
+      onICECandidate: (candidate) => { void remoteAnswer.then(() => receiver.addIceCandidate({ candidate: candidate.candidate, sdpMid: candidate.sdp_mid, sdpMLineIndex: candidate.sdp_mline_index, usernameFragment: candidate.username_fragment })).catch(fail) },
       onPublisherStalled: async () => { await session.replacePublisherVideoTrack(capture.getVideoTracks()[0]!); repairs++ },
     })
     receiver.onicecandidate = (event) => { if (event.candidate) void session.addICECandidate({ candidate: event.candidate.candidate, sdp_mid: event.candidate.sdpMid ?? undefined, sdp_mline_index: event.candidate.sdpMLineIndex ?? undefined, username_fragment: event.candidate.usernameFragment ?? undefined }) }
