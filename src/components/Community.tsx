@@ -1,9 +1,11 @@
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { VoxholdApi } from '../services/api'
-import type { Message, ServerMember } from '../domain/types'
+import type { Message, ServerMember, ServerRole } from '../domain/types'
 import type { Conversation, DirectMessage, InboxItem, Privacy, CustomRole } from '../domain/community'
 import { Avatar } from './Avatar'
+import { MessageAvatar, MessageHeader } from './MessageIdentity'
+import { formatDate, formatTime } from '../lib/format'
 import { Icon, type IconName } from './Icon'
 import '../styles/community.css'
 import '../styles/personal-space.css'
@@ -12,6 +14,7 @@ type View = 'inbox' | 'messages' | 'groups' | 'privacy' | null
 interface ProviderProps {
   api: VoxholdApi; token: string; userId: number; serverId: number | null; owner: boolean; members: ServerMember[]
   onMessage: (message: Message) => void; onNavigate: (item: InboxItem) => void; children: ReactNode
+  onOpenProfile?: (userId: number, username: string, role: ServerRole) => void
   onViewChange?: (active: boolean) => void
 }
 interface ContextValue extends Omit<ProviderProps, 'children' | 'onViewChange'> {
@@ -32,7 +35,7 @@ const problem = (error: unknown) => error instanceof Error ? error.message : 'Н
 export const conversationName = (chat: Conversation, userId: number) => chat.name || chat.members.filter((m) => m.user_id !== userId).map((m) => m.username).join(', ') || 'Беседа'
 const badge = (count: number) => count > 99 ? '99+' : count
 
-export function CommunityProvider({ api, token, userId, serverId, owner, members, onMessage, onNavigate, onViewChange, children }: ProviderProps) {
+export function CommunityProvider({ api, token, userId, serverId, owner, members, onMessage, onNavigate, onOpenProfile, onViewChange, children }: ProviderProps) {
   const [view, updateView] = useState<View>(null), [items, setItems] = useState<InboxItem[]>([]), [moreInbox, setMoreInbox] = useState(false)
   const [roles, setRoles] = useState<CustomRole[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([]), [selected, setSelected] = useState<number | null>(null), [creating, setCreating] = useState(false)
@@ -91,7 +94,7 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
     setConversations((values) => [value, ...values.filter((v) => v.id !== chat.id)]); setSelected(chat.id); setCreating(false); updateView(value.direct ? 'messages' : 'groups')
     })
   }
-  return <CommunityContext.Provider value={{ api, token, userId, serverId, owner, members, roles, onMessage, onNavigate, view, setView, openDirect: (id) => void openDirect(id), inboxCount: items.length, directCount: conversations.reduce((n, v) => n + v.unread_count, 0), refresh, revision, conversations, selected, selectChat, creating, startChat: () => { setSelected(null); setCreating(true) }, items, moreInbox, loading, busy, error: error || loadError, privacy, action, createChat, leaveChat: () => { setConversations((v) => v.filter((c) => c.id !== selected)); setSelected(null); refresh() },
+  return <CommunityContext.Provider value={{ api, token, userId, serverId, owner, members, roles, onMessage, onNavigate, onOpenProfile, view, setView, openDirect: (id) => void openDirect(id), inboxCount: items.length, directCount: conversations.reduce((n, v) => n + v.unread_count, 0), refresh, revision, conversations, selected, selectChat, creating, startChat: () => { setSelected(null); setCreating(true) }, items, moreInbox, loading, busy, error: error || loadError, privacy, action, createChat, leaveChat: () => { setConversations((v) => v.filter((c) => c.id !== selected)); setSelected(null); refresh() },
     loadInbox: async () => { await action(async () => { const page = await api.community.request<{ items: InboxItem[]; has_more: boolean }>(token, `/me/inbox?before=${items.at(-1)?.message_id}`); setItems((v) => [...v, ...page.items]); setMoreInbox(page.has_more) }, false) },
     savePrivacy: (mode) => { void action(async () => { const value = await api.community.request<Privacy>(token, '/me/message-privacy', 'PUT', { mode }); setPrivacy(value) }) },
     unblock: (id) => { void action(async () => { await api.community.request(token, `/me/blocks/${id}`, 'DELETE'); setPrivacy((v) => ({ ...v, blocked_user_ids: v.blocked_user_ids.filter((n) => n !== id) })) }) },
@@ -108,10 +111,17 @@ export function CommunityNavigation() {
     document.addEventListener('pointerdown', outside); document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
   }, [open])
+  useEffect(() => {
+    // A broad activation strip without an invisible overlay over channel clicks.
+    const nearEdge = (event: PointerEvent) => { if (event.pointerType !== 'touch' && event.clientX >= 0 && event.clientX <= 56) setOpen(true) }
+    window.addEventListener('pointermove', nearEdge, { passive: true })
+    return () => window.removeEventListener('pointermove', nearEdge)
+  }, [])
   if (!context) return null
   const navigate = (view: View) => { context.setView(view); setOpen(false) }
   const total = context.inboxCount + context.directCount
   const nav = (view: View, icon: IconName, label: string, count = 0) => <button type="button" className={`personal-rail__item ${context.view === view ? 'is-active' : ''}`} title={label} aria-label={label} aria-pressed={context.view === view} onClick={() => navigate(view)}><Icon name={icon} size={22}/>{count > 0 && <b className="personal-badge">{badge(count)}</b>}<span className="personal-rail__tooltip">{label}</span></button>
+
   return <div ref={root} className={`personal-rail-edge ${open ? 'is-open' : ''}`} onPointerEnter={(event) => { if (event.pointerType !== 'touch') setOpen(true) }} onPointerLeave={() => { if (!root.current?.contains(document.activeElement)) setOpen(false) }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
     <button ref={handle} type="button" className="personal-rail-handle" aria-label="Личная панель" title="Личная панель" aria-expanded={open} aria-controls="personal-rail" onClick={() => setOpen(true)}><Icon name="chevron" size={15}/>{total > 0 && <i/>}</button>
     <nav id="personal-rail" className="personal-rail" aria-label="Личное пространство" aria-hidden={!open} inert={!open}>
@@ -175,6 +185,9 @@ function ConversationCreator({ members, busy, group, onCreate }: { members: Serv
 }
 
 function DirectChat({ api, token, id, currentUserId, revision, onRefresh, onLeave }: { api: VoxholdApi; token: string; id: number; currentUserId: number; revision: number; onRefresh: () => void; onLeave: () => void }) {
+  const community = useCommunity()
+  const [loadError, setLoadError] = useState('')
+  const initialized = useRef(false), olderBusy = useRef(false), draftInput = useRef<HTMLTextAreaElement>(null)
   const [messages, setMessages] = useState<DirectMessage[]>([]), [draft, setDraft] = useState(''), [error, setError] = useState(''), [pending, setPending] = useState(false), [more, setMore] = useState(false), [loading, setLoading] = useState(true)
   const retry = useRef<{ content: string; key: string } | null>(null), generation = useRef(0), visible = useRef<HTMLDivElement>(null)
   const upload = useAttachmentUpload({ id, server_id: 0, name: 'Беседа', kind: 'text', position: 0, created_by: 0, created_at: 0 }, true, undefined, id)
@@ -182,7 +195,7 @@ function DirectChat({ api, token, id, currentUserId, revision, onRefresh, onLeav
   useLayoutEffect(() => { const list = visible.current; if (!list) return; if (preserveDistance.current !== null) { list.scrollTop = list.scrollHeight - preserveDistance.current; preserveDistance.current = null } else if (followingBottom.current) list.scrollTop = list.scrollHeight }, [messages])
   useEffect(() => {
     const controller = new AbortController(); const current = ++generation.current
-    void api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages`, 'GET', undefined, controller.signal).then((page) => { if (controller.signal.aborted || current !== generation.current) return; setMessages((values) => [...new Map([...values, ...page.messages].map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); setMore(page.has_more); setLoading(false); setError('') }).catch((caught) => { if (!controller.signal.aborted) { setLoading(false); setError(problem(caught)) } })
+    void api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages`, 'GET', undefined, controller.signal).then((page) => { if (controller.signal.aborted || current !== generation.current) return; setMessages((values) => [...new Map([...values, ...page.messages].map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); if (!initialized.current) { setMore(page.has_more); initialized.current = true }; setLoading(false); setLoadError('') }).catch((caught) => { if (!controller.signal.aborted) { setLoading(false); setLoadError(problem(caught)) } })
     return () => controller.abort()
   }, [api, token, id, revision])
   useEffect(() => {
@@ -205,7 +218,50 @@ function DirectChat({ api, token, id, currentUserId, revision, onRefresh, onLeav
       requestAnimationFrame(() => visible.current?.scrollTo({ top: visible.current.scrollHeight }))
     } catch (caught) { setError(problem(caught)) } finally { upload.release(); setPending(false) }
   }
-  return <section className="direct-chat" onPaste={upload.onPaste} onDrop={upload.onDrop} onDragOver={upload.onDragOver}><div className="direct-chat__messages" ref={visible} onScroll={() => { const list = visible.current; followingBottom.current = !!list && list.scrollHeight - list.scrollTop - list.clientHeight < 60; readLatest.current() }} aria-live="polite">{!messages.length && !error && <PersonalEmpty icon="message" title={loading ? 'Загружаем сообщения…' : 'Начните разговор'}>Сообщения видны только участникам этого разговора.</PersonalEmpty>}{more && <button onClick={() => { const list = visible.current; if (list) preserveDistance.current = list.scrollHeight - list.scrollTop; void api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]?.id}`).then((page) => { setMessages((v) => [...new Map([...page.messages, ...v].map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); setMore(page.has_more) }).catch((caught) => setError(problem(caught))) }}>Раньше</button>}{messages.map((m) => <article className={m.author.user_id === currentUserId ? 'is-mine' : ''} key={m.id}><b>{m.author.username}</b><p>{m.content}</p><MessageAttachments attachments={m.attachments}/><small>{new Date(m.created_at * 1000).toLocaleString('ru-RU')}</small>{m.author.user_id !== currentUserId && <button onClick={() => void api.community.request(token, `/me/blocks/${m.author.user_id}`, 'PUT').then(onRefresh).catch((caught) => setError(problem(caught)))}>Заблокировать</button>}</article>)}</div>{upload.control}<form className="direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}><label className="sr-only" htmlFor={`direct-draft-${id}`}>Сообщение в беседу</label><textarea id={`direct-draft-${id}`} value={draft} maxLength={5120} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} placeholder="Напишите сообщение…"/><button className="button button--primary" disabled={pending || (!draft.trim() && !upload.hasItems)}><Icon name="send" size={18}/><span>{pending ? 'Отправляем…' : retry.current ? 'Повторить отправку' : 'Отправить'}</span></button></form>{error && <p className="form-error" role="alert">{error}</p>}<button className="button button--ghost" onClick={() => void api.community.request(token, `/conversations/${id}/members/me`, 'DELETE').then(onLeave).catch((caught) => setError(problem(caught)))}>Покинуть беседу</button></section>
+  useLayoutEffect(() => { const input = draftInput.current; if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(140, Math.max(37, input.scrollHeight))}px` } }, [draft])
+  const loadOlder = async () => {
+    if (olderBusy.current || !messages.length) return
+    olderBusy.current = true
+    const list = visible.current
+    if (list) preserveDistance.current = list.scrollHeight - list.scrollTop
+    try {
+      const page = await api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]!.id}`)
+      setMessages((v) => [...new Map([...page.messages, ...v].map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); setMore(page.has_more)
+    } catch (caught) { preserveDistance.current = null; setError(problem(caught)) }
+    finally { olderBusy.current = false }
+  }
+  return <section className="direct-chat" onPaste={upload.onPaste} onDrop={upload.onDrop} onDragOver={upload.onDragOver}>
+    <div className="direct-chat__messages messages" ref={visible} onScroll={() => { const list = visible.current; followingBottom.current = !!list && list.scrollHeight - list.scrollTop - list.clientHeight < 60; readLatest.current() }} aria-live="polite">
+      {!messages.length && !error && !loadError && <PersonalEmpty icon="message" title={loading ? 'Загружаем сообщения…' : 'Начните разговор'}>Сообщения видны только участникам этого разговора.</PersonalEmpty>}
+      {more && <button className="button button--ghost" onClick={() => void loadOlder()}>Раньше</button>}
+      {messages.map((m, index) => {
+        const previous = messages[index - 1], sameDay = !!previous && new Date(previous.created_at * 1000).toDateString() === new Date(m.created_at * 1000).toDateString()
+        const grouped = sameDay && previous.author.user_id === m.author.user_id && m.created_at - previous.created_at < 300
+        const mine = m.author.user_id === currentUserId
+        const openProfile = community?.onOpenProfile ? () => community.onOpenProfile?.(m.author.user_id, m.author.username, community.members.find((member) => member.user_id === m.author.user_id)?.role ?? 'member') : undefined
+        return <Fragment key={m.id}>
+          {!sameDay && <div className="date-divider"><span>{formatDate(m.created_at)}</span></div>}
+          <article data-message-id={m.id} className={`message ${mine ? 'message--mine' : ''} ${grouped ? 'message--grouped' : ''}`}>
+            {!grouped && <MessageAvatar userId={m.author.user_id} name={m.author.username} onOpen={openProfile}/>}
+            <div className="message__body">
+              {!grouped && <MessageHeader name={m.author.username} createdAt={m.created_at} mine={mine} onOpen={openProfile}/>}
+              <p>{m.content}</p><MessageAttachments attachments={m.attachments}/>
+            </div>
+            {grouped && <time className="message__hover-time" dateTime={new Date(m.created_at * 1000).toISOString()}>{formatTime(m.created_at)}</time>}
+            {!mine && <div className="message__actions"><button aria-label={`Заблокировать ${m.author.username}`} title={`Заблокировать ${m.author.username}`} onClick={() => void api.community.request(token, `/me/blocks/${m.author.user_id}`, 'PUT').then(onRefresh).catch((caught) => setError(problem(caught)))}><Icon name="lock" size={14}/></button></div>}
+          </article>
+        </Fragment>
+      })}
+    </div>
+    {upload.control}
+    <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
+      <label className="sr-only" htmlFor={`direct-draft-${id}`}>Сообщение в беседу</label>
+      <textarea ref={draftInput} id={`direct-draft-${id}`} rows={1} value={draft} maxLength={5120} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} placeholder="Напишите сообщение…"/>
+      <button className="composer__send" aria-label={pending ? 'Отправляем…' : retry.current ? 'Повторить отправку' : 'Отправить'} title="Отправить" disabled={pending || (!draft.trim() && !upload.hasItems)}><Icon name="send" size={18}/></button>
+    </form>
+    {(error || loadError) && <p className="form-error" role="alert">{error || loadError}</p>}
+    <button className="button button--ghost" onClick={() => void api.community.request(token, `/conversations/${id}/members/me`, 'DELETE').then(onLeave).catch((caught) => setError(problem(caught)))}>Покинуть беседу</button>
+  </section>
 }
 
 export function CustomRoleBadges({ userId }: { userId: number }) {

@@ -12,19 +12,25 @@ function fixture(request: (input: { path: string; method?: string; body?: unknow
 }
 const defaults = (path: string) => path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
 it('opens a direct conversation from a member action and retains the same retry key after failure', async () => {
+  let historyLoads = 0
   const sends: { content: string; client_message_id: string }[] = []
   const api = fixture(async ({ path, method, body }) => {
     if (path.endsWith('/conversations') && method === 'POST') return { id: 7 }
     if (path.endsWith('/conversations')) return [{ id: 7, direct: true, name: 'Беседа', members: [{ user_id: 2, username: 'member' }], unread_count: 0 }]
     if (path.endsWith('/messages') && method === 'POST') { const input = body as typeof sends[number]; sends.push(input); if (sends.length === 1) throw new Error('connection lost'); return { id: 1, conversation_id: 7, author: { user_id: 1, username: 'owner' }, content: input.content, created_at: 1 } }
-    if (path.endsWith('/messages')) return { messages: [], has_more: false }
+    if (path.endsWith('/messages')) { historyLoads++; return { messages: [], has_more: false } }
     return defaults(path)
   })
   render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><CommunityNavigation/><CommunityContent><div>Каналы</div></CommunityContent></CommunityProvider>)
   act(() => window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: 2 })))
   const input = await screen.findByLabelText('Сообщение в беседу')
   fireEvent.change(input, { target: { value: 'hello' } }); fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
-  await screen.findByRole('alert'); fireEvent.click(screen.getByRole('button', { name: 'Повторить отправку' }))
+  await screen.findByRole('alert')
+  const beforeRefresh = historyLoads
+  act(() => window.dispatchEvent(new Event('focus')))
+  await waitFor(() => expect(historyLoads).toBeGreaterThan(beforeRefresh))
+  expect(screen.getByRole('alert')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить отправку' }))
   await waitFor(() => expect(sends).toHaveLength(2)); expect(sends[0]?.client_message_id).toBe(sends[1]?.client_message_id)
 })
 it('invalidates a cleanup preview when category changes and only submits the reviewed token', async () => {

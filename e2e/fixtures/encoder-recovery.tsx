@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { VoiceSettingsDialog } from '../../src/components/VoiceSettingsDialog'
+import { DEFAULT_VOICE_PREFERENCES } from '../../src/services/voiceSettings'
+import '../../src/styles/global.css'
 import { createRoot } from 'react-dom/client'
 import { BrowserServerStreamSession } from '../../src/services/stream'
 import { DEFAULT_STREAM_PREFERENCES } from '../../src/services/streamSettings'
@@ -6,7 +9,7 @@ import { DEFAULT_STREAM_PREFERENCES } from '../../src/services/streamSettings'
 function Fixture() {
   const video = useRef<HTMLVideoElement>(null), dispose = useRef(() => {})
   const [connection, setConnection] = useState('idle'), [errors, setErrors] = useState<string[]>([])
-  const [started, setStarted] = useState(false)
+  const [started, setStarted] = useState(false), [settings, setSettings] = useState(false), [voice, setVoice] = useState(DEFAULT_VOICE_PREFERENCES)
   useEffect(() => () => dispose.current(), [])
   const start = async () => {
     setStarted(true)
@@ -50,6 +53,6 @@ function Fixture() {
     dispose.current = () => { clearInterval(paint); stalled.stop(); session.close(); receiver.close(); capture.getTracks().forEach((track) => track.stop()); frozen.getTracks().forEach((track) => track.stop()) }
     try { const offer = await receiver.createOffer(); await receiver.setLocalDescription(offer); await session.acceptOffer(offer.sdp!) } catch (error) { fail(error as Error) }
   }
-  return <><button disabled={started} onClick={() => void start()}>Начать проверку</button><output data-testid="connection">{connection}</output><output data-testid="errors">{errors.join('\n')}</output><video ref={video} muted autoPlay playsInline width={640}/></>
+  return <><button disabled={started} onClick={() => void start()}>Начать проверку</button><button onClick={() => setSettings(true)}>Настроить микрофон</button>{settings && <VoiceSettingsDialog open voiceActive preferences={voice} devices={[]} getInputLevel={() => .25} loadingDevices={false} onChange={setVoice} onRefreshDevices={async () => undefined} onClose={() => setSettings(false)}/>}<output data-testid="connection">{connection}</output><output data-testid="errors">{errors.join('\n')}</output><video ref={video} muted autoPlay playsInline width={640}/></>
 }
 createRoot(document.getElementById('root')!).render(<Fixture/>)

@@ -103,6 +103,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel,
         silent.connect(context.destination)
         previewGainRef.current = gain
         if (context.state === 'suspended') await context.resume()
+        if (stopped) return
         const values = new Uint8Array(analyser.fftSize)
         timer = window.setInterval(() => {
           analyser.getByteTimeDomainData(values)

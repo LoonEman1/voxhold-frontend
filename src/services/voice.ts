@@ -23,6 +23,8 @@ interface VoiceMediaOptions {
   onICECandidate: (candidate: VoiceICECandidate) => void
   onConnectionStateChange: (state: VoiceMediaConnectionState) => void
   onError: (error: Error) => void
+  /** A failed microphone swap must preserve the peer and remote playback. */
+  onInputError?: (error: Error) => void
   onInputLevel?: (level: number) => void
   onRemoteLevels?: (levels: VoiceRemoteLevel[]) => void
   /** Browser blocked audible playback; the UI should offer an explicit action. */
@@ -305,7 +307,8 @@ export class BrowserVoiceSession {
       clientDiagnostics.record('media', 'voice_input_sender_replaced', 'info')
     } catch (error) {
       if (!this.closed) {
-        this.options.onError(error instanceof Error ? error : new Error('Не удалось заменить микрофон в сессии'))
+        clientDiagnostics.record('media', 'voice_input_sender_replace_failed', 'warn', { error_name: error instanceof Error ? error.name : 'Error' })
+        this.options.onInputError?.(error instanceof Error ? error : new Error('Не удалось заменить микрофон в сессии'))
       }
     }
   }

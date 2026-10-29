@@ -135,6 +135,31 @@ describe('BrowserVoiceSession', () => {
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce()
   })
 
+  it('keeps the channel and remote audio alive when replacing the microphone fails', async () => {
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const fatal = vi.fn(), inputError = vi.fn()
+    const session = new BrowserVoiceSession({ input, onAnswer: vi.fn(), onICECandidate: vi.fn(), onConnectionStateChange: vi.fn(), onError: fatal, onInputError: inputError })
+    await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+    const peer = FakePeerConnection.latest!
+    peer.ontrack?.({ track: new FakeTrack() } as unknown as RTCTrackEvent)
+    const output = document.querySelector<HTMLAudioElement>('.voice-audio-output')!, remote = output.srcObject
+    peer.sender.replaceTrack.mockRejectedValueOnce(new DOMException('swap rejected', 'InvalidModificationError'))
+    const next = new FakeTrack()
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(new FakeMediaStream([next]) as unknown as MediaStream)
+    try {
+      await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, inputDeviceId: 'other' })
+      await vi.waitFor(() => expect(inputError).toHaveBeenCalledOnce())
+      expect(fatal).not.toHaveBeenCalled()
+      expect(peer.close).not.toHaveBeenCalled()
+      expect(output.srcObject).toBe(remote)
+      expect(output.muted).toBe(false)
+      await input.retry()
+      await vi.waitFor(() => expect(peer.sender.replaceTrack).toHaveBeenCalledTimes(2))
+      expect(peer.close).not.toHaveBeenCalled()
+    } finally { session.close(); input.close() }
+  })
+
   it('keeps remote playback and the peer unchanged across microphone toggles and acknowledgements', async () => {
     const input = new BrowserVoiceInput()
     await input.start(DEFAULT_VOICE_PREFERENCES)
