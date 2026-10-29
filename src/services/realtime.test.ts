@@ -50,6 +50,7 @@ class FakeWebSocket {
 describe('RealtimeClient', () => {
   beforeEach(() => {
     vi.stubGlobal('window', {
+      dispatchEvent: vi.fn(),
       location: { protocol: 'http:', host: 'localhost:3000', href: 'http://localhost:3000/' },
       setTimeout,
       clearTimeout,
@@ -361,6 +362,7 @@ describe('RealtimeClient reconnection policy', () => {
   it('reconnects after a server restart instead of logging out', () => {
     const timers: number[] = []
     vi.stubGlobal('window', {
+      dispatchEvent: vi.fn(),
       location: { protocol: 'http:', host: 'localhost:3000', href: 'http://localhost:3000/' },
       setTimeout: (_handler: () => void, delay: number) => { timers.push(delay); return timers.length },
       clearTimeout: () => undefined,

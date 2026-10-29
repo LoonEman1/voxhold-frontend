@@ -317,8 +317,9 @@ export class RealtimeClient {
           this.options.onAvatarUpdated?.(payload.data as { user_id: number; version?: string | null })
         } else if (payload.type === 'channel.sync_required' && payload.data) {
           this.options.onSyncRequired?.(payload.data as { server_id: number; channel_id: number })
-        } else if (payload.type?.startsWith('conversation.')) {
-          window.dispatchEvent(new Event('voxhold:community'))
+        } else if (payload.type?.startsWith('conversation.') || payload.type?.startsWith('community.')) {
+          window.dispatchEvent(new CustomEvent('voxhold:feature-event', { detail: { type: payload.type, data: payload.data } }))
+          if (payload.type !== 'conversation.call-signal') window.dispatchEvent(new Event('voxhold:community'))
         } else if (payload.type === 'attachments.changed') {
           window.dispatchEvent(new Event('voxhold:attachments'))
         } else if (payload.type === 'notification.message' && payload.data) {
@@ -345,6 +346,7 @@ export class RealtimeClient {
         } else if (payload.type === 'server.member_joined' && payload.data) {
           this.options.onServerMemberJoined?.(payload.data as ServerMemberChangedEvent)
         } else if (payload.type === 'server.member_role_updated' && payload.data) {
+          window.dispatchEvent(new Event('voxhold:roles'))
           this.options.onServerMemberRoleUpdated?.(payload.data as ServerMemberChangedEvent)
         } else if (payload.type === 'server.member_removed' && payload.data) {
           this.options.onServerMemberRemoved?.(payload.data as ServerMemberRemovedEvent)
@@ -353,6 +355,7 @@ export class RealtimeClient {
         } else if (payload.type === 'invitation.received' && payload.data) {
           this.options.onInvitationReceived?.(payload.data as InvitationReceivedEvent)
         } else if (payload.type === 'channels.changed' && payload.data) {
+          window.dispatchEvent(new Event('voxhold:roles'))
           this.options.onChannelsChanged?.(payload.data as { server_id: number })
         } else if (payload.type === 'channel.created' && payload.data) {
           this.options.onChannelCreated?.(payload.data as Channel)
