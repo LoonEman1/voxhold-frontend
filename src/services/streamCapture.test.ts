@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { canRestrictOwnAudio, capturedAudioIncludesOwnPlayback, captureScreen } from './stream'
+import { canRestrictOwnAudio, capturedAudioIncludesOwnPlayback, captureScreen } from './screenCapture'
 import { DEFAULT_STREAM_PREFERENCES } from './streamSettings'
 
 class FakeTrack {
   contentHint = ''
   constructor(readonly kind: 'audio' | 'video', private readonly settings: Record<string, unknown> = {}) {}
   getSettings() { return this.settings }
-  stop() {}
+  stop = vi.fn()
 }
 
 class FakeMediaStream {
@@ -36,7 +36,10 @@ describe('screen capture audio', () => {
     const getDisplayMedia = vi.fn(async () => capture('monitor', { restrictOwnAudio: true }))
     installMediaDevices({ getDisplayMedia } as unknown as Partial<MediaDevices>)
 
-    const media = await captureScreen(DEFAULT_STREAM_PREFERENCES)
+    const pending = captureScreen(DEFAULT_STREAM_PREFERENCES)
+    // A lazy module/ICE fetch before this call would lose transient user activation.
+    expect(getDisplayMedia).toHaveBeenCalledOnce()
+    const media = await pending
 
     expect(getDisplayMedia).toHaveBeenCalledWith(expect.objectContaining({
       audio: expect.objectContaining({ restrictOwnAudio: true, echoCancellation: false }),
@@ -60,4 +63,14 @@ describe('screen capture audio', () => {
     installMediaDevices({ getSupportedConstraints: () => ({}) } as unknown as Partial<MediaDevices>)
     expect(canRestrictOwnAudio()).toBe(false)
   })
+})
+
+it('releases capture if loading or probing HDR fails after the picker succeeds', async () => {
+  vi.doMock('./hdrCapabilities', () => ({ detectHDRCapabilities: async () => { throw new Error('HDR failed') }, probeCapturedHDRTrack: vi.fn(), rememberHDRCaptureProbe: vi.fn() }))
+  const media = capture('monitor', null)
+  installMediaDevices({ getDisplayMedia: vi.fn(async () => media) } as unknown as Partial<MediaDevices>)
+  try {
+    await expect(captureScreen({ ...DEFAULT_STREAM_PREFERENCES, mode: 'server', dynamicRange: 'hdr' })).rejects.toThrow('HDR failed')
+    expect(media.getVideoTracks()[0]!.stop).toHaveBeenCalledOnce()
+  } finally { vi.doUnmock('./hdrCapabilities') }
 })

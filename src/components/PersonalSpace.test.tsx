@@ -15,7 +15,7 @@ const profile = { user_id: 2, username: 'Лера', about: 'Люблю горы'
 function setup(request?: (path: string, method?: string, body?: unknown) => unknown, children?: ReactNode, owner = true) {
   const api = createApi({ request: async <T,>({ path, method, body }: { path: string; method?: string; body?: unknown }) => {
     const custom = await request?.(path, method, body)
-    return { status: 200, data: (custom ?? (path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/conversations') ? chats : path.endsWith('/messages') ? { messages: [], has_more: false } : [])) as T }
+    return { status: 200, data: (custom ?? (path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : path.endsWith('/inbox') ? { items: [], has_more: false } : path.split('?')[0]!.endsWith('/conversations') ? chats : path.endsWith('/messages') ? { messages: [], has_more: false } : [])) as T }
   } })
   return render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner={owner} members={members} onMessage={() => undefined} onNavigate={() => undefined}><CommunityNavigation/><CommunitySidebar><div>Каналы сервера</div></CommunitySidebar><CommunityContent><div>Сообщения канала</div></CommunityContent>{children}</CommunityProvider>)
 }
@@ -35,7 +35,7 @@ it('separates existing direct dialogs and groups, and opens chat in the workspac
 it('does not reopen a direct chat when its request finishes after navigating away', async () => {
   let resolve!: (value: unknown) => void
   const request = new Promise((done) => { resolve = done })
-  setup((path, method) => path.endsWith('/conversations') && method === 'POST' ? request : undefined)
+  setup((path, method) => path.split('?')[0]!.endsWith('/conversations') && method === 'POST' ? request : undefined)
   act(() => window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: 2 })))
   fireEvent.click(screen.getAllByRole('button', { name: 'Вернуться к каналам' })[0]!)
   await act(async () => resolve(chats[0]))
@@ -56,7 +56,7 @@ it('keeps privacy in its own page and removes an unblocked user immediately', as
   await screen.findByText('Вы никого не заблокировали')
 })
 it('retains selected recipients and the form when conversation creation fails', async () => {
-  setup((path, method) => { if (path.endsWith('/conversations') && method === 'POST') throw new Error('Участник запретил сообщения') })
+  setup((path, method) => { if (path.split('?')[0]!.endsWith('/conversations') && method === 'POST') throw new Error('Участник запретил сообщения') })
   fireEvent.click(screen.getByRole('button', { name: 'Личная панель' })); fireEvent.click(screen.getByRole('button', { name: 'Личные сообщения' }))
   fireEvent.click(screen.getByRole('button', { name: 'Новый диалог' }))
   fireEvent.click(screen.getByRole('radio', { name: 'Лера' }))
@@ -103,7 +103,7 @@ it('does not resurrect exhausted older-history pagination on a background refres
   const message = (id: number) => ({ id, conversation_id: 7, author: { user_id: 2, username: 'Лера' }, content: `message-${id}`, created_at: id, client_message_id: String(id) })
   let latestLoads = 0
   setup((path, method) => {
-    if (path.endsWith('/conversations') && method === 'POST') return { id: 7 }
+    if (path.split('?')[0]!.endsWith('/conversations') && method === 'POST') return { id: 7 }
     if (path.includes('/messages?before=')) return { messages: [message(1)], has_more: false }
     if (path.endsWith('/messages')) { latestLoads++; return { messages: [message(2), message(3)], has_more: true } }
   })

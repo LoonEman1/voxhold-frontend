@@ -266,3 +266,12 @@ describe('Voxhold API client', () => {
     })
   })
 })
+
+it('provides a valid Content-Type for image uploads without a browser MIME type', async () => {
+  const { api, request } = mockTransport({ status: 200, data: {} })
+  const image = new Blob(['untyped'])
+  await api.profile.uploadAvatar('session', image as File)
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ contentType: 'application/octet-stream' }))
+  await api.recordings.uploadPreview('session', 'record', image)
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ contentType: 'application/octet-stream' }))
+})

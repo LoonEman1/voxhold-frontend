@@ -6,7 +6,10 @@ import type { StreamQualityStats } from '../services/stream'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
-import { StreamPanel } from './StreamPanel'
+import type { StreamPanel as LoadedStreamPanel } from './StreamPanel'
+import { lazy, Suspense, type ComponentProps } from 'react'
+const LazyStreamPanel = lazy(() => import('./StreamPanel').then((module) => ({ default: module.StreamPanel })))
+function StreamPanel(props: ComponentProps<typeof LoadedStreamPanel>) { return props.stream || props.media || props.error ? <Suspense fallback={null}><LazyStreamPanel {...props}/></Suspense> : null }
 
 export type VoiceConnectionStatus = 'idle' | 'requesting' | 'signaling' | 'connected'
 

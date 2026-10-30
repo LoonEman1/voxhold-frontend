@@ -1,5 +1,5 @@
 import { recordRenderError } from './services/renderDiagnostics'
-import { Component, Suspense, lazy, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Brand } from './components/Brand'
 import { InviteAppPrompt } from './components/InviteAppPrompt'
@@ -24,15 +24,14 @@ function inviteTokenFromLocation() {
   return token || null
 }
 
-function InviteRoute({ api, inviteToken, authToken, realtimeBaseUrl }: {
+function InviteRoute({ api, inviteToken, authToken, onAccepted }: {
   api: ReturnType<typeof createApi>
   inviteToken: string
   authToken: string | null
-  realtimeBaseUrl: string
+  onAccepted(): void
 }) {
   const [preview, setPreview] = useState<InviteLinkPreview | null>(null)
   const [error, setError] = useState('')
-  const [accepted, setAccepted] = useState(false)
   const [continueInBrowser, setContinueInBrowser] = useState(false)
   const nativeURL = createNativeInviteURL(inviteToken, window.location.origin)
 
@@ -40,7 +39,6 @@ function InviteRoute({ api, inviteToken, authToken, realtimeBaseUrl }: {
     const controller = new AbortController()
     setError('')
     setPreview(null)
-    setAccepted(false)
     setContinueInBrowser(false)
     void api.inviteLinks.resolve(inviteToken, controller.signal)
       .then(setPreview)
@@ -49,19 +47,17 @@ function InviteRoute({ api, inviteToken, authToken, realtimeBaseUrl }: {
   }, [api, inviteToken])
 
   useEffect(() => {
-    if (!continueInBrowser || !authToken || !preview || accepted) return
+    if (!continueInBrowser || !authToken || !preview) return
     let disposed = false
     void api.inviteLinks.accept(authToken, inviteToken)
       .then(() => {
         if (disposed) return
-        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
-        setAccepted(true)
+        onAccepted()
       })
       .catch((caught) => { if (!disposed) setError(humanError(caught)) })
     return () => { disposed = true }
-  }, [accepted, api, authToken, continueInBrowser, inviteToken, preview])
+  }, [api, authToken, continueInBrowser, inviteToken, preview, onAccepted])
 
-  if (accepted && authToken) return <WorkspacePage api={api} realtimeBaseUrl={realtimeBaseUrl}/>
   if (error) return <main className="invite-gate"><Brand/><span className="eyebrow">ПРИГЛАШЕНИЕ НЕДОСТУПНО</span><h1>Ссылка не сработала</h1><p>{error}</p></main>
   if (!preview) return <div className="app-loader"><Brand/><span>Проверяем приглашение…</span><div className="loader-line"><i/></div></div>
   if (!continueInBrowser) return <>{authToken ? <div className="app-loader"><Brand/><span>Приглашение найдено</span><div className="loader-line"><i/></div></div> : <AuthPage invite={preview} inviteToken={inviteToken}/>}<InviteAppPrompt invite={preview} nativeURL={nativeURL} onStayInBrowser={() => setContinueInBrowser(true)}/></>
@@ -69,11 +65,20 @@ function InviteRoute({ api, inviteToken, authToken, realtimeBaseUrl }: {
   return <AuthPage invite={preview} inviteToken={inviteToken}/>
 }
 
-function AppRouter({ api }: { api: ReturnType<typeof createApi> }) {
+export function AppRouter({ api }: { api: ReturnType<typeof createApi> }) {
   const { ready, token } = useAuth()
+  const [inviteToken, setInviteToken] = useState(inviteTokenFromLocation)
+  useEffect(() => {
+    const changed = () => setInviteToken(inviteTokenFromLocation())
+    window.addEventListener('hashchange', changed)
+    return () => window.removeEventListener('hashchange', changed)
+  }, [])
+  const accepted = useCallback(() => {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+    setInviteToken(null)
+  }, [])
   if (!ready) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div></div>
-  const inviteToken = inviteTokenFromLocation()
-  if (inviteToken) return <InviteRoute api={api} inviteToken={inviteToken} authToken={token} realtimeBaseUrl={API_BASE_URL}/>
+  if (inviteToken) return <InviteRoute api={api} inviteToken={inviteToken} authToken={token} onAccepted={accepted}/>
   return token ? <WorkspacePage api={api} realtimeBaseUrl={API_BASE_URL}/> : <AuthPage/>
 }
 

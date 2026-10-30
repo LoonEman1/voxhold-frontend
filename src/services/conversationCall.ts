@@ -23,8 +23,9 @@ export class ConversationCall {
   private lastHeartbeat = 0
   private screenPending = false
   private earlySignals: CallSignal[] = []
-  constructor(private api: VoxholdApi, private token: string, readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean) => void; ended: () => void }) {}
-  setToken(token: string) { this.token = token }
+  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean) => void; ended: () => void }) {}
+  setToken(token: string) { this.credentials = token }
+  private get token() { return typeof this.credentials === 'string' ? this.credentials : this.credentials() }
   async start() {
     const preferences = loadVoicePreferences()
     const microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: preferences.echoCancellation, noiseSuppression: preferences.noiseSuppression, autoGainControl: preferences.autoGainControl, ...(preferences.inputDeviceId ? { deviceId: { exact: preferences.inputDeviceId } } : {}) }, video: false })

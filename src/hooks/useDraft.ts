@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type SetStateAction } from 'react'
 
 function read(key: string) {
   try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? 'null'); return typeof value === 'string' ? value.slice(0, 5120) : '' } catch { return '' }
@@ -11,7 +11,7 @@ export function useDraft(scope: string): [string, (next: SetStateAction<string>)
   const [state, setState] = useState(() => ({ key, text: read(key) }))
   const latest = useRef(state)
   const mounted = useRef(false)
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   if (latest.current.key !== key) latest.current = { key, text: read(key) }
   const text = state.key === key ? state.text : latest.current.text
   const update = useCallback((next: SetStateAction<string>) => {

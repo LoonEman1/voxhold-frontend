@@ -23,15 +23,16 @@ it('waits for visibility before downloading images and fetching universal previe
   const requested: string[] = []
   const api = createApi({ request: async <T,>({ path }: { path: string }) => {
     requested.push(path)
-    const data = path.includes('link-preview?') ? { url: 'https://publisher.example/story', title: 'Universal article', site_name: 'Publisher', description: 'Article summary' } : path.endsWith('/content') ? new Blob(['image']) : path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
+    const data = path.includes('link-preview?') ? { url: 'https://publisher.example/story', title: 'Universal article', site_name: 'Publisher', description: 'Article summary' } : path.endsWith('/thumbnail') || path.endsWith('/content') ? new Blob(['image'], { type: 'image/jpeg' }) : path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
     return { status: 200, data: data as T }
   } })
   render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}>
     <MessageAttachments attachments={[{ id: 'a', filename: 'a.jpg', mime_type: 'image/jpeg', size_bytes: 100, deleted: false }]}/>
     <MessageLinkPreviews content="https://publisher.example/story#section"/>
   </CommunityProvider>)
-  expect(requested.filter((p) => p.includes('/content') || p.includes('link-preview?'))).toHaveLength(0)
+  expect(requested.filter((p) => p.includes('/content') || p.includes('/thumbnail') || p.includes('link-preview?'))).toHaveLength(0)
   await act(async () => { for (const callback of callbacks) callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver) })
-  await waitFor(() => expect(requested.some((p) => p.endsWith('/content'))).toBe(true))
+  await waitFor(() => expect(requested.some((p) => p.endsWith('/thumbnail'))).toBe(true))
+  expect(requested.some((p) => p.endsWith('/content'))).toBe(false)
   expect((await screen.findByRole('link', { name: /Universal article/ })).getAttribute('href')).toBe('https://publisher.example/story#section')
 })

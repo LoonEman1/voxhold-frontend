@@ -29,7 +29,6 @@ describe('ServerSettingsDialog CORS settings', () => {
         corsOrigins={['https://first.example.com']}
         corsOriginsLoading={false}
         onRename={async () => undefined}
-        onDeleteAccount={async () => undefined}
         onDownloadDiagnostics={async () => undefined}
         onSaveCorsOrigins={onSaveCorsOrigins}
       />,
@@ -56,13 +55,13 @@ describe('ServerSettingsDialog CORS settings', () => {
         corsOrigins={[]}
         corsOriginsLoading={false}
         onRename={async () => undefined}
-        onDeleteAccount={async () => undefined}
         onDownloadDiagnostics={async () => undefined}
         onSaveCorsOrigins={async () => []}
       />,
     )
 
     expect(view.queryByLabelText('Разрешённые origin')).toBeNull()
+    expect(view.queryByRole('button', { name: /Удалить аккаунт/ })).toBeNull()
   })
 
   it('renders safely when the CORS origins payload is null', () => {
@@ -74,7 +73,6 @@ describe('ServerSettingsDialog CORS settings', () => {
         corsOrigins={null}
         corsOriginsLoading={false}
         onRename={async () => undefined}
-        onDeleteAccount={async () => undefined}
         onDownloadDiagnostics={async () => undefined}
         onSaveCorsOrigins={async () => []}
       />,
@@ -93,7 +91,6 @@ describe('ServerSettingsDialog CORS settings', () => {
         corsOrigins={['https://first.example.com']}
         corsOriginsLoading={false}
         onRename={async () => undefined}
-        onDeleteAccount={async () => undefined}
         onDownloadDiagnostics={async () => undefined}
         onSaveCorsOrigins={async () => null as unknown as string[]}
       />,

@@ -9,6 +9,8 @@ function docker(args) {
   if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr || result.stdout)
   return result.stdout.trim()
 }
+const extra = process.env.CSP_CONNECT_EXTRA ?? ''
+const runtimeImage = process.env.VOXHOLD_FRONTEND_IMAGE || 'nginxinc/nginx-unprivileged:1.29-alpine'
 const receiver = `require('node:http').createServer((req,res)=>{let size=0;req.on('data',chunk=>size+=chunk.length);req.on('end',()=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({size}))})}).listen(8080,'0.0.0.0')`
 const client = `
 const assert = require('node:assert/strict');
@@ -16,6 +18,24 @@ const assert = require('node:assert/strict');
  let ready=false;
  for(let n=0;n<80;n++){try{const r=await fetch('http://${proxy}:8080/healthz');if(r.ok){ready=true;break}}catch{}await new Promise(resolve=>setTimeout(resolve,250))}
  assert(ready,'production proxy did not become ready');
+ for(const path of ['/','/assets/missing.js','/api/v1/check']){
+  const response=await fetch('http://${proxy}:8080'+path);
+  const policy=response.headers.get('content-security-policy');
+  assert(policy,'missing CSP on '+path);
+  assert(policy.includes("connect-src 'self'"+${JSON.stringify(extra)}+';'));
+  assert(policy.includes("object-src 'none'"));
+  assert(!/connect-src[^;]*\\s(?:ws:|wss:)(?:\\s|;)/.test(policy),'unrestricted WebSocket origin');
+  assert(!policy.includes('$'+'{'),'unexpanded CSP environment variable');
+ }
+
+ if (${JSON.stringify(Boolean(process.env.VOXHOLD_FRONTEND_IMAGE))}) {
+  const html=await (await fetch('http://${proxy}:8080/')).text();
+  assert(html.includes('src="/theme-init.js"'),'early theme script missing from production HTML');
+  assert(!html.includes('<script>'),'CSP-incompatible inline script in production HTML');
+  const theme=await fetch('http://${proxy}:8080/theme-init.js');
+  assert.equal(theme.status,200);
+  assert((await theme.text()).includes('voxhold.theme.v1'),'theme-init.js was not copied to the image');
+ }
  for(const mib of [6,64]){
   const size=mib*1024*1024;
   const response=await fetch('http://${proxy}:8080/api/v1/channels/1/attachments/fixture',{method:'PUT',body:Buffer.alloc(size,97)});
@@ -30,10 +50,10 @@ try {
   docker(['network', 'create', network])
   docker(['run', '-d', '--name', upstream, '--network', network, 'node:24-bookworm', 'node', '-e', receiver])
   docker(['run', '-d', '--name', proxy, '--network', network,
-    '-e', `BACKEND_UPSTREAM=${upstream}:8080`,
+    '-e', `BACKEND_UPSTREAM=${upstream}:8080`, '-e', `CSP_CONNECT_EXTRA=${extra}`,
     '-v', `${resolve('docker/nginx.conf.template')}:/etc/nginx/templates/default.conf.template:ro`,
-    '-v', `${resolve('docker/security_headers.conf')}:/etc/nginx/security_headers.conf:ro`,
-    'nginxinc/nginx-unprivileged:1.29-alpine'])
+    '-v', `${resolve('docker/security_headers.inc.template')}:/etc/nginx/templates/security_headers.inc.template:ro`,
+    runtimeImage])
   console.log(docker(['run', '--rm', '--network', network, 'node:24-bookworm', 'node', '-e', client]))
 } finally {
   for (const name of [proxy, upstream]) spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore', timeout: 30_000 })

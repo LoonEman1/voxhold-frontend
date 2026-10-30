@@ -6,7 +6,8 @@ import { MemberList } from './MemberList'
 
 export type ChannelMemberLoader = (channelId: number, signal: AbortSignal) => Promise<{ user_ids: number[] }>
 
-export function MembersSidebar({ refreshKey = 0, channel, members, onlineUserIds, onLoadMembers, onClose, onOpenProfile, onMemberContextMenu }: {
+export function MembersSidebar({ lastSeenByUser = {}, refreshKey = 0, channel, members, onlineUserIds, onLoadMembers, onClose, onOpenProfile, onMemberContextMenu }: {
+  lastSeenByUser?: Readonly<Record<number, number>>
   refreshKey?: number
   channel: Channel | null
   members: ServerMember[]
@@ -46,7 +47,10 @@ export function MembersSidebar({ refreshKey = 0, channel, members, onlineUserIds
   const current = roster?.key === key ? roster : null
   const all = tab === 'all' || !channel
   const ready = all || !!current && !current.loading && !current.error
-  const displayed = useMemo(() => all ? members : ready ? members.filter((member) => current!.ids.has(member.user_id)) : [], [all, members, ready, current])
+  const displayed = useMemo(() => (all ? members : ready ? members.filter((member) => current!.ids.has(member.user_id)) : []).map((member) => {
+    const at = lastSeenByUser[member.user_id]
+    return at && at > (member.last_seen_at ?? 0) ? { ...member, last_seen_at: at } : member
+  }), [all, members, ready, current, lastSeenByUser])
   const online = useMemo(() => displayed.filter((member) => onlineUserIds.has(member.user_id)), [displayed, onlineUserIds])
   const offline = useMemo(() => displayed.filter((member) => !onlineUserIds.has(member.user_id)), [displayed, onlineUserIds])
   return <>

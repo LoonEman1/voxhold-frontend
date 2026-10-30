@@ -247,6 +247,90 @@ describe('publisher color pipelines', () => {
     expect(playbackTrack.stop).toHaveBeenCalledOnce()
   })
 
+  it('keeps drawing at the capture rate while the publisher tab is hidden', async () => {
+    const mocks = installCanvasCaptureMocks()
+    const workers: FakeWorker[] = []
+    class FakeWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null
+      intervalMs = 0
+      terminate = vi.fn()
+      constructor() { workers.push(this) }
+      postMessage(data: { intervalMs: number }) { this.intervalMs = data.intervalMs }
+    }
+    vi.stubGlobal('Worker', FakeWorker)
+    let visibility: DocumentVisibilityState = 'visible'
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
+    try {
+      const pipeline = await createSDRPublishPipeline(mocks.capture, 'h264')
+      expect(workers).toHaveLength(0)
+
+      visibility = 'hidden'
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(workers).toHaveLength(1)
+      expect(workers[0]!.intervalMs).toBe(33)
+      const before = mocks.drawImage.mock.calls.length
+      for (let tick = 0; tick < 3; tick += 1) workers[0]!.onmessage?.(new MessageEvent('message'))
+      expect(mocks.drawImage).toHaveBeenCalledTimes(before + 3)
+
+      visibility = 'visible'
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(workers[0]!.terminate).toHaveBeenCalledOnce()
+      // The pending frame callback is reused instead of starting a second loop.
+      expect(mocks.video.requestVideoFrameCallback).toHaveBeenCalledOnce()
+
+      pipeline.close()
+      visibility = 'hidden'
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(workers).toHaveLength(1)
+    } finally {
+      delete (document as unknown as { visibilityState?: DocumentVisibilityState }).visibilityState
+    }
+  })
+
+  it('repairs without the worker but keeps the visibility-independent frame transform', async () => {
+    const inputFrame = { timestamp: 1_000, displayWidth: 1280, displayHeight: 720, close: vi.fn() }
+    const outputTrack = { kind: 'video', contentHint: '', stop: vi.fn() }
+    const source = {
+      kind: 'video',
+      clone: vi.fn(() => ({ kind: 'video', stop: vi.fn() })),
+      getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+    }
+    const capture = new FakeMediaStream([source]) as unknown as MediaStream
+    const drawImage = vi.fn()
+    class FakeProcessor {
+      readable = new ReadableStream<VideoFrame>({ start(controller) { controller.enqueue(inputFrame as unknown as VideoFrame) } })
+    }
+    class FakeGenerator {
+      track = outputTrack
+      writable = new WritableStream<VideoFrame>()
+    }
+    class FakeOffscreenCanvas {
+      constructor(public width: number, public height: number) {}
+      getContext() { return { drawImage } }
+    }
+    class FakeVideoFrame {
+      timestamp: number
+      close = vi.fn()
+      constructor(_source: CanvasImageSource, init: VideoFrameInit) { this.timestamp = init.timestamp ?? 0 }
+    }
+    const Worker = vi.fn()
+    const createElement = vi.spyOn(document, 'createElement')
+    vi.stubGlobal('Worker', Worker)
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas)
+    vi.stubGlobal('MediaStreamTrackProcessor', FakeProcessor)
+    vi.stubGlobal('VideoTrackGenerator', FakeGenerator)
+    vi.stubGlobal('VideoFrame', FakeVideoFrame)
+    vi.stubGlobal('MediaStream', FakeMediaStream)
+
+    const pipeline = await createSDRPublishPipeline(capture, 'h264', undefined, { avoidWorker: true })
+    await vi.waitFor(() => expect(drawImage).toHaveBeenCalledWith(inputFrame, 0, 0, 1280, 720))
+
+    expect(Worker).not.toHaveBeenCalled()
+    expect(createElement).not.toHaveBeenCalledWith('video')
+    expect(pipeline.stream.getVideoTracks()).toEqual([outputTrack])
+    pipeline.close()
+  })
+
   it('publishes the normalized SDR track alongside the untouched HDR master', async () => {
     const mocks = installCanvasCaptureMocks()
     const pipeline = await createHDRPublishPipeline(mocks.capture, 'h264', HDR_PROBE)

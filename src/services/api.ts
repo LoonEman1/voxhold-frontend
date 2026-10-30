@@ -86,6 +86,8 @@ export function createApi(transport: Transport) {
       },
     },
     community: {
+      thumbnail: (token: string, id: string, signal?: AbortSignal) => unwrap<Blob>(transport, { token, path: `/api/v1/attachments/${encodeURIComponent(id)}/thumbnail`, responseType: 'blob', signal }),
+      attachmentStatus: (token: string, id: string, signal?: AbortSignal) => unwrap<void>(transport, { token, path: `/api/v1/attachments/${encodeURIComponent(id)}/content`, method: 'HEAD', signal }),
       request: <T>(token: string, path: string, method: TransportRequest['method'] = 'GET', body?: unknown, signal?: AbortSignal) => unwrap<T>(transport, { token, path: `/api/v1${path}`, method, body, signal }),
       upload: (token: string, channelId: number, id: string, file: File, onUploadProgress: (fraction: number) => void, signal?: AbortSignal, conversationId?: number) => unwrap<import('../domain/community').Attachment>(transport, { token, path: `/api/v1/${conversationId ? `conversations/${conversationId}` : `channels/${channelId}`}/attachments/${id}?filename=${encodeURIComponent(file.name)}`, method: 'PUT', rawBody: file, contentType: file.type || 'application/octet-stream', onUploadProgress, signal }),
       content: (token: string, id: string, signal?: AbortSignal) => unwrap<Blob>(transport, { token, path: `/api/v1/attachments/${encodeURIComponent(id)}/content`, responseType: 'blob', signal }),
@@ -134,7 +136,7 @@ export function createApi(transport: Transport) {
     profile: {
       // The version makes each URL immutable, so the HTTP cache needs no revalidation.
       avatar: (token: string, userId: number, version: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/users/${url(userId)}/avatar?v=${url(version)}`, responseType: 'blob', signal }) as Promise<Blob>,
-      uploadAvatar: (token: string, file: File, crop?: AvatarCrop) => authorized(token, { path: `/api/v1/me/avatar${crop ? `?crop_x=${crop.x}&crop_y=${crop.y}&crop_size=${crop.size}` : ''}`, method: 'PUT', rawBody: file, contentType: file.type }) as Promise<{ etag: string }>,
+      uploadAvatar: (token: string, file: File, crop?: AvatarCrop) => authorized(token, { path: `/api/v1/me/avatar${crop ? `?crop_x=${crop.x}&crop_y=${crop.y}&crop_size=${crop.size}` : ''}`, method: 'PUT', rawBody: file, contentType: file.type || 'application/octet-stream' }) as Promise<{ etag: string }>,
       removeAvatar: (token: string) => authorized(token, { path: '/api/v1/me/avatar', method: 'DELETE' }) as Promise<void>,
       me: (token: string, signal?: AbortSignal) =>
         authorized(token, { path: '/api/v1/me/profile', signal }) as Promise<Profile>,
@@ -175,7 +177,7 @@ export function createApi(transport: Transport) {
       append: (token: string, id: string, offset: number, chunk: Blob, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}/content?offset=${offset}`, method: 'PATCH', rawBody: chunk, signal }) as Promise<{ offset: number }>,
       complete: (token: string, id: string) => authorized(token, { path: `/api/v1/recordings/${url(id)}/complete`, method: 'POST' }) as Promise<ChannelRecording>,
       preview: (token: string, id: string, version: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}/preview?v=${url(version)}`, responseType: 'blob', signal }) as Promise<Blob>,
-      uploadPreview: (token: string, id: string, image: Blob, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}/preview`, method: 'PUT', rawBody: image, contentType: image.type, signal }) as Promise<ChannelRecording>,
+      uploadPreview: (token: string, id: string, image: Blob, signal?: AbortSignal) => authorized(token, { path: `/api/v1/recordings/${url(id)}/preview`, method: 'PUT', rawBody: image, contentType: image.type || 'application/octet-stream', signal }) as Promise<ChannelRecording>,
       download: async (token: string, id: string) => {
         const result = await authorized(token, { path: `/api/v1/recordings/${url(id)}/download`, method: 'POST' }) as { url: string }
         // Only our relative route may receive the signed, short-lived ticket.

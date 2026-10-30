@@ -7,7 +7,8 @@ import { communityChanged } from './Community'
 const rights = [[1, 'Читать каналы'], [2, 'Публиковать сообщения'], [4, 'Участвовать в голосе'], [8, 'Запускать трансляции'], [16, 'Управлять сообщениями']] as const
 const problem = (caught: unknown) => caught instanceof Error ? caught.message : 'Не удалось сохранить'
 const GiB = 1024 ** 3
-export function bytes(value: number) { if (value < 1024) return `${value} Б`; if (value < 1024 ** 2) return `${(value / 1024).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} КБ`; return value >= GiB ? `${(value / GiB).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ГБ` : `${(value / 1024 ** 2).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ` }
+export { bytes } from '../lib/bytes'
+import { bytes } from '../lib/bytes'
 export function RoleManager({ api, token, serverId, members }: { api: VoxholdApi; token: string; serverId: number; members: ServerMember[] }) {
   const [roles, setRoles] = useState<CustomRole[]>([]), [editing, setEditing] = useState<CustomRole | null>(null), [revision, setRevision] = useState(0), [error, setError] = useState(''), [pending, setPending] = useState(false)
   const [target, setTarget] = useState<number>(members.find((m) => m.role !== 'owner')?.user_id ?? 0), [assigned, setAssigned] = useState<number[]>([])

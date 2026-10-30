@@ -1,7 +1,7 @@
 .community-navigation { display:grid; gap:4px; padding:12px; border-bottom:1px solid var(--line) }
 .community-navigation button { display:flex; align-items:center; gap:12px; justify-content:space-between; padding:9px 12px; text-align:left; color:inherit; border-radius:8px; background:transparent; border:0; cursor:pointer }
 .community-navigation button:hover,.conversation-list button:hover,.inbox-item:hover { background:#7d8fff18 }
-.community-navigation b,.conversation-list small { border-radius:12px; padding:2px 7px; background:#7084ec; color:white; font-size:11px }
+.community-navigation b,.conversation-list small { border-radius:12px; padding:2px 7px; background:#7084ec; color:white; font-size: var(--font-2xs) }
 .community-settings { display:grid; gap:20px; max-height:72vh; overflow:auto; padding-right:8px }
 .community-settings p,.community-empty { color:var(--muted); line-height:1.6 }
 .community-settings label,.community-privacy label,.conversation-create label { display:grid; gap:8px; margin:8px 0 }
@@ -15,21 +15,21 @@
 .inbox-list { display:grid; gap:8px; max-height:65vh; overflow:auto }.inbox-item { display:grid; gap:6px; text-align:left; color:inherit; border:1px solid var(--line); background:transparent; border-radius:10px; padding:14px; cursor:pointer; overflow-wrap:anywhere }.inbox-item small { color:var(--muted) }.inbox-item span { white-space:pre-wrap; overflow:hidden; max-height:80px }
 .community-privacy,.conversation-create { margin-bottom:14px }.community-privacy summary,.conversation-create summary { cursor:pointer; padding:8px 0 }.community-member-picker { max-height:150px; overflow:auto }
 .conversation-list { display:flex; gap:6px; overflow-x:auto; padding:8px 0 }.conversation-list button { border:1px solid var(--line-strong); color:inherit; border-radius:8px; padding:8px; background:transparent; white-space:nowrap }.conversation-list button.is-active { background:#7d8fff30 }
-.message-attachments { display:grid; gap:8px; max-width:440px }.attachment-card { margin:8px 0; border:1px solid var(--line-strong); border-radius:10px; padding:8px; max-width:100%; overflow:hidden }.attachment-card button { color:inherit; background:transparent; border:0; cursor:pointer }.attachment-image { padding:0; width:100%; display:block }.attachment-image img { display:block; max-width:100%; max-height:320px; border-radius:6px }.attachment-card video { width:100%; max-height:360px }.attachment-card figcaption { display:flex; gap:8px; font-size:11px; color:var(--muted); overflow-wrap:anywhere; padding-top:6px }.attachment-card a { margin-left:auto; color:#a5b6ff }.attachment-lightbox { width:100%; max-height:76vh; object-fit:contain }.attachment-deleted { padding:10px; border:1px dashed var(--line-strong); border-radius:8px; font-size:12px; color:var(--muted) }
-.attachment-upload { padding:6px 16px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; border-top:1px solid var(--line); font-size:11px }.attachment-picker { position:relative; padding:6px 8px; border:1px solid var(--line-strong); border-radius:8px; cursor:pointer }.attachment-picker input { position:absolute; inset:0; opacity:0; width:100%; cursor:pointer }.attachment-upload small { color:var(--muted) }.upload-progress { display:flex; gap:8px; width:100%; align-items:center; overflow-wrap:anywhere }.upload-progress progress { width:100px }.upload-progress span { max-width:40% }
+.message-attachments { display:grid; gap:8px; max-width:440px }.attachment-card { margin:8px 0; border:1px solid var(--line-strong); border-radius:10px; padding:8px; max-width:100%; overflow:hidden }.attachment-card button { color:inherit; background:transparent; border:0; cursor:pointer }.attachment-image { padding:0; width:100%; display:block }.attachment-image img { display:block; max-width:100%; max-height:320px; border-radius:6px }.attachment-card video { width:100%; max-height:360px }.attachment-card figcaption { display:flex; gap:8px; font-size: var(--font-2xs); color:var(--muted); overflow-wrap:anywhere; padding-top:6px }.attachment-card a { margin-left:auto; color:#a5b6ff }.attachment-lightbox { width:100%; max-height:76vh; object-fit:contain }.attachment-deleted { padding:10px; border:1px dashed var(--line-strong); border-radius:8px; font-size: var(--font-xs); color:var(--muted) }
+.attachment-upload { padding:6px 16px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; border-top:1px solid var(--line); font-size: var(--font-2xs) }.attachment-picker { position:relative; padding:6px 8px; border:1px solid var(--line-strong); border-radius:8px; cursor:pointer }.attachment-picker input { position:absolute; inset:0; opacity:0; width:100%; cursor:pointer }.attachment-upload small { color:var(--muted) }.upload-progress { display:flex; gap:8px; width:100%; align-items:center; overflow-wrap:anywhere }.upload-progress progress { width:100px }.upload-progress span { max-width:40% }
 .thread-follow { display:flex; gap:8px; align-items:center; padding:8px 14px }.thread-follow button { color:inherit; border:1px solid var(--line-strong); background:transparent; border-radius:8px; padding:5px 10px }
 @media(max-width:600px) { .direct-chat__messages { height:35vh }.role-list>div { padding-bottom:8px; border-bottom:1px solid var(--line) } .community-settings { max-height:65vh } }
 
 .community-settings button:not(.button),.thread-follow button,.conversation-create button:not(.button),.community-privacy button,.attachment-card button,.upload-progress button { color:var(--text); background:var(--surface-2); border:1px solid var(--line-strong); border-radius:7px; padding:5px 8px; cursor:pointer }
 
-.custom-role-badge { display:inline-flex; gap:4px; align-items:center; font-size:10px; padding:2px 5px; border:1px solid; border-radius:5px; color:var(--text) }.custom-role-badge i { width:6px; height:6px; border-radius:50% }
+.custom-role-badge { display:inline-flex; gap:4px; align-items:center; font-size: var(--font-2xs); padding:2px 5px; border:1px solid; border-radius:5px; color:var(--text) }.custom-role-badge i { width:6px; height:6px; border-radius:50% }
 
 .community-modal-body { padding:0 25px 25px }
 .modal-card > .community-settings { padding:0 25px 25px; max-height:calc(80vh - 90px) }
 .community-settings .dialog-form { padding:0 }
-.community-settings > p { font-size:13px; margin:0 }
+.community-settings > p { font-size: var(--font-sm); margin:0 }
 .community-privacy,.conversation-create { padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface-2) }
-.community-privacy summary,.conversation-create summary { font-size:13px; font-weight:650; padding:0 }
+.community-privacy summary,.conversation-create summary { font-size: var(--font-sm); font-weight:650; padding:0 }
 .community-privacy[open] summary,.conversation-create[open] summary { margin-bottom:12px }
 .attachment-card a { color:var(--violet) }
 @media(max-width:600px){ .community-modal-body { padding:0 16px 20px }.modal-card > .community-settings { padding:0 16px 20px } }
