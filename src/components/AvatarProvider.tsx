@@ -6,7 +6,7 @@ type Entry = { url: string | null; version?: string; listeners: Set<() => void>;
 class AvatarCache {
   private entries = new Map<number, Entry>()
   private versions = new Map<number, string | null>()
-  constructor(private api: VoxholdApi, private getToken: () => string) {}
+  constructor(private api: VoxholdApi, private getToken: () => string, readonly accountId: number) {}
   private entry(id: number) {
     let entry = this.entries.get(id)
     if (!entry) { entry = { url: null, listeners: new Set() }; this.entries.set(id, entry) }
@@ -69,7 +69,7 @@ const Context = createContext<AvatarCache | null>(null)
 export function AvatarProvider({ api, token, userId = 0, versions, children }: { api: VoxholdApi; token: string; userId?: number; versions: ReadonlyMap<number, string | null>; children: ReactNode }) {
   const tokenRef = useRef(token)
   useLayoutEffect(() => { tokenRef.current = token }, [token])
-  const cache = useMemo(() => new AvatarCache(api, () => tokenRef.current), [api, userId])
+  const cache = useMemo(() => new AvatarCache(api, () => tokenRef.current, userId), [api, userId])
   useEffect(() => {
     const changed = (event: Event) => {
       const value = (event as CustomEvent<{ user_id: number; version: string | null }>).detail

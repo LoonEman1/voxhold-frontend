@@ -1220,6 +1220,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         closeVoiceLocally()
       },
     })
+    const recoveryActions = recoveryActionsRef.current
     realtimeRef.current = client
     client.connect()
     return () => {
@@ -1228,7 +1229,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       realtimeRef.current = null
       const phase = recoveryRef.current?.phase
       const recovering = phase === 'signalling_lost' || phase === 'rejoining_voice' || phase === 'restoring_stream'
-      if (replacing && voiceSessionRef.current && !recovering) recoveryActionsRef.current.offline()
+      if (replacing && voiceSessionRef.current && !recovering) recoveryActions.offline()
     }
   }, [api.servers, refreshMembers, setMembers, historyStore, notificationCenter, recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate])
 
