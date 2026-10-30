@@ -153,15 +153,15 @@ in [`src/services/realtime.ts`](src/services/realtime.ts).
 
 ## Releases and upgrading
 
-Frontend and backend share **2.3.0**. Install backend **2.3.0**, including migrations
-**000027–000030**, before this frontend. The migrations add custom roles, thread
+Frontend and backend share **2.5.1**. Install backend **2.5.1**, including migrations
+**000027–000031**, before this frontend. The migrations add custom roles, thread
 subscriptions, personal conversations and attachment metadata. Retain a verified backup before upgrading.
 
-The published frontend image is `ghcr.io/looneman1/voxhold-frontend:2.3.0`;
-`2.3` and `latest` are moving tags. To update an existing production deployment:
+The published frontend image is `ghcr.io/looneman1/voxhold-frontend:2.5.1`;
+`2.5` and `latest` are moving tags. To update an existing production deployment:
 
 ```bash
-./update.sh --backend-version 2.3.0 --frontend-version 2.3.0
+./update.sh --backend-version 2.5.1 --frontend-version 2.5.1
 ```
 
 Run that command from the

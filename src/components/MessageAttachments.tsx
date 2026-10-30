@@ -1,3 +1,5 @@
+import { useVisible } from '../hooks/useVisible'
+import { attachmentDownload } from '../services/attachmentDownloads'
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 import type { Attachment } from '../domain/community'
 import type { Channel } from '../domain/types'
@@ -12,18 +14,19 @@ export function MessageAttachments({ attachments }: { attachments?: Attachment[]
 }
 function AttachmentView({ attachment }: { attachment: Attachment }) {
   const context = useCommunity(), [url, setURL] = useState(''), [error, setError] = useState(''), [removed, setRemoved] = useState(attachment.deleted), [expanded, setExpanded] = useState(false), [requested, setRequested] = useState(false), [revision, setRevision] = useState(0)
+  const { ref, visible } = useVisible<HTMLElement>()
   const image = attachment.mime_type.startsWith('image/'), video = attachment.mime_type.startsWith('video/')
   const api = context?.api, token = context?.token
   useEffect(() => { const changed = () => { setURL(''); setRevision((v) => v + 1) }; window.addEventListener('voxhold:attachments', changed); return () => window.removeEventListener('voxhold:attachments', changed) }, [])
   useEffect(() => {
-    if (!api || !token || attachment.deleted || (!image && !requested)) return
+    if (!api || !token || attachment.deleted || (!requested && (!image || !visible))) return
     const controller = new AbortController(); let objectURL = ''
     setError('')
-    void api.community.content(token, attachment.id, controller.signal).then((blob) => { if (!controller.signal.aborted) { objectURL = URL.createObjectURL(blob); setURL(objectURL); setRemoved(false) } }).catch((caught) => { if (!controller.signal.aborted) { if (caught && typeof caught === 'object' && 'status' in caught && caught.status === 410) setRemoved(true); else setError(caught instanceof Error ? caught.message : 'Не удалось загрузить вложение') } })
+    void attachmentDownload(controller.signal, () => api.community.content(token, attachment.id, controller.signal)).then((blob) => { if (!controller.signal.aborted) { objectURL = URL.createObjectURL(blob); setURL(objectURL); setRemoved(false) } }).catch((caught) => { if (!controller.signal.aborted) { if (caught && typeof caught === 'object' && 'status' in caught && caught.status === 410) setRemoved(true); else setError(caught instanceof Error ? caught.message : 'Не удалось загрузить вложение') } })
     return () => { controller.abort(); if (objectURL) URL.revokeObjectURL(objectURL) }
-  }, [api, token, attachment.id, attachment.deleted, image, requested, revision])
+  }, [api, token, attachment.id, attachment.deleted, image, visible, requested, revision])
   if (attachment.deleted || removed) return <div className="attachment-deleted">Вложение удалено сервером · {attachment.filename}</div>
-  return <figure className="attachment-card">{image && url ? <button type="button" className="attachment-image" onClick={() => setExpanded(true)} aria-label={`Открыть изображение ${attachment.filename}`}><img src={url} alt={attachment.filename} loading="lazy"/></button> : video && url ? <video controls preload="metadata" src={url}/> : <button type="button" onClick={() => setRequested(true)}>{image ? 'Загрузка изображения…' : video ? 'Посмотреть видео' : 'Загрузить файл'} · {attachment.filename}</button>}<figcaption>{attachment.filename} · {bytes(attachment.size_bytes)}{url && <a href={url} download={attachment.filename}>Скачать</a>}</figcaption>{error && <p role="alert">{error}<button type="button" onClick={() => { setRequested(true); setRevision((v) => v + 1) }}>Повторить</button></p>}<Modal open={expanded} title={attachment.filename} onClose={() => setExpanded(false)} size="medium">{url && <img className="attachment-lightbox" src={url} alt={attachment.filename}/>}</Modal></figure>
+  return <figure ref={ref} className="attachment-card">{image && url ? <button type="button" className="attachment-image" onClick={() => setExpanded(true)} aria-label={`Открыть изображение ${attachment.filename}`}><img src={url} alt={attachment.filename} loading="lazy"/></button> : video && url ? <video controls preload="metadata" src={url}/> : <button type="button" onClick={() => setRequested(true)}>{image ? 'Загрузка изображения…' : video ? 'Посмотреть видео' : 'Загрузить файл'} · {attachment.filename}</button>}<figcaption>{attachment.filename} · {bytes(attachment.size_bytes)}{url && <a href={url} download={attachment.filename}>Скачать</a>}</figcaption>{error && <p role="alert">{error}<button type="button" onClick={() => { setRequested(true); setRevision((v) => v + 1) }}>Повторить</button></p>}<Modal open={expanded} title={attachment.filename} onClose={() => setExpanded(false)} size="medium">{url && <img className="attachment-lightbox" src={url} alt={attachment.filename}/>}</Modal></figure>
 }
 interface Upload {
   id: string; file: File; progress: number; preview?: string
