@@ -1,3 +1,6 @@
+import { LinkText, MessageLinkPreviews } from './MessageLinks'
+import { listConversations, conversationWindow } from '../services/conversations'
+import { useDraft } from '../hooks/useDraft'
 import { CommunityFeatureHost } from './CommunityFeatureHost'
 import { ComposerTools, PollCard, ScheduledView, EventsView, AuditView, DesktopNotificationSettings, openForward, saveFavorite } from './CommunityFeatures'
 import { MessageReactions } from './MessageReactions'
@@ -61,7 +64,7 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
     const controller = new AbortController()
     void Promise.allSettled([
       api.community.request<{ items: InboxItem[]; has_more: boolean }>(token, '/me/inbox', 'GET', undefined, controller.signal),
-      api.community.request<Conversation[]>(token, '/me/conversations', 'GET', undefined, controller.signal),
+      listConversations(api, token, controller.signal),
     ]).then(([inbox, chats]) => { if (controller.signal.aborted) return
       if (inbox.status === 'fulfilled') { setItems(Array.isArray(inbox.value.items) ? inbox.value.items : []); setMoreInbox(!!inbox.value.has_more) }
       if (chats.status === 'fulfilled') setConversations(Array.isArray(chats.value) ? chats.value : [])
@@ -110,7 +113,7 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   openConversation.current=(id)=>{
     const chat=conversations.find((v)=>v.id===id);if(chat){selectChat(chat);return}
     const current=++openGeneration.current;setBusy(true)
-    void api.community.request<Conversation[]>(token,'/me/conversations').then((values)=>{if(current!==openGeneration.current)return;setBusy(false);setConversations(values);const target=values.find((v)=>v.id===id);if(target)selectChat(target);else setError('Беседа больше недоступна')}).catch((e)=>{if(current===openGeneration.current){setBusy(false);setError(problem(e))}})
+    void api.community.request<Conversation>(token,`/conversations/${id}`).then((target)=>{if(current!==openGeneration.current)return;setBusy(false);setConversations((values)=>[target,...values.filter((v)=>v.id!==target.id)]);selectChat(target)}).catch((e)=>{if(current===openGeneration.current){setBusy(false);setError(problem(e))}})
   }
   useEffect(()=>{const open=(e:Event)=>openConversation.current((e as CustomEvent<number>).detail);window.addEventListener('voxhold:open-conversation',open);return()=>window.removeEventListener('voxhold:open-conversation',open)},[])
 
@@ -193,7 +196,7 @@ export function CommunityContent({ children, onMenu }: { children: ReactNode; on
       {c.view === 'scheduled' && <ScheduledView api={c.api} token={c.token} revision={c.revision}/>}
       {c.view === 'events' && <EventsView api={c.api} token={c.token} serverId={c.serverId} userId={c.userId} admin={c.owner || c.members.some((m) => m.user_id===c.userId && m.role==='admin')} revision={c.revision}/>}
       {c.view === 'audit' && <AuditView api={c.api} token={c.token} serverId={c.serverId}/>}
-      {chatting && (c.creating ? <div className="personal-scroll"><ConversationCreator key={c.view} members={c.members.filter((m) => m.user_id !== c.userId)} busy={c.busy} group={groups} onCreate={c.createChat}/></div> : c.selected && (c.view === 'favorites' || !chat || !chat.saved && chat.direct !== groups) ? <DirectChat key={`${c.token}:${c.selected}`} api={c.api} token={c.token} id={c.selected} saved={c.view === 'favorites'} currentUserId={c.userId} revision={c.revision} onRefresh={c.refresh} onLeave={c.leaveChat}/> : <PersonalEmpty icon={groups ? 'people' : 'message'} title={groups ? 'Разговор для своей компании' : 'Ваши личные разговоры'}>Выберите {groups ? 'беседу' : 'диалог'} слева или начните новый.<button className="button button--primary" onClick={c.startChat}><Icon name="add" size={18}/>{groups ? 'Создать беседу' : 'Начать диалог'}</button></PersonalEmpty>)}
+      {chatting && (c.creating ? <div className="personal-scroll"><ConversationCreator key={c.view} members={c.members.filter((m) => m.user_id !== c.userId)} busy={c.busy} group={groups} onCreate={c.createChat}/></div> : c.selected && (c.view === 'favorites' || !chat || !chat.saved && chat.direct !== groups) ? <DirectChat key={`${c.userId}:${c.selected}`} api={c.api} token={c.token} id={c.selected} saved={c.view === 'favorites'} currentUserId={c.userId} revision={c.revision} onRefresh={c.refresh} onLeave={c.leaveChat}/> : <PersonalEmpty icon={groups ? 'people' : 'message'} title={groups ? 'Разговор для своей компании' : 'Ваши личные разговоры'}>Выберите {groups ? 'беседу' : 'диалог'} слева или начните новый.<button className="button button--primary" onClick={c.startChat}><Icon name="add" size={18}/>{groups ? 'Создать беседу' : 'Начать диалог'}</button></PersonalEmpty>)}
     </section>}
   </>
 }
@@ -219,17 +222,59 @@ function DirectChat({ api, token, id, saved = false, currentUserId, revision, on
   const [loadError, setLoadError] = useState('')
   const deletedIds=useRef(new Set<number>())
   const initialized = useRef(false), olderBusy = useRef(false), draftInput = useRef<HTMLTextAreaElement>(null)
-  const [messages, setMessages] = useState<DirectMessage[]>([]), [draft, setDraft] = useState(''), [error, setError] = useState(''), [pending, setPending] = useState(false), [more, setMore] = useState(false), [loading, setLoading] = useState(true)
+  const [draft, setDraft] = useDraft(`${api.storageScope}:${currentUserId}:conversation:${id}`)
+  const [messages, setMessages] = useState<DirectMessage[]>([]), [error, setError] = useState(''), [pending, setPending] = useState(false), [more, setMore] = useState(false), [loading, setLoading] = useState(true)
   const retry = useRef<{ content: string; key: string } | null>(null), generation = useRef(0), visible = useRef<HTMLDivElement>(null)
   const upload = useAttachmentUpload({ id, server_id: 0, name: 'Беседа', kind: 'text', position: 0, created_by: 0, created_at: 0 }, true, undefined, id)
   useEffect(()=>{const removed=(e:Event)=>{const value=(e as CustomEvent<{type:string;data:{conversation_id?:number;message_id?:number}}>).detail;if(value?.type==='conversation.deleted'&&value.data.conversation_id===id&&value.data.message_id){deletedIds.current.add(value.data.message_id);setMessages((v)=>v.filter((m)=>m.id!==value.data.message_id))}};window.addEventListener('voxhold:feature-event',removed);return()=>window.removeEventListener('voxhold:feature-event',removed)},[id])
+  const loadedMessages = useRef(messages); loadedMessages.current = messages
   const readCursor = useRef(0), followingBottom = useRef(true), preserveDistance = useRef<number | null>(null), readLatest = useRef<() => void>(() => undefined)
   useLayoutEffect(() => { if(menu)return; const list = visible.current; if (!list) return; if (preserveDistance.current !== null) { list.scrollTop = list.scrollHeight - preserveDistance.current; preserveDistance.current = null } else if (followingBottom.current) list.scrollTop = list.scrollHeight }, [messages,menu])
+  const refreshHistory = useRef<() => void>(() => undefined)
+  const lastHistoryRevision = useRef(revision)
   useEffect(() => {
-    const controller = new AbortController(); const current = ++generation.current
-    void api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages${search ? `?q=${encodeURIComponent(search)}` : ''}`, 'GET', undefined, controller.signal).then((page) => { if (controller.signal.aborted || current !== generation.current) return; setMessages((values) => [...new Map([...(search ? [] : values), ...page.messages].filter((m)=>!deletedIds.current.has(m.id)).map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); if (!initialized.current) { setMore(page.has_more); initialized.current = true }; setLoading(false); setLoadError('') }).catch((caught) => { if (!controller.signal.aborted) { setLoading(false); setLoadError(problem(caught)) } })
-    return () => controller.abort()
-  }, [api, token, id, revision, search])
+    let alive = true, running = false, dirty = false
+    let request: AbortController | null = null
+    const refresh = async () => {
+      dirty = true
+      if (running) return
+      running = true
+      try {
+        do {
+          dirty = false
+          const controller = new AbortController(); request = controller
+          const current = ++generation.current
+          const oldest = initialized.current ? loadedMessages.current[0]?.id : undefined
+          const snapshotIDs = new Set(loadedMessages.current.map((message) => message.id))
+          try {
+            const page = await conversationWindow(api, token, id, oldest, search, controller.signal)
+            if (!alive || controller.signal.aborted || current !== generation.current) continue
+            setMessages((values) => {
+              const reconciled = new Map(page.messages.map((message) => [message.id, message]))
+              for (const message of values) {
+                const fetched = reconciled.get(message.id)
+                if (!snapshotIDs.has(message.id) || fetched && (message.revision ?? 0) > (fetched.revision ?? 0)) reconciled.set(message.id, message)
+              }
+              return [...reconciled.values()].filter((m) => !deletedIds.current.has(m.id)).sort((a,b) => a.id-b.id)
+            })
+            setMore(page.has_more); initialized.current = true; setLoading(false); setLoadError('')
+          } catch (caught) {
+            if (alive && !controller.signal.aborted && current === generation.current) { setLoading(false); setLoadError(problem(caught)) }
+            break
+          }
+        } while (alive && dirty)
+      } finally { running = false }
+    }
+    refreshHistory.current = () => { void refresh() }
+    void refresh()
+    return () => { alive = false; request?.abort(); refreshHistory.current = () => undefined }
+  }, [api, token, id, search])
+  // Do not cancel a multi-page catch-up on every incoming event. Finish the
+  // current window, then coalesce those events into one more reconciliation.
+  useEffect(() => {
+    if (lastHistoryRevision.current === revision) return
+    lastHistoryRevision.current = revision; refreshHistory.current()
+  }, [revision])
   useEffect(() => {
     const latest = messages.at(-1)?.id
     if (!latest || latest <= readCursor.current) return
@@ -254,10 +299,12 @@ function DirectChat({ api, token, id, saved = false, currentUserId, revision, on
   const loadOlder = async () => {
     if (olderBusy.current || !messages.length) return
     olderBusy.current = true
+    const expected = ++generation.current
     const list = visible.current
     if (list) preserveDistance.current = list.scrollHeight - list.scrollTop
     try {
       const page = await api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]!.id}${search ? `&q=${encodeURIComponent(search)}` : ''}`)
+      if (expected !== generation.current) { preserveDistance.current = null; return }
       setMessages((v) => [...new Map([...page.messages, ...v].filter((m)=>!deletedIds.current.has(m.id)).map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); setMore(page.has_more)
     } catch (caught) { preserveDistance.current = null; setError(problem(caught)) }
     finally { olderBusy.current = false }
@@ -284,7 +331,7 @@ function DirectChat({ api, token, id, saved = false, currentUserId, revision, on
             {!grouped && <MessageAvatar userId={m.author.user_id} name={m.author.username} onOpen={openProfile}/>}
             <div className="message__body">
               {!grouped && <MessageHeader name={m.author.username} createdAt={m.created_at} mine={mine} onOpen={openProfile}/>}
-              {m.forward && <ForwardAttribution message={asMessage(m)}/>}<p>{m.content}</p><MessageAttachments attachments={m.attachments}/>{m.poll && <PollCard initial={m.poll} api={api} token={token}/>}
+              {m.forward && <ForwardAttribution message={asMessage(m)}/>}<p><LinkText text={m.content}/></p><MessageLinkPreviews content={m.content}/><MessageAttachments attachments={m.attachments}/>{m.poll && <PollCard initial={m.poll} api={api} token={token}/>}
               <MessageReactions message={asMessage(m)} currentUserId={currentUserId} onReact={(emoji)=>void react(m,emoji)} loadReactors={(mid,emoji,signal,after)=>api.community.request(token,`/conversations/${id}/messages/${mid}/reactions/${encodeURIComponent(emoji)}?after=${after??0}`,'GET',undefined,signal)}/>
               {saved && <SavedNote key={`${m.id}:${m.note}`} value={m.note??''} onSave={async(note)=>{await api.community.request(token,`/conversations/${id}/messages/${m.id}/note`,'PATCH',{note});setMessages((v)=>v.map((value)=>value.id===m.id?{...value,note}:value));onRefresh()}}/>}
             </div>
@@ -295,7 +342,7 @@ function DirectChat({ api, token, id, saved = false, currentUserId, revision, on
       })}
     </div>
     {upload.control}
-    <ComposerTools api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft('');onRefresh()}}/>
+    <ComposerTools api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft((current)=>current===draft?'':current);onRefresh()}}/>
     {menu && <MessageContextMenu message={asMessage(messages.find((m)=>m.id===menu.message.id)??menu.message)} x={menu.x} y={menu.y} canEdit={false} canDelete={saved} canPin={false} canReply={false} pinned={false} pending={{}} onClose={()=>setMenu(null)} onReact={(emoji)=>void react(messages.find((m)=>m.id===menu.message.id)??menu.message,emoji)} onReply={()=>undefined} onEdit={()=>undefined} onPin={()=>undefined} onCopy={()=>{void navigator.clipboard.writeText(menu.message.content)}} onForward={()=>openForward({kind:'conversation',id:menu.message.id})} onSave={()=>saveFavorite({kind:'conversation',id:menu.message.id})} onDelete={()=>{const mid=menu.message.id;void api.community.request(token,`/conversations/${id}/messages/${mid}`,'DELETE').then(()=>{deletedIds.current.add(mid);setMessages((v)=>v.filter((m)=>m.id!==mid));onRefresh()}).catch((e)=>setError(problem(e)))}}/>}
     <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
       <label className="sr-only" htmlFor={`direct-draft-${id}`}>Сообщение в беседу</label>

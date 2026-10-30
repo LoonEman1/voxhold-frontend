@@ -24,6 +24,7 @@ export class ConversationCall {
   private screenPending = false
   private earlySignals: CallSignal[] = []
   constructor(private api: VoxholdApi, private token: string, readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean) => void; ended: () => void }) {}
+  setToken(token: string) { this.token = token }
   async start() {
     const preferences = loadVoicePreferences()
     const microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: preferences.echoCancellation, noiseSuppression: preferences.noiseSuppression, autoGainControl: preferences.autoGainControl, ...(preferences.inputDeviceId ? { deviceId: { exact: preferences.inputDeviceId } } : {}) }, video: false })
@@ -45,10 +46,12 @@ export class ConversationCall {
   private async refresh() {
     if (this.closed || this.syncing) return
     this.syncing = true
+    const requestedToken = this.token
     try { const state = await this.api.community.request<CallState>(this.token, `/conversations/${this.conversationId}/call`, 'PUT', { session_id: this.sessionId }, this.controller.signal); if (!this.closed) { this.lastHeartbeat = Date.now(); this.update(state) } }
     catch (e) {
       if (!this.closed) {
-        const transient = e instanceof ApiError && (e.status === 0 || e.status === 408 || e.status === 429 || e.status >= 500)
+        if (e instanceof ApiError && e.status === 401 && requestedToken !== this.token) return
+        const transient = e instanceof ApiError && (e.status === 0 || e.status === 401 || e.status === 408 || e.status === 429 || e.status >= 500)
         if (transient && Date.now() - this.lastHeartbeat < 40_000) return
         this.callbacks.error(e instanceof Error ? e.message : 'Звонок недоступен'); this.close(); this.callbacks.ended()
       }
@@ -86,8 +89,9 @@ export class ConversationCall {
   private async send(peer: Peer, data: { candidate?: RTCIceCandidateInit; description?: RTCSessionDescriptionInit; media?:{screen:boolean;revision:number} }) {
     for(let attempt=0;attempt<4;attempt++){
       if(this.closed)return
+      const requestedToken = this.token
       try{return await this.api.community.request(this.token, `/conversations/${this.conversationId}/call/signal`, 'POST', { session_id: this.sessionId, target_user_id: peer.member.user_id, target_session_id: peer.member.session_id, ...data }, this.controller.signal)}
-      catch(error){if(this.closed)return;if(!(error instanceof ApiError)||![0,429,502,503,504].includes(error.status)||attempt===3)throw error;await new Promise<void>((resolve)=>setTimeout(resolve,1000*(attempt+1)))}
+      catch(error){if(this.closed)return;if(error instanceof ApiError && error.status===401 && requestedToken!==this.token)continue;if(!(error instanceof ApiError)||![0,401,429,502,503,504].includes(error.status)||attempt===3)throw error;await new Promise<void>((resolve)=>setTimeout(resolve,1000*(attempt+1)))}
     }
   }
   signal(value: CallSignal) {

@@ -1,3 +1,5 @@
+import { MessageLinkPreviews } from './MessageLinks'
+import { useDraft } from '../hooks/useDraft'
 import { CustomRoleBadges, useCommunity } from './Community'
 import { ComposerTools, PollCard, saveFavorite } from './CommunityFeatures'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
@@ -77,6 +79,7 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
 
 export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin = true, readOnlyLabel, emptyLabel, renderComments, onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
  const channelId = channel?.id ?? null
+  const canModerate = canManage || !!((channel?.permissions ?? 0) & 16)
   const canCompose = composeOverride ?? (channel?.can_publish !== false && (channel?.kind !== 'news' || channel.can_publish === true || canManage))
   const attachmentUpload = useAttachmentUpload(channel, canCompose, threadRootId)
   const canReply = canCompose && channel?.kind !== 'news' || channel?.kind === 'news' && !!channel.comments_enabled
@@ -480,8 +483,8 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
 
-      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
-      <ChatComposer key={channel.id} channel={channel} canCompose={canCompose} reply={reply} members={members}
+      {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canModerate} canPin={canModerate && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      <ChatComposer draftScope={threadRootId} key={`${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} members={members}
         upload={attachmentUpload} composerFocus={composerFocus} setReplyTarget={setReplyTarget} onSend={onSend}
         onFocus={() => setComposerFocus((value) => value + 1)} readOnlyLabel={readOnlyLabel}/>
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
@@ -534,7 +537,7 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
                     <MentionComposer draft={editDraft} onChange={actions.setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void actions.saveEdit(message.id, content) }} sending={pending} channelName={channel.name} members={members} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => actions.setEditingId(null)}/>
                     <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
                   </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) actions.onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
-                  <MessageAttachments attachments={message.attachments}/>{message.poll && featureContext && <PollCard initial={message.poll} api={featureContext.api} token={featureContext.token}/>}
+                  <MessageLinkPreviews content={message.content}/><MessageAttachments attachments={message.attachments}/>{message.poll && featureContext && <PollCard initial={message.poll} api={featureContext.api} token={featureContext.token}/>}
                   {!editing && <MessageReactions message={message} currentUserId={currentUserId} pending={reactionPending} onReact={canReact ? (emoji) => { void actions.react(message, emoji) } : undefined} loadReactors={onLoadReactors}/>}
                   {canRenderComments && !message.thread_root_id && (channel.kind === 'text' ? (message.comment_count ?? 0) > 0 : channel.comments_enabled || (message.comment_count ?? 0) > 0) && <button type="button" className="news-post-comments" onClick={() => actions.setDiscussion(message)}><Icon name="chat" size={16}/><span>{channel.kind === 'text' ? 'Обсуждение' : 'Комментарии'}{(message.comment_count ?? 0) > 0 ? ` · ${message.comment_count}` : ''}</span>{channel.kind === 'news' && !channel.comments_enabled && <Icon name="lock" size={13}/>}<Icon name="chevron" size={14}/></button>}
                   {!!error && <div className="message__error">{error}</div>}
@@ -554,14 +557,14 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
   </>
 })
 
-function ChatComposer({ channel, canCompose, reply, members, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel }: {
-  channel: Channel; canCompose: boolean; reply: MessageReply | null; members: ServerMember[]
+function ChatComposer({ draftScope, channel, canCompose, reply, members, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel }: {
+  draftScope?: number; channel: Channel; canCompose: boolean; reply: MessageReply | null; members: ServerMember[]
   upload: ReturnType<typeof useAttachmentUpload>; composerFocus: number; onFocus: () => void; readOnlyLabel?: string
   setReplyTarget: (value: MessageReply | null | ((current: MessageReply | null) => MessageReply | null)) => void
   onSend: ChatPanelProps['onSend']
 }) {
   const featureContext = useCommunity()
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useDraft(`${featureContext?.api.storageScope ?? window.location.origin}:${featureContext?.userId ?? 'anonymous'}:channel:${channel.id}:thread:${draftScope ?? 0}`)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   useEffect(() => { setSendError('') }, [composerFocus])
@@ -571,17 +574,18 @@ function ChatComposer({ channel, canCompose, reply, members, upload, composerFoc
     if ((!content && !upload.hasItems) || sending || !canCompose) return
     if (reply?.deleted) { setSendError('Исходное сообщение удалено. Уберите ответ, чтобы отправить текст.'); return }
     const reference = reply
+    const draftAtSend = draft
     setSending(true); setSendError('')
-    setDraft(''); setReplyTarget(null)
-    try { const ids = await upload.prepare(); await (ids.length ? onSend(content, reference ?? undefined, ids) : reference ? onSend(content, reference) : onSend(content)); upload.commit(ids) }
-    catch (error) { setDraft((current) => current || content); setReplyTarget((current) => current ?? reference); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') }
+    setReplyTarget(null)
+    try { const ids = await upload.prepare(); await (ids.length ? onSend(content, reference ?? undefined, ids) : reference ? onSend(content, reference) : onSend(content)); setDraft((current) => current === draftAtSend ? '' : current); upload.commit(ids) }
+    catch (error) { setDraft((current) => current || draftAtSend); setReplyTarget((current) => current ?? reference); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') }
     finally { upload.release(); setSending(false) }
   }
 
   return <>
       {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, members)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); onFocus() }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
       {upload.control}
-      {canCompose && featureContext && <ComposerTools api={featureContext.api} token={featureContext.token} destination={{kind:'channel',id:channel.id,server_id:channel.server_id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={() => setDraft('')}/>}
+      {canCompose && featureContext && <ComposerTools api={featureContext.api} token={featureContext.token} destination={{kind:'channel',id:channel.id,server_id:channel.server_id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={() => setDraft((current) => current === draft ? '' : current)}/>}
       {canCompose ? <MentionComposer hasAttachments={upload.hasItems} focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
   </>
 }
