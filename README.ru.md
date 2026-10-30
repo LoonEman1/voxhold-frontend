@@ -185,4 +185,6 @@ Frontend и backend выпускаются с общим номером **2.3.0*
 
 Community 2.3: [attachments, conversations, inbox, roles and text threads](docs/community-2.3.md).
 
-For a separate API origin, set `CSP_CONNECT_EXTRA=" https://api.example.com wss://api.example.com"` in the frontend runtime environment as well as `VITE_API_BASE_URL` at build time. The default CSP permits same-origin connections only. HSTS is configured by the HTTPS edge.
+При отдельном origin API задайте `CSP_CONNECT_EXTRA=" https://api.example.com wss://api.example.com"` в окружении frontend-контейнера и `VITE_API_BASE_URL` при сборке. По умолчанию CSP разрешает соединения только с текущим origin. HSTS настраивается на HTTPS-прокси.
+
+[Исправления аудита и проверки](docs/audit-2.5-fixes-status.md). Перед согласованным обновлением необходимо выполнить миграцию backend **000032**.
