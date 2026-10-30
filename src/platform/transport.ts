@@ -1,4 +1,5 @@
 import { clientDiagnostics } from './clientDiagnostics'
+import { waitForRetry } from '../lib/retryBusy'
 
 export interface TransportRequest {
   path: string
@@ -9,6 +10,7 @@ export interface TransportRequest {
   contentType?: string
   responseType?: 'blob'
   signal?: AbortSignal
+  timeoutMs?: number
   onUploadProgress?: (fraction: number) => void
 }
 
@@ -58,66 +60,52 @@ export const browserSessionStorage: SessionStorageAdapter = {
 
 export function createFetchTransport(baseUrl = ''): Transport {
   const normalizedBase = baseUrl.replace(/\/$/, '')
-
   return {
     resolveURL: (path) => `${normalizedBase}${path}`,
     async request<T>(request: TransportRequest) {
       if (request.onUploadProgress && request.rawBody !== undefined) return uploadRequest<T>(`${normalizedBase}${request.path}`, request)
-      const { path, method = 'GET', token, body, rawBody, signal } = request
-      const startedAt = performance.now()
+      const { path, method = 'GET', token, body, rawBody } = request
+      const readonly = method === 'GET' || method === 'HEAD', userSignal = request.signal
+      const timeoutMs = request.timeoutMs ?? (request.responseType === 'blob' ? undefined : readonly ? 20_000 : 30_000)
+      // One deadline covers the entire logical request, including retries and body reads.
+      const timeout = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
+      const signal = userSignal && timeout ? (AbortSignal.any ? AbortSignal.any([userSignal, timeout]) : userSignal) : userSignal ?? timeout
+      const retrySignal = signal ?? new AbortController().signal
       const route = path.split('?')[0] || '/'
-      let response: Response
-      try {
-        response = await fetch(`${normalizedBase}${path}`, {
-          method,
-          signal,
-          headers: {
-            Accept: 'application/json',
-            ...(rawBody !== undefined ? { 'Content-Type': request.contentType ?? 'application/octet-stream' } : body === undefined ? {} : { 'Content-Type': 'application/json' }),
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
-        })
-      } catch (error) {
-        clientDiagnostics.record('http', 'request_failed', signal?.aborted ? 'debug' : 'error', {
-          method,
-          route,
-          duration_ms: Math.round(performance.now() - startedAt),
-          aborted: !!signal?.aborted,
-          error_name: error instanceof Error ? error.name : typeof error,
-        })
-        throw error
+      for (let attempt = 0; ; attempt++) {
+        const startedAt = performance.now()
+        try {
+          if (signal?.aborted) throw signal.reason
+          const response = await fetch(`${normalizedBase}${path}`, {
+            method, signal,
+            headers: {
+              Accept: 'application/json',
+              ...(rawBody !== undefined ? { 'Content-Type': request.contentType ?? 'application/octet-stream' } : body === undefined ? {} : { 'Content-Type': 'application/json' }),
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
+          })
+          const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'))
+          const retry = readonly && attempt < 2 && ([502, 503, 504].includes(response.status) || response.status === 429 && retryAfterMs !== undefined && retryAfterMs <= 10_000)
+          if (retry) {
+            clientDiagnostics.record('http', 'request_completed', 'warn', { method, route, status: response.status, attempt: attempt + 1, duration_ms: Math.round(performance.now() - startedAt) })
+            await response.body?.cancel().catch(() => {})
+            await waitForRetry(retrySignal, (retryAfterMs ?? 400 * 3 ** attempt) + Math.random() * 200)
+            continue
+          }
+          const empty = method === 'HEAD' || response.status === 204
+          const contentType = response.headers.get('content-type') ?? ''
+          const data = empty ? null : response.ok && request.responseType === 'blob' ? await response.blob() as T : contentType.includes('application/json') ? await response.json() as T : null
+          if (signal?.aborted) throw signal.reason
+          clientDiagnostics.record('http', 'request_completed', empty || response.ok ? 'info' : 'warn', { method, route, status: response.status, attempt: attempt + 1, duration_ms: Math.round(performance.now() - startedAt) })
+          return { status: response.status, data, retryAfterMs }
+        } catch (caught) {
+          const error = timeout?.aborted && signal?.aborted && !userSignal?.aborted ? new DOMException('Время ожидания ответа истекло', 'TimeoutError') : caught
+          clientDiagnostics.record('http', 'request_failed', userSignal?.aborted ? 'debug' : 'error', { method, route, attempt: attempt + 1, duration_ms: Math.round(performance.now() - startedAt), aborted: !!userSignal?.aborted, error_name: error instanceof Error ? error.name : typeof error })
+          if (!readonly || attempt >= 2 || retrySignal.aborted || error instanceof Error && (error.name === 'AbortError' || error.name === 'SyntaxError')) throw error
+          await waitForRetry(retrySignal, 400 * 3 ** attempt + Math.random() * 200)
+        }
       }
-
-      const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'))
-      if (method === 'HEAD' || response.status === 204) {
-        clientDiagnostics.record('http', 'request_completed', 'info', {
-          method,
-          route,
-          status: response.status,
-          duration_ms: Math.round(performance.now() - startedAt),
-        })
-        return { status: response.status, data: null, retryAfterMs }
-      }
-
-      const contentType = response.headers.get('content-type') ?? ''
-      const data = response.ok && request.responseType === 'blob' ? await response.blob() as T : contentType.includes('application/json')
-        ? ((await response.json()) as T)
-        : null
-
-      clientDiagnostics.record(
-        'http',
-        'request_completed',
-        response.ok ? 'info' : 'warn',
-        {
-          method,
-          route,
-          status: response.status,
-          duration_ms: Math.round(performance.now() - startedAt),
-        },
-      )
-
-      return { status: response.status, data, retryAfterMs }
     },
   }
 }
