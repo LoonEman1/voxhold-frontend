@@ -26,6 +26,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
         socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants } }))
       }
       if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } }))
+      if (event.type === 'voice.state_update') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.state_updated', data: { ...participant, ...event.data } }))
       if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
     })
   })
@@ -906,5 +907,37 @@ test('mobile controls use readable type and muted text meets contrast in both th
   await expect(dialog.locator('textarea')).toBeVisible()
   expect(await dialog.locator('textarea').evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16)
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
-  await page.screenshot({ path: 'node_modules/.cache/audit-typography-mobile.png', fullPage: true })
+  await page.screenshot({ path: 'node_modules/.cache/audit-typography-mobile.png', fullPage: true, animations: 'disabled' })
+})
+
+test('account deletion belongs to the profile and requires a typed username', async ({ page }) => {
+  await openCallWorkspace(page, { role: 'member' })
+  let deletes = 0
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() === 'DELETE') { deletes++; await route.fulfill({ status: 409, json: { error: 'try later' } }) }
+    else await route.fallback()
+  })
+  await page.locator('.user-dock__profile').click()
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  await dialog.getByRole('button', { name: 'Удалить аккаунт', exact: true }).click()
+  const confirmation = dialog.getByRole('button', { name: 'Удалить аккаунт навсегда' })
+  await expect(confirmation).toBeDisabled()
+  await dialog.getByLabel('Имя пользователя для удаления аккаунта').fill('Александр')
+  await expect(confirmation).toBeEnabled()
+  expect(deletes).toBe(0)
+  await dialog.getByRole('button', { name: 'Отменить удаление' }).click()
+  await expect(dialog.getByLabel('Имя пользователя для удаления аккаунта')).toHaveCount(0)
+})
+
+test('voice dock exposes the microphone and sound toggle state', async ({ page }) => {
+  await openCallWorkspace(page)
+  await page.getByRole('button', { name: 'Подключиться к каналу', exact: true }).click()
+  const dock = page.locator('.voice-dock')
+  await expect(dock).toBeVisible()
+  const microphone = dock.getByRole('button', { name: 'Выключить микрофон' })
+  await expect(microphone).toHaveAttribute('aria-pressed', 'false')
+  await microphone.click()
+  await expect(dock.getByRole('button', { name: 'Включить микрофон' })).toHaveAttribute('aria-pressed', 'true')
+  await dock.getByRole('button', { name: 'Выключить звук' }).click()
+  await expect(dock.getByRole('button', { name: 'Включить звук' })).toHaveAttribute('aria-pressed', 'true')
 })

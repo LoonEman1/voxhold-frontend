@@ -7,7 +7,7 @@ import { ServerSettingsDialog } from './WorkspaceDialogs'
 const GIB = 2 ** 30
 const storage: RecordingStorage = { quota_bytes: 6 * GIB, used_bytes: 1.5 * GIB, default_quota_bytes: 6 * GIB, min_quota_bytes: GIB, max_quota_bytes: 1024 * GIB, max_file_bytes: 2 * GIB, retention_seconds: 86_400 }
 const server = (role: Server['role']): Server => ({ id: 1, name: 'Voxhold', created_by: 1, created_at: 1, role, joined_at: 1 })
-const renderDialog = (role: Server['role'], onSaveRecordingQuota = vi.fn(async () => undefined)) => render(<ServerSettingsDialog open onClose={() => undefined} server={server(role)} corsOrigins={[]} corsOriginsLoading={false} onRename={async () => undefined} onDeleteAccount={async () => undefined} onDownloadDiagnostics={async () => undefined} onSaveCorsOrigins={async (origins) => origins} recordingStorage={storage} onSaveRecordingQuota={onSaveRecordingQuota}/>)
+const renderDialog = (role: Server['role'], onSaveRecordingQuota = vi.fn(async () => undefined)) => render(<ServerSettingsDialog open onClose={() => undefined} server={server(role)} corsOrigins={[]} corsOriginsLoading={false} onRename={async () => undefined} onDownloadDiagnostics={async () => undefined} onSaveCorsOrigins={async (origins) => origins} recordingStorage={storage} onSaveRecordingQuota={onSaveRecordingQuota}/>)
 
 describe('recording storage settings', () => {
   afterEach(() => { cleanup(); document.body.classList.remove('modal-open') })
