@@ -15,6 +15,15 @@ const SESSION_STORAGE_KEY = 'voxhold.diagnostics.session.v1'
 const MAX_PENDING_EVENTS = 256
 const MAX_BATCH_EVENTS = 32
 const FLUSH_INTERVAL_MS = 10_000
+const KEEPALIVE_BYTES = 60 * 1024
+const LEVELS: DiagnosticLevel[] = ['debug', 'info', 'warn', 'error']
+function configuredLevel(): DiagnosticLevel {
+  try {
+    const level = localStorage.getItem('voxhold.diagnostics.level') as DiagnosticLevel | null
+    if (level && LEVELS.includes(level)) return level
+  } catch { /* Diagnostics also work with blocked storage. */ }
+  return import.meta.env.PROD ? 'info' : 'debug'
+}
 
 function storageAvailable() {
   if (typeof window === 'undefined') return false
@@ -124,6 +133,18 @@ export class ClientDiagnostics {
   private performanceObserver: PerformanceObserver | null = null
   private longTaskCount = 0
   private longTaskMs = 0
+  private traffic = new Map<string, { event_type: string; sent: number; received: number }>()
+  private aggregating = false
+  constructor(private minimumLevel: DiagnosticLevel = configuredLevel()) {}
+
+  private recordTraffic() {
+    if (!this.traffic.size) return
+    const counts = [...this.traffic.values()]
+    this.traffic.clear()
+    this.aggregating = true
+    this.record('websocket', 'websocket_traffic', 'info', { counts, interval_ms: FLUSH_INTERVAL_MS })
+    this.aggregating = false
+  }
 
   private persistPending() {
     this.cancelPersistence?.()
@@ -210,9 +231,19 @@ export class ClientDiagnostics {
     level: DiagnosticLevel = 'info',
     details: Record<string, unknown> = {},
   ) {
+    if (category === 'websocket' && (name === 'event_sent' || name === 'event_received')) {
+      const raw = typeof details.event_type === 'string' && /^[a-z][a-z0-9_.]{0,63}$/.test(details.event_type) ? details.event_type : 'other'
+      const key = this.traffic.has(raw) || this.traffic.size < 16 ? raw : 'other'
+      const count = this.traffic.get(key) ?? { event_type: key, sent: 0, received: 0 }
+      count[name === 'event_sent' ? 'sent' : 'received'] += 1
+      this.traffic.set(key, count)
+      return
+    }
+    if (LEVELS.indexOf(level) < LEVELS.indexOf(this.minimumLevel)) return
     let sanitizedDetails: Record<string, unknown>
     try {
       sanitizedDetails = sanitizeDiagnosticDetails(details)
+      if (new TextEncoder().encode(JSON.stringify(sanitizedDetails)).byteLength > 4096) sanitizedDetails = { truncated: true }
     } catch {
       sanitizedDetails = { sanitization_failed: true }
     }
@@ -227,13 +258,25 @@ export class ClientDiagnostics {
       this.pending.splice(0, this.pending.length - MAX_PENDING_EVENTS)
     }
     this.schedulePersistence()
-    if (this.pending.length >= MAX_BATCH_EVENTS) void this.flush()
+    if (!this.aggregating && this.pending.length >= MAX_BATCH_EVENTS) void this.flush()
   }
 
   async flush(keepalive = false) {
+    this.recordTraffic()
     if (!this.token || this.flushing || this.pending.length === 0 || typeof fetch === 'undefined') return
     this.flushing = true
     const events = this.pending.slice(0, MAX_BATCH_EVENTS)
+    const payload = () => JSON.stringify({
+      session_id: this.sessionID,
+      client_version: packageMetadata.version,
+      platform: typeof navigator === 'undefined' ? '' : navigator.userAgent,
+      events,
+    })
+    let body = payload()
+    while (keepalive && events.length > 1 && new TextEncoder().encode(body).byteLength > KEEPALIVE_BYTES) {
+      events.pop()
+      body = payload()
+    }
     try {
       const response = await fetch(`${this.baseURL}/api/v1/diagnostics/client-events`, {
         method: 'POST',
@@ -243,12 +286,7 @@ export class ClientDiagnostics {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.token}`,
         },
-        body: JSON.stringify({
-          session_id: this.sessionID,
-          client_version: packageMetadata.version,
-          platform: typeof navigator === 'undefined' ? '' : navigator.userAgent,
-          events,
-        }),
+        body,
       })
       if (!response.ok) {
         if (response.status === 400 || response.status === 413) {
@@ -268,6 +306,7 @@ export class ClientDiagnostics {
   }
 
   dispose() {
+    this.recordTraffic()
     this.cancelTimer?.()
     this.cancelTimer = null
     this.persistPending()
