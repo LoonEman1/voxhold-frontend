@@ -867,3 +867,15 @@ test('ban action describes instance-wide scope before confirmation', async ({ pa
   await expect(dialog.getByRole('button', { name: 'Забанить', exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Отмена', exact: true }).click()
 })
+
+test('native context menus remain available in inputs and with Shift', async ({ page }) => {
+  await openCallWorkspace(page, { withPeers: true })
+  await page.locator('.user-dock__profile').click()
+  const input = page.getByRole('dialog', { name: 'Ваш профиль' }).locator('textarea')
+  await expect(input).toBeVisible()
+  expect(await input.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))).toBe(true)
+  await page.getByRole('dialog', { name: 'Ваш профиль' }).getByRole('button', { name: 'Отмена', exact: true }).click()
+  const member = page.locator('.voice-participant').filter({ hasText: 'Мария' })
+  expect(await member.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })))).toBe(true)
+  await expect(page.getByRole('menu')).toHaveCount(0)
+})

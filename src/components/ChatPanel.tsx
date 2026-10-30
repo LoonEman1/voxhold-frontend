@@ -4,6 +4,7 @@ import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { preferNativeContextMenu } from '../lib/contextMenu'
 import { useMemberIdentity } from '../hooks/useMemberIdentity'
 import type { VoxholdApi } from '../services/api'
 import type { Channel, ChannelRead, Message, MessageReply, ServerMember, ServerRole } from '../domain/types'
@@ -356,6 +357,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const reply = replyTarget ? { ...replyTarget, ...(liveReply ? { author: liveReply.author, content: liveReply.content, revision: liveReply.revision ?? 0 } : {}), deleted: replyTarget.deleted || !!isMessageDeleted?.(replyTarget.message_id) } : null
   const menuMessage = messageMenu ? messages.find((value) => value.id === messageMenu.id) : undefined
   const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, message: Message, expanded = false) => {
+    if (event.type === 'contextmenu' && preferNativeContextMenu(event)) return
     if ((event.target as Element).closest('textarea,input,[contenteditable="true"]')) return
     event.preventDefault(); event.stopPropagation()
     const box = event.currentTarget.getBoundingClientRect()

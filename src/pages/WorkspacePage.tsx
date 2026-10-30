@@ -42,6 +42,7 @@ import { useChannelHistory } from '../hooks/useChannelHistory'
 import { createMediaActivity, MediaActivityProvider, useSpeakingUsers } from '../components/MediaActivity'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { newerMessage, resolveReplyReferences, withReactions } from '../lib/messageRevisions'
+import { preferNativeContextMenu } from '../lib/contextMenu'
 import { pickDefaultChannel } from '../lib/channels'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { mergeServerMember } from '../lib/serverMembers'
@@ -2167,6 +2168,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [userVolumes, voiceParticipants])
 
   const openMenu = (event: ReactMouseEvent, items: ContextMenuItem[], title?: string) => {
+    if (event.type === 'contextmenu' && preferNativeContextMenu(event)) return
     event.preventDefault()
     event.stopPropagation()
     setContextMenu({ x: event.clientX, y: event.clientY, ...(title ? { title } : {}), items })
@@ -2376,7 +2378,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   if (initialLoading) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div><span>Собираем ваши комнаты…</span></div>
 
   return (
-    <CommunityProvider onOpenProfile={(id, _name, role) => void openUserProfile(id, role)} onViewChange={(active) => { personalOpenRef.current = active; setPersonalOpen(active); setMobileNav(false); setMessagePanel(null) }} api={api} token={token ?? ''} userId={user?.id ?? 0} serverId={selectedServerId} owner={selectedServer?.role === 'owner'} members={members} onMessage={(message) => historyStore.receive(message)} onNavigate={(item) => { setSelectedServerId(item.server_id); setSelectedChannelId(item.channel_id); setMessageTarget({ channelId: item.channel_id, messageId: item.message_id }); setFocusedMessageId(item.message_id); setMessagePanel(null); setMobileNav(false) }}><MediaActivityProvider value={mediaActivity}><AvatarProvider api={api} token={token ?? ''} userId={user?.id ?? 0} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => event.preventDefault()} onPointerDownCapture={(event) => { memberAnchor.current = { x: event.clientX, y: event.clientY } }}>
+    <CommunityProvider onOpenProfile={(id, _name, role) => void openUserProfile(id, role)} onViewChange={(active) => { personalOpenRef.current = active; setPersonalOpen(active); setMobileNav(false); setMessagePanel(null) }} api={api} token={token ?? ''} userId={user?.id ?? 0} serverId={selectedServerId} owner={selectedServer?.role === 'owner'} members={members} onMessage={(message) => historyStore.receive(message)} onNavigate={(item) => { setSelectedServerId(item.server_id); setSelectedChannelId(item.channel_id); setMessageTarget({ channelId: item.channel_id, messageId: item.message_id }); setFocusedMessageId(item.message_id); setMessagePanel(null); setMobileNav(false) }}><MediaActivityProvider value={mediaActivity}><AvatarProvider api={api} token={token ?? ''} userId={user?.id ?? 0} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => { if (!preferNativeContextMenu(event)) event.preventDefault() }} onPointerDownCapture={(event) => { memberAnchor.current = { x: event.clientX, y: event.clientY } }}>
       <CommunityNavigation/>
       <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>

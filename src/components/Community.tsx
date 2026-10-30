@@ -6,6 +6,7 @@ import { ForwardAttribution } from './MessageQuote'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { VoxholdApi } from '../services/api'
+import { preferNativeContextMenu } from '../lib/contextMenu'
 import { communityPages } from '../services/communityPages'
 import type { Message, MessageNotification, ServerMember, ServerRole } from '../domain/types'
 import type { Conversation, DirectMessage, InboxItem, Privacy, CustomRole } from '../domain/community'
@@ -318,7 +319,7 @@ function DirectChat({ api, token, id, saved = false, currentUserId, revision, on
         const openProfile = community?.onOpenProfile ? () => community.onOpenProfile?.(m.author.user_id, m.author.username, community.members.find((member) => member.user_id === m.author.user_id)?.role ?? 'member') : undefined
         return <Fragment key={m.id}>
           {!sameDay && <div className="date-divider"><span>{formatDate(m.created_at)}</span></div>}
-          <article onContextMenu={(e)=>{e.preventDefault();setMenu({message:m,x:e.clientX,y:e.clientY})}} data-message-id={m.id} className={`message ${mine ? 'message--mine' : ''} ${grouped ? 'message--grouped' : ''}`}>
+          <article onContextMenu={(e)=>{if(preferNativeContextMenu(e))return;e.preventDefault();setMenu({message:m,x:e.clientX,y:e.clientY})}} data-message-id={m.id} className={`message ${mine ? 'message--mine' : ''} ${grouped ? 'message--grouped' : ''}`}>
             {!grouped && <MessageAvatar userId={m.author.user_id} name={m.author.username} onOpen={openProfile}/>}
             <div className="message__body">
               {!grouped && <MessageHeader name={m.author.username} createdAt={m.created_at} mine={mine} onOpen={openProfile}/>}
