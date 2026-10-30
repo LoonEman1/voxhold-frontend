@@ -85,4 +85,3 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
   }
   return media
 }
-
