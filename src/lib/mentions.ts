@@ -6,15 +6,19 @@ export interface MentionDirectory { users: Map<number, ServerMember>; names: Map
 export function mentionDirectory(members: ServerMember[]): MentionDirectory {
   return { users: new Map(members.map((member) => [member.user_id, member])), names: new Map(members.map((member) => [member.username, member])) }
 }
-export function parseMentions(content: string, directory: MentionDirectory): Mention[] {
+export function codeRanges(content: string): [number, number][] {
   const ignored: [number, number][] = []
   for (let i = 0; i < content.length;) {
     if (content[i] !== '`') { i++; continue }
     const start = i; while (content[i] === '`') i++
     const delimiter = content.slice(start, i), end = content.indexOf(delimiter, i)
-    if (end < 0) continue
+    if (end < 0) { ignored.push([start, content.length]); break }
     ignored.push([start, end + delimiter.length]); i = end + delimiter.length
   }
+  return ignored
+}
+export function parseMentions(content: string, directory: MentionDirectory): Mention[] {
+  const ignored = codeRanges(content)
   const result: Mention[] = []
   for (const match of content.matchAll(/<@([0-9]{1,19})>|<@&(owner|admin|member)>|@([\p{L}\p{N}_-]+)/gu)) {
     const start = match.index

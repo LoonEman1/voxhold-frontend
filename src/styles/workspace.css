@@ -789,3 +789,5 @@ button.message-mention:hover { background: color-mix(in srgb, var(--violet) 30%,
 .news-comments__post { flex: none; max-height: 140px; overflow: auto; padding: 15px 20px; border-bottom: 1px solid var(--line); background: var(--surface-2); }.news-comments__post b { color: var(--lime); font-size: var(--font-2xs); }.news-comments__post p { margin: 8px 0 0; font-size: var(--font-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .news-comments > .chat-panel { min-height: 0; flex: 1; }.news-comments .message { padding-inline: 16px; }.news-settings-hint { color: var(--muted); font-size: var(--font-xs); line-height: 1.5; }
 @media(max-width: 600px) { .call-controls { gap: 2px; padding: 5px; max-width: calc(100vw - 20px); }.call-controls > button:has(small) { min-width: 36px; width: 38px; }.call-controls > button small { font-size: var(--font-2xs); }.call-controls > button.is-leave { margin-left: 2px; } }
+
+.message-link { color: var(--accent); text-decoration: underline; overflow-wrap: anywhere; }
