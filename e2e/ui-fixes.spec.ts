@@ -941,3 +941,17 @@ test('voice dock exposes the microphone and sound toggle state', async ({ page }
   await dock.getByRole('button', { name: 'Выключить звук' }).click()
   await expect(dock.getByRole('button', { name: 'Включить звук' })).toHaveAttribute('aria-pressed', 'true')
 })
+
+test('channel list updates preserve an open search query', async ({ page }) => {
+  const { emit } = await openCallWorkspace(page)
+  await page.getByRole('button', { name: 'Поиск', exact: true }).click()
+  const input = page.getByPlaceholder('Введите слово или фразу')
+  await input.fill('keep this query')
+  await page.route('**/api/v1/servers/1/channels', (route) => route.fulfill({ json: [
+    { id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 },
+    { id: 2, server_id: 1, name: 'новый-текстовый', kind: 'text', position: 1, created_by: 1, created_at: 1 },
+  ] }))
+  emit('channels.changed', { server_id: 1 })
+  await expect(page.getByRole('button', { name: 'новый-текстовый', exact: true })).toBeVisible()
+  await expect(input).toHaveValue('keep this query')
+})
