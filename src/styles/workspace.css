@@ -790,4 +790,5 @@ button.message-mention:hover { background: color-mix(in srgb, var(--violet) 30%,
 .news-comments > .chat-panel { min-height: 0; flex: 1; }.news-comments .message { padding-inline: 16px; }.news-settings-hint { color: var(--muted); font-size: var(--font-xs); line-height: 1.5; }
 @media(max-width: 600px) { .call-controls { gap: 2px; padding: 5px; max-width: calc(100vw - 20px); }.call-controls > button:has(small) { min-width: 36px; width: 38px; }.call-controls > button small { font-size: var(--font-2xs); }.call-controls > button.is-leave { margin-left: 2px; } }
 
-.message-link { color: var(--accent); text-decoration: underline; overflow-wrap: anywhere; }
+.message-link { color: var(--cyan); text-decoration: underline; overflow-wrap: anywhere; }
+[data-theme="light"] .message-link { color: #087787; }

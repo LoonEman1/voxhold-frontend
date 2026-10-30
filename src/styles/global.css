@@ -197,7 +197,8 @@ input::placeholder, textarea::placeholder { color: #66665f; }
 [data-theme="light"] .country-picker__trigger, [data-theme="light"] .country-picker__popover { color: var(--text); background: #fff; }
 [data-theme="light"] .country-picker__trigger:hover { border-color: rgba(31,32,27,.28); }
 [data-theme="light"] .country-picker__list > button { color: #55564f; } [data-theme="light"] .country-picker__list > button:hover { color: #20211d; background: rgba(31,32,27,.055); }
-[data-theme="light"] input::placeholder, [data-theme="light"] textarea::placeholder { color: #aaa9a1; }
+[data-theme="light"] input::placeholder, [data-theme="light"] textarea::placeholder { color: var(--muted); }
+[data-theme="light"] .auth-form label > span, [data-theme="light"] .dialog-form label > span, [data-theme="light"] .button--ghost { color: var(--muted); }
 [data-theme="light"] .auth-form-wrap { background: #f8f7f2; }
 [data-theme="light"] .auth-story { background: #e8e9df; }
 [data-theme="light"] .auth-story::before { background: radial-gradient(circle at 82% 17%, rgba(124,100,223,.15), transparent 29%), radial-gradient(circle at 19% 88%, rgba(181,207,22,.15), transparent 28%), linear-gradient(145deg, #ebeae2, #dcded2); }
