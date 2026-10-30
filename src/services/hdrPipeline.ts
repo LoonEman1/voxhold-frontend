@@ -1,6 +1,7 @@
 import type { StreamCodec, StreamRendition } from '../domain/types'
 import type { HDRCaptureProbe } from './hdrCapabilities'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
+import { startFrameClock } from './frameClock'
 
 export interface StreamPublishPipeline {
   stream: MediaStream
@@ -152,7 +153,12 @@ function createFrameCanvas(width: number, height: number): Canvas2DTarget | null
 const IDLE_REFRESH_MS = 500
 
 export interface SDRPipelineOptions {
-  preferCanvas?: boolean
+  /**
+   * Skip the worker transform, e.g. when repairing a stalled one. The
+   * frame-driven transform stays preferred over the canvas compatibility path,
+   * which depends on page visibility.
+   */
+  avoidWorker?: boolean
   idleRefreshMs?: number
 }
 
@@ -309,12 +315,12 @@ export async function createSDRPublishPipeline(
   const idleRefreshMs = options.idleRefreshMs ?? IDLE_REFRESH_MS
   const sourceTrack = capture.getVideoTracks()[0]
   if (!sourceTrack) throw new Error('Источник экрана не предоставил видеодорожку')
-  const workerPipeline = options.preferCanvas ? null : await createWorkerSDRPipeline(capture, codec, onFailure, idleRefreshMs)
+  const workerPipeline = options.avoidWorker ? null : await createWorkerSDRPipeline(capture, codec, onFailure, idleRefreshMs)
   if (workerPipeline) return workerPipeline
   // A frame-driven transform is independent of page visibility. Unlike
   // requestVideoFrameCallback/requestAnimationFrame, it continues to receive
   // the active getDisplayMedia track while the publisher opens another tab.
-  const frameDriven = options.preferCanvas ? null : createFrameDrivenSDRPipeline(capture, codec, onFailure, idleRefreshMs)
+  const frameDriven = createFrameDrivenSDRPipeline(capture, codec, onFailure, idleRefreshMs)
   if (frameDriven) {
     clientDiagnostics.record('media', 'stream_processing_path', 'info', { path: 'compatibility_frame_transform' })
     return frameDriven
@@ -389,9 +395,13 @@ export async function createSDRPublishPipeline(
       reportFailure(error)
     }
   }
+  const frameIntervalMs = Math.max(8, Math.round(1000 / frameRate))
+  let framePending = false
   const scheduleFrame = () => {
-    if (closed || typeof video.requestVideoFrameCallback !== 'function') return
+    if (closed || framePending || typeof video.requestVideoFrameCallback !== 'function') return
+    framePending = true
     frameCallback = video.requestVideoFrameCallback(() => {
+      framePending = false
       draw()
       scheduleFrame()
     })
@@ -404,8 +414,24 @@ export async function createSDRPublishPipeline(
       if (performance.now() - lastDrawAt >= idleRefreshMs) draw()
     }, Math.max(16, Math.round(idleRefreshMs / 2)))
   } else {
-    interval = window.setInterval(draw, Math.max(8, Math.round(1000 / frameRate)))
+    interval = window.setInterval(draw, frameIntervalMs)
   }
+  // A hidden page gets no video frame callbacks and ~1 Hz window timers, so
+  // viewers saw the frame rate collapse when the publisher switched tabs.
+  // While hidden, a worker clock keeps drawing at the capture rate.
+  let stopHiddenClock: (() => void) | null = null
+  const followVisibility = () => {
+    if (closed) return
+    if (document.visibilityState === 'hidden') {
+      stopHiddenClock ??= startFrameClock(frameIntervalMs, draw)
+      return
+    }
+    stopHiddenClock?.()
+    stopHiddenClock = null
+    scheduleFrame()
+  }
+  followVisibility()
+  document.addEventListener('visibilitychange', followVisibility)
   const videoError = () => reportFailure(new Error('Браузер потерял кадры SDR-преобразования'))
   video.addEventListener('error', videoError)
 
@@ -418,6 +444,9 @@ export async function createSDRPublishPipeline(
       if (closed) return
       closed = true
       video.removeEventListener('error', videoError)
+      document.removeEventListener('visibilitychange', followVisibility)
+      stopHiddenClock?.()
+      stopHiddenClock = null
       if (frameCallback !== null && typeof video.cancelVideoFrameCallback === 'function') {
         video.cancelVideoFrameCallback(frameCallback)
       }

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openCallWorkspace(page: Page, options: { withPeers?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -15,8 +15,12 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
   })
   const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
   const participants = options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
-  let emit = (_type: string, _data: unknown) => {}
+  let emit = (_type: string, _data: unknown) => {}, revoke = () => {}
+  let connections = 0, joins = 0
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
+    connections++
+    if (options.reconnectIDs) participant.connection_id = `fixture-voice-${connections}`
+    revoke = () => socket.close({ code: 1008, reason: 'session expired or revoked' })
     emit = (type, data) => socket.send(JSON.stringify({ type, data }))
     socket.onMessage((raw) => {
       const event = JSON.parse(String(raw))
@@ -25,7 +29,8 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
         socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: participants.map((item) => item.user_id) }] } }))
         socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants } }))
       }
-      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } }))
+      if (event.type === 'voice.join') { joins++; socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } })) }
+      if (event.type === 'voice.state_update') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.state_updated', data: { ...participant, ...event.data } }))
       if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
     })
   })
@@ -73,7 +78,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
   })
   await page.goto('/')
   await expect(page.locator('.voice-participant')).toHaveCount(participants.length)
-  return { emit }
+  return { emit, revoke: () => revoke(), counts: () => ({ connections, joins }) }
 }
 
 for (const role of ['owner', 'admin'] as const) {
@@ -143,7 +148,7 @@ test('participant volume updates in an open menu and the same menu opens on room
   await expect(slider).toHaveValue('195')
   await expect(menu.getByRole('menuitem', { name: 'Просмотреть профиль' })).toBeVisible()
   await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toBeVisible()
-  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Забанить на инстансе' })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await slider.press('ArrowLeft')
   await expect(slider).toHaveValue('190')
@@ -161,7 +166,7 @@ test('participant volume updates in an open menu and the same menu opens on room
   await expect(slider).toHaveValue('190')
   await page.locator('.voice-participant').filter({ hasText: 'Александр' }).click({ button: 'right' })
   await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toHaveCount(0)
-  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Забанить на инстансе' })).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
@@ -855,4 +860,150 @@ test('news channel creation configures publishers and comments', async ({ page }
   await expect(dialog.getByText('Настройки публикаций сохранены.', { exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('news-channel-settings.png'), animations: 'disabled' })
   expect(errors).toEqual([])
+})
+
+test('ban action describes instance-wide scope before confirmation', async ({ page }) => {
+  await openCallWorkspace(page, { withPeers: true })
+  await page.locator('.voice-participant').filter({ hasText: 'Мария' }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Забанить на инстансе', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Забанить Мария на инстансе?' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('будет забанен на этом инстансе')
+  await expect(dialog.getByRole('button', { name: 'Забанить', exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Отмена', exact: true }).click()
+})
+
+test('native context menus remain available in inputs and with Shift', async ({ page }) => {
+  await openCallWorkspace(page, { withPeers: true })
+  await page.locator('.user-dock__profile').click()
+  const input = page.getByRole('dialog', { name: 'Ваш профиль' }).locator('textarea')
+  await expect(input).toBeVisible()
+  expect(await input.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))).toBe(true)
+  await page.getByRole('dialog', { name: 'Ваш профиль' }).getByRole('button', { name: 'Отмена', exact: true }).click()
+  const member = page.locator('.voice-participant').filter({ hasText: 'Мария' })
+  expect(await member.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })))).toBe(true)
+  await expect(page.getByRole('menu')).toHaveCount(0)
+})
+
+test('mobile controls use readable type and muted text meets contrast in both themes', async ({ page }) => {
+  await openCallWorkspace(page)
+  for (const theme of ['dark', 'light']) {
+    const ratios = await page.evaluate((theme) => {
+      document.documentElement.dataset.theme = theme
+      const style = getComputedStyle(document.documentElement)
+      const luminance = (value: string) => {
+        let hex = value.trim().replace('#', '')
+        if (hex.length === 3) hex = [...hex].map((v) => v + v).join('')
+        const values = [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+        return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722
+      }
+      const muted = luminance(style.getPropertyValue('--muted'))
+      return ['--bg', '--surface', '--surface-2', '--surface-3'].map((key) => {
+        const background = luminance(style.getPropertyValue(key))
+        return (Math.max(muted, background) + 0.05) / (Math.min(muted, background) + 0.05)
+      })
+    }, theme)
+    ratios.forEach((ratio) => expect(ratio).toBeGreaterThanOrEqual(4.5))
+  }
+  await page.locator('.user-dock__profile').click()
+  await page.setViewportSize({ width: 375, height: 812 })
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  await expect(dialog.locator('textarea')).toBeVisible()
+  expect(await dialog.locator('textarea').evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16)
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: 'node_modules/.cache/audit-typography-mobile.png', fullPage: true, animations: 'disabled' })
+})
+
+test('account deletion belongs to the profile and requires a typed username', async ({ page }) => {
+  await openCallWorkspace(page, { role: 'member' })
+  let deletes = 0
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() === 'DELETE') { deletes++; await route.fulfill({ status: 409, json: { error: 'try later' } }) }
+    else await route.fallback()
+  })
+  await page.locator('.user-dock__profile').click()
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  await dialog.getByRole('button', { name: 'Удалить аккаунт', exact: true }).click()
+  const confirmation = dialog.getByRole('button', { name: 'Удалить аккаунт навсегда' })
+  await expect(confirmation).toBeDisabled()
+  await dialog.getByLabel('Имя пользователя для удаления аккаунта').fill('Александр')
+  await expect(confirmation).toBeEnabled()
+  expect(deletes).toBe(0)
+  await dialog.getByRole('button', { name: 'Отменить удаление' }).click()
+  await expect(dialog.getByLabel('Имя пользователя для удаления аккаунта')).toHaveCount(0)
+})
+
+test('voice dock exposes the microphone and sound toggle state', async ({ page }) => {
+  await openCallWorkspace(page)
+  await page.getByRole('button', { name: 'Подключиться к каналу', exact: true }).click()
+  const dock = page.locator('.voice-dock')
+  await expect(dock).toBeVisible()
+  const microphone = dock.getByRole('button', { name: 'Выключить микрофон' })
+  await expect(microphone).toHaveAttribute('aria-pressed', 'false')
+  await microphone.click()
+  await expect(dock.getByRole('button', { name: 'Включить микрофон' })).toHaveAttribute('aria-pressed', 'true')
+  await dock.getByRole('button', { name: 'Выключить звук' }).click()
+  await expect(dock.getByRole('button', { name: 'Включить звук' })).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('channel list updates preserve an open search query', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
+  await page.route('**/api/v1/diagnostics/client-events', (route) => route.fulfill({ status: 204 }))
+  const { emit } = await openCallWorkspace(page)
+  await page.getByRole('button', { name: 'Поиск', exact: true }).click()
+  const input = page.getByPlaceholder('Введите слово или фразу')
+  await input.fill('keep this query')
+  await page.route('**/api/v1/servers/1/channels', (route) => route.fulfill({ json: [
+    { id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 },
+    { id: 2, server_id: 1, name: 'новый-текстовый', kind: 'text', position: 1, created_by: 1, created_at: 1 },
+  ] }))
+  emit('channels.changed', { server_id: 1 })
+  await expect(page.getByRole('button', { name: 'новый-текстовый', exact: true })).toBeVisible()
+  await expect(input).toHaveValue('keep this query')
+  await expect(page.locator('.panel-loading')).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
+test('cross-tab rotation preserves voice and unmount does not start recovery', async ({ page, context }) => {
+  await page.route('**/src/services/mediaRecovery.ts*', async (route) => {
+    const response = await route.fetch(), source = await response.text(), marker = /begin\(intent\)\s*\{/
+    expect(source).toMatch(marker)
+    await route.fulfill({ response, body: source.replace(marker, (match) => `${match}\n globalThis.rotationRecoveries = (globalThis.rotationRecoveries ?? 0) + 1;`) })
+  })
+  let rotations = 0, release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await context.route('**/api/v1/auth/refresh', async (route) => { rotations++; await gate; await route.fulfill({ json: { token: 'rotated', expires_at: Math.floor(Date.now() / 1000) + 3600 } }) })
+  await context.route('**/api/v1/diagnostics/client-events', (route) => route.fulfill({ status: 204 }))
+  const fixture = await openCallWorkspace(page, { reconnectIDs: true })
+  await page.getByRole('button', { name: 'Подключиться к каналу', exact: true }).click()
+  await expect(page.locator('.voice-dock')).toBeVisible()
+  await expect(page.locator('.channel-voice-users .is-me')).toHaveCount(1)
+  expect(await page.evaluate(() => (window as unknown as { rotationRecoveries?: number }).rotationRecoveries ?? 0)).toBe(0)
+  const baseline = fixture.counts()
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('voxhold.session.v1')!)
+    saved.session.expires_at = Math.floor(Date.now() / 1000) + 60
+    localStorage.setItem('voxhold.session.v1', JSON.stringify(saved))
+  })
+  const second = await context.newPage()
+  try {
+    await second.goto('/e2e/fixtures/auth-race.html')
+    await expect.poll(() => rotations).toBe(1)
+    fixture.revoke()
+    const recoveries = () => page.evaluate(() => (window as unknown as { rotationRecoveries?: number }).rotationRecoveries ?? 0)
+    await expect.poll(recoveries).toBe(1)
+    await expect(page.locator('.workspace')).toBeVisible()
+    release()
+    await expect(second.getByText('rotated', { exact: true })).toBeVisible()
+    await expect.poll(() => fixture.counts().joins).toBe(baseline.joins + 1)
+    await expect.poll(() => fixture.counts().connections).toBe(baseline.connections + 1)
+    expect(await recoveries()).toBe(1)
+    await expect(page.locator('.voice-dock')).toBeVisible()
+    await page.locator('.user-dock').getByRole('button', { name: 'Выйти', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Выйти из аккаунта?' }).getByRole('button', { name: 'Выйти', exact: true }).click()
+    await expect(page.locator('.workspace')).toHaveCount(0)
+    expect(await recoveries()).toBe(1)
+  } finally { release(); await second.close() }
 })

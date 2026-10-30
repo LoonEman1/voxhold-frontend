@@ -1,3 +1,4 @@
+import { downloadBlob as saveBlob } from '../lib/downloadBlob'
 import type { ChannelRecording } from '../domain/types'
 
 export interface LocalRecording {
@@ -76,14 +77,7 @@ export class RecordingStore {
 export function recordingFilename(record: ChannelRecording) {
   return `voxhold-${new Date(record.created_at * 1000).toISOString().replace(/[:.]/g, '-')}-${record.id.slice(0, 8)}.${record.mime_type === 'video/mp4' ? 'mp4' : 'webm'}`
 }
-export function downloadFile(url: string, filename: string) {
-  const anchor = document.createElement('a')
-  anchor.href = url; anchor.download = filename; anchor.rel = 'noopener'
-  document.body.append(anchor); anchor.click(); anchor.remove()
-}
+export { downloadFile } from '../lib/downloadBlob'
 export function downloadBlob(blob: Blob, record: ChannelRecording) {
-  const url = URL.createObjectURL(blob)
-  downloadFile(url, recordingFilename(record))
-  // Leave ample time for the browser to acquire the Blob before releasing it.
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  saveBlob(blob, recordingFilename(record))
 }

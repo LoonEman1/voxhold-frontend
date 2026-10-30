@@ -25,8 +25,9 @@ RUN npm test
 
 FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
 ENV BACKEND_UPSTREAM=host.docker.internal:8080
+ENV CSP_CONNECT_EXTRA=""
 COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY docker/security_headers.conf /etc/nginx/security_headers.conf
+COPY docker/security_headers.inc.template /etc/nginx/templates/security_headers.inc.template
 COPY --from=build --chown=101:101 /app/dist /usr/share/nginx/html
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1

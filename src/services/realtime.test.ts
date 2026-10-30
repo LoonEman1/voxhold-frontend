@@ -361,10 +361,11 @@ describe('RealtimeClient reconnection policy', () => {
 
   it('reconnects after a server restart instead of logging out', () => {
     const timers: number[] = []
+    const pending: Array<() => void> = []
     vi.stubGlobal('window', {
       dispatchEvent: vi.fn(),
       location: { protocol: 'http:', host: 'localhost:3000', href: 'http://localhost:3000/' },
-      setTimeout: (_handler: () => void, delay: number) => { timers.push(delay); return timers.length },
+      setTimeout: (handler: () => void, delay: number) => { pending.push(handler); timers.push(delay); return timers.length },
       clearTimeout: () => undefined,
     })
     vi.stubGlobal('WebSocket', FakeWebSocket)
@@ -381,8 +382,36 @@ describe('RealtimeClient reconnection policy', () => {
     expect(timers.length).toBe(before + 1)
     expect(timers.at(-1)).toBeLessThanOrEqual(1_500)
 
+    const previous = FakeWebSocket.latest
+    pending.at(-1)?.()
+    expect(FakeWebSocket.latest).not.toBe(previous)
     FakeWebSocket.latest?.close(1008, 'invalid or expired session')
     expect(onUnauthorized).toHaveBeenCalledOnce()
     client.close()
   })
+})
+
+it('ignores late events from a closed socket after a replacement is ready', () => {
+  vi.stubGlobal('window', { dispatchEvent: vi.fn(), location: { protocol: 'http:', host: 'localhost:3000', href: 'http://localhost:3000/' }, setTimeout, clearTimeout })
+  vi.stubGlobal('WebSocket', FakeWebSocket)
+  const state = vi.fn(), unauthorized = vi.fn(), onMessage = vi.fn()
+  const client = new RealtimeClient({ token: 'secret', onStateChange: state, onUnauthorized: unauthorized, onMessage })
+  client.connect()
+  const old = FakeWebSocket.latest!
+  old.open(); old.serverEvent('ready', {})
+  client.close()
+  expect(state).not.toHaveBeenCalledWith('offline')
+  client.connect()
+  const current = FakeWebSocket.latest!
+  current.open(); current.serverEvent('ready', {})
+  state.mockClear()
+  old.close(1008, 'session expired or revoked')
+  old.serverEvent('message.created', { id: 10 })
+  expect(state).not.toHaveBeenCalled()
+  expect(unauthorized).not.toHaveBeenCalled()
+  expect(onMessage).not.toHaveBeenCalled()
+  client.subscribe(1, 2)
+  expect(current.sent.some((value) => JSON.parse(value).type === 'channel.subscribe')).toBe(true)
+  client.close()
+  vi.unstubAllGlobals()
 })

@@ -3,8 +3,8 @@ import type { RecordingLimits, ChannelRecording } from '../domain/types'
 import { humanError } from '../lib/format'
 import { ApiError, type VoxholdApi } from '../services/api'
 import type { BrowserVoiceSession } from '../services/voice'
-import { CallRecorder, recordingMIME } from '../services/recording'
-import { createRecordingPreview } from '../services/recordingPreview'
+import type { CallRecorder } from '../services/recording'
+import { recordingMIME } from '../services/recordingFormat'
 import { downloadBlob, downloadFile, recordingFilename, RecordingStore, type LocalRecording } from '../services/recordingStore'
 
 const MAX_SERVER_BYTES = 2 ** 31
@@ -68,6 +68,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
     let task = previewTasks.current.get(key)
     if (!task) {
       task = (async () => {
+        const { createRecordingPreview } = await import('../services/recordingPreview')
         const preview = await createRecordingPreview(await opened.previewSource(local), Math.min(local.duration, 4000))
         if (preview) await opened.updateMetadata(local.record.id, { preview }).catch(() => undefined)
         return preview
@@ -195,6 +196,7 @@ export function useCallRecordings({ api, token, scope, serverId, voice, voiceMed
       audio = new AudioContext({ sampleRate: 48_000 })
       void audio.resume().catch(() => undefined)
       record = await api.recordings.start(currentToken, currentVoice.serverId, currentVoice.channelId, mime.split(';')[0]!)
+      const { CallRecorder } = await import('../services/recording')
       if (latestVoice.current?.channelId !== currentVoice.channelId || !store.current) throw new Error('Голосовой канал уже закрыт')
       running = new CallRecorder(store.current, record, mime, () => { void refreshLocal() }, (message) => { notify(message, 'error'); void stopRef.current() }, audio)
       running.setSources(voiceMedia.current?.recordingAudioTracks() ?? [], latestStream.current)

@@ -1,3 +1,4 @@
+import { safeImageBlob } from '../lib/safeBlob'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { textLinks } from '../lib/links'
 import { useVisible } from '../hooks/useVisible'
@@ -11,7 +12,7 @@ export function LinkText({ text }: { text: string }) {
   let offset = 0
   const parts = textLinks(text).map((link) => {
     const before = text.slice(offset, link.start); offset = link.end
-    return <Fragment key={link.start}>{before}<a className="message-link" href={link.href} target="_blank" rel="noopener noreferrer ugc" referrerPolicy="no-referrer">{link.text}</a></Fragment>
+    return <Fragment key={link.start}>{before}<a className="message-link" href={link.href} target="_blank" rel="noopener noreferrer nofollow ugc" referrerPolicy="no-referrer">{link.text}</a></Fragment>
   })
   return <>{parts}{text.slice(offset)}</>
 }
@@ -22,7 +23,7 @@ function PreviewImage({ api, token, path }: { api: VoxholdApi; token: string; pa
     if (!/^\/api\/v1\/link-preview\/images\/[a-f0-9]{64}$/.test(path)) return
     const controller = new AbortController(); let objectURL = ''
     void attachmentDownload(controller.signal, () => api.linkPreviews.image(token, path, controller.signal)).then((blob) => {
-      if (!controller.signal.aborted) { objectURL = URL.createObjectURL(blob); setURL(objectURL) }
+      if (!controller.signal.aborted) { objectURL = URL.createObjectURL(safeImageBlob(blob)); setURL(objectURL) }
     }).catch(() => undefined)
     return () => { controller.abort(); if (objectURL) URL.revokeObjectURL(objectURL) }
   }, [api, token, path])
@@ -49,7 +50,7 @@ export function MessageLinkPreviews({ content }: { content: string }) {
     return () => controller.abort()
   }, [api, token, visible, links])
   if (!links.length) return null
-  return <div ref={ref} className="message-link-previews">{previews.map((preview) => <a key={preview.url} className="link-preview" href={preview.url} target="_blank" rel="noopener noreferrer ugc" referrerPolicy="no-referrer">
+  return <div ref={ref} className="message-link-previews">{previews.map((preview) => <a key={preview.url} className="link-preview" href={preview.url} target="_blank" rel="noopener noreferrer nofollow ugc" referrerPolicy="no-referrer">
     {api && token && preview.image_path && <PreviewImage api={api} token={token} path={preview.image_path}/>}<span><small>{preview.site_name}</small><b>{preview.title}</b>{preview.description && <span>{preview.description}</span>}<small>{new URL(preview.url).hostname}</small></span>
   </a>)}</div>
 }

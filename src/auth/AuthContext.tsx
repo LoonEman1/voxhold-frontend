@@ -64,22 +64,25 @@ export function AuthProvider({
   const persist = useCallback((next: PersistedAuth | null) => apply(next, true), [apply])
   useEffect(() => storage.subscribe?.(STORAGE_KEY, () => apply(storage.read<PersistedAuth>(STORAGE_KEY), false)), [storage, apply])
 
-  const expire = useCallback((expectedToken?: string) => {
-    const finish = () => {
-      if (expectedToken && authRef.current?.session.token !== expectedToken) return
-      // Another tab may already have rotated this request's token before its
-      // storage notification reaches us. Adopt that generation instead.
-      const saved = storage.read<PersistedAuth>(STORAGE_KEY)
-      if (expectedToken && saved && saved.session.token !== expectedToken) apply(saved, false)
-      else persist(null)
-    }
-    const flight = refreshFlight.current
-    // The backend revokes the old WebSocket before returning the replacement
-    // token. Let an in-flight rotation settle before interpreting that 401.
-    if (expectedToken && flight?.token === expectedToken && (authRef.current?.session.expires_at ?? 0) * 1000 > Date.now()) {
-      void flight.promise.then(finish, finish)
-    } else finish()
+  const expireNow = useCallback((expectedToken?: string) => {
+    if (expectedToken && authRef.current?.session.token !== expectedToken) return
+    // Another tab may already have rotated this request's token before its
+    // storage notification reaches us. Adopt that generation instead.
+    const saved = storage.read<PersistedAuth>(STORAGE_KEY)
+    if (expectedToken && saved && saved.session.token !== expectedToken) apply(saved, false)
+    else persist(null)
   }, [storage, apply, persist])
+
+  const expire = useCallback((expectedToken?: string) => {
+    if (!expectedToken) { expireNow(); return }
+    if (authRef.current?.session.token !== expectedToken) return
+    // Rotation revokes the old token before its response has been persisted.
+    const settle = () => { if (mounted.current) expireNow(expectedToken) }
+    const flight = refreshFlight.current
+    if (flight?.token === expectedToken) { void flight.promise.then(settle, settle); return }
+    if (storage.withLock) { void storage.withLock(STORAGE_KEY, async () => settle()).catch(settle); return }
+    settle()
+  }, [storage, expireNow])
 
   useEffect(() => onUnauthorized((token) => expire(token)), [expire])
 
@@ -87,9 +90,16 @@ export function AuthProvider({
   // reuse the in-flight rotation and apply it only to its original generation.
   useEffect(() => {
     if (!auth) { setReady(true); return }
-    if (auth.session.expires_at * 1000 <= Date.now()) { expire(auth.session.token); setReady(true); return }
-    let timer = 0, expiryTimer = 0, attempts = 0
-    let disposed = false
+    if (auth.session.expires_at * 1000 <= Date.now()) { expireNow(auth.session.token); setReady(true); return }
+    let timer = 0
+    let retryDelay = 1_000
+    let expiryTimer = 0
+    const checkExpiry = () => {
+      const left = auth.session.expires_at * 1000 - Date.now()
+      if (left <= 0) { expireNow(auth.session.token); return }
+      expiryTimer = window.setTimeout(checkExpiry, Math.min(left, 24 * 60 * 60 * 1000))
+    }
+    checkExpiry()
     const schedule = () => {
       const remaining = (auth.session.expires_at - REFRESH_MARGIN_SECONDS) * 1000 - Date.now()
       if (remaining > 0) {
@@ -97,8 +107,7 @@ export function AuthProvider({
         timer = window.setTimeout(schedule, Math.min(remaining, 24 * 60 * 60 * 1000))
         return
       }
-      if (auth.session.expires_at * 1000 <= Date.now()) { expire(auth.session.token); return }
-      if (!expiryTimer) expiryTimer = window.setTimeout(() => expire(auth.session.token), auth.session.expires_at * 1000 - Date.now())
+      if (refreshFlight.current?.token === auth.session.token) return
       const sourceGeneration = generation.current
       const token = auth.session.token
       const current = () => mounted.current && generation.current === sourceGeneration && authRef.current?.session.token === token
@@ -109,21 +118,22 @@ export function AuthProvider({
         const session = await api.auth.refresh(token)
         if (current()) persist({ ...auth, session })
       }
-      const promise = refreshFlight.current?.token === token ? refreshFlight.current.promise : (storage.withLock ? storage.withLock(STORAGE_KEY, rotate) : rotate())
-      refreshFlight.current = { token, promise }
-      void promise.catch((error: unknown) => {
-        if (disposed || !current()) return
-        const left = auth.session.expires_at * 1000 - Date.now()
-        if (left <= 0 || error instanceof ApiError && error.status === 401) expire(token)
-        else timer = window.setTimeout(schedule, Math.min(left, 1000 * 2 ** Math.min(attempts++, 5)))
+      const promise = (storage.withLock ? storage.withLock(STORAGE_KEY, rotate) : rotate()).catch((error: unknown) => {
+        if (!current()) return
+        const transient = error instanceof ApiError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500)
+        const remaining = auth.session.expires_at * 1000 - Date.now()
+        if (!transient || remaining <= 0) { expireNow(token); return }
+        timer = window.setTimeout(schedule, Math.min(retryDelay, remaining))
+        retryDelay = Math.min(retryDelay * 2, 30_000)
       }).finally(() => {
         if (refreshFlight.current?.promise === promise) refreshFlight.current = null
-        if (mounted.current && !disposed) setReady(true)
+        if (mounted.current) setReady(true)
       })
+      refreshFlight.current = { token, promise }
     }
     schedule()
-    return () => { disposed = true; window.clearTimeout(timer); window.clearTimeout(expiryTimer) }
-  }, [api, auth, expire, persist, storage, apply])
+    return () => { window.clearTimeout(timer); window.clearTimeout(expiryTimer) }
+  }, [api, auth, expireNow, persist, storage, apply])
 
   const login = useCallback(
     async (username: string, password: string) => {

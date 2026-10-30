@@ -24,10 +24,8 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
-      // Start as warnings so CI surfaces hook-dependency drift without
-      // blocking the pipeline; tighten to 'error' after the baseline is
-      // cleaned up.
-      'react-hooks/exhaustive-deps': 'warn',
+      // The dependency baseline is clean; prevent new stale hook closures.
+      'react-hooks/exhaustive-deps': 'error',
       'react-refresh/only-export-components': 'off',
     },
   },

@@ -1,11 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { safeImageBlob } from '../lib/safeBlob'
 import type { VoxholdApi } from '../services/api'
 
 type Entry = { url: string | null; version?: string; listeners: Set<() => void>; request?: AbortController }
 class AvatarCache {
   private entries = new Map<number, Entry>()
-  private versions: ReadonlyMap<number, string> = new Map()
-  constructor(private api: VoxholdApi, private token: string) {}
+  private versions = new Map<number, string | null>()
+  constructor(private api: VoxholdApi, private getToken: () => string, readonly accountId: number) {}
   private entry(id: number) {
     let entry = this.entries.get(id)
     if (!entry) { entry = { url: null, listeners: new Set() }; this.entries.set(id, entry) }
@@ -19,17 +20,19 @@ class AvatarCache {
     return () => { entry.listeners.delete(callback) }
   }
   /** Members carry the avatar ETag; only changed users are refetched or cleared. */
-  setVersions(next: ReadonlyMap<number, string>) {
-    const previous = this.versions
-    this.versions = next
-    for (const [id, entry] of this.entries) {
-      if (previous.get(id) === next.get(id)) continue
+  setVersions(next: ReadonlyMap<number, string | null>) {
+    for (const [id, version] of next) {
+      const previous = this.versions.get(id)
+      this.versions.set(id, version)
+      if (previous === version) continue
+      const entry = this.entries.get(id)
+      if (!entry) continue
       entry.request?.abort(); entry.request = undefined; entry.version = undefined
-      if (!next.has(id)) {
+      if (version === null) {
         if (entry.url) URL.revokeObjectURL(entry.url)
         entry.url = null
         entry.listeners.forEach((listener) => listener())
-      } else if (entry.listeners.size) this.load(id) // The old image stays until the new one arrives.
+      } else if (entry.listeners.size) this.load(id)
     }
   }
   private load(id: number) {
@@ -38,10 +41,10 @@ class AvatarCache {
     if (!version || entry.request || entry.version === version) return
     const controller = new AbortController()
     entry.request = controller; entry.version = version
-    void this.api.profile.avatar(this.token, id, version, controller.signal).then((blob) => {
+    void this.api.profile.avatar(this.getToken(), id, version, controller.signal).then((blob) => {
       if (controller.signal.aborted) return
       if (entry.url) URL.revokeObjectURL(entry.url)
-      entry.url = URL.createObjectURL(blob)
+      entry.url = URL.createObjectURL(safeImageBlob(blob))
     }).catch(() => { /* Initials remain for inaccessible images. */ }).finally(() => {
       if (controller.signal.aborted) return
       entry.request = undefined
@@ -63,8 +66,18 @@ class AvatarCache {
   }
 }
 const Context = createContext<AvatarCache | null>(null)
-export function AvatarProvider({ api, token, versions, children }: { api: VoxholdApi; token: string; versions: ReadonlyMap<number, string>; children: ReactNode }) {
-  const cache = useMemo(() => new AvatarCache(api, token), [api, token])
+export function AvatarProvider({ api, token, userId = 0, versions, children }: { api: VoxholdApi; token: string; userId?: number; versions: ReadonlyMap<number, string | null>; children: ReactNode }) {
+  const tokenRef = useRef(token)
+  useLayoutEffect(() => { tokenRef.current = token }, [token])
+  const cache = useMemo(() => new AvatarCache(api, () => tokenRef.current, userId), [api, userId])
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const value = (event as CustomEvent<{ user_id: number; version: string | null }>).detail
+      if (value && Number.isSafeInteger(value.user_id) && value.user_id > 0) cache.setVersions(new Map([[value.user_id, value.version]]))
+    }
+    window.addEventListener('voxhold:avatar-version', changed)
+    return () => window.removeEventListener('voxhold:avatar-version', changed)
+  }, [cache])
   useEffect(() => () => cache.close(), [cache])
   useEffect(() => { cache.setVersions(versions) }, [cache, versions])
   return <Context.Provider value={cache}>{children}</Context.Provider>

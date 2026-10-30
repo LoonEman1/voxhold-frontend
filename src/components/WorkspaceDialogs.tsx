@@ -111,26 +111,45 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
 
 export { InviteUserDialog } from './InviteUserDialog'
 
-export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false }: AsyncDialogProps & { profile: Profile | null; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false, onDeleteAccount }: AsyncDialogProps & { profile: Profile | null; onDeleteAccount?: () => Promise<void>; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const [about, setAbout] = useState('')
   const [country, setCountry] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [avatarPending, setAvatarPending] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleteName, setDeleteName] = useState('')
+  const [deletePending, setDeletePending] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  useEffect(() => { if (open) { setConfirmingDelete(false); setDeleteName(''); setDeleteError('') } }, [open, profile?.user_id])
+  const removeAccount = async () => {
+    if (!onDeleteAccount || !profile?.username || deleteName !== profile.username || deletePending || pending || avatarPending) return
+    setDeletePending(true); setDeleteError('')
+    try { await onDeleteAccount(); onClose() } catch (caught) { setDeleteError(humanError(caught)) } finally { setDeletePending(false) }
+  }
   useEffect(() => { if (open) { setAbout(profile?.about ?? ''); setCountry(profile?.country_code ?? ''); setError('') } }, [open, profile])
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (pending || avatarPending) return; setPending(true); setError('')
+    event.preventDefault(); if (pending || avatarPending || deletePending) return; setPending(true); setError('')
     try { await onSubmit({ about: about.trim(), country_code: country }); onClose() } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
   }
   return (
-    <Modal open={open} onClose={onClose} title="Ваш профиль" eyebrow="КАК ВАС ВИДЯТ ДРУГИЕ" size="medium">
-      <div className="profile-hero">{onAvatar ? open && <AvatarEditor key={profile?.user_id} userId={profile?.user_id} name={profile?.username ?? 'V'} hasAvatar={hasAvatar} disabled={pending} onSave={onAvatar} onBusyChange={setAvatarPending}><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></AvatarEditor> : <><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></>}</div>
+    <Modal open={open} onClose={() => { if (!deletePending) onClose() }} title="Ваш профиль" eyebrow="КАК ВАС ВИДЯТ ДРУГИЕ" size="medium">
+      <div className="profile-hero">{onAvatar ? open && <AvatarEditor key={profile?.user_id} userId={profile?.user_id} name={profile?.username ?? 'V'} hasAvatar={hasAvatar} disabled={pending || deletePending} onSave={onAvatar} onBusyChange={setAvatarPending}><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></AvatarEditor> : <><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></>}</div>
       <form className="dialog-form" onSubmit={submit}>
         <label><span>О себе <small>{about.length}/512</small></span><textarea value={about} onChange={(e) => setAbout(e.target.value)} maxLength={512} rows={4} placeholder="Пара слов о себе, интересах или текущем проекте…" /></label>
         <label><span>Страна проживания</span><CountrySelect value={country} onChange={setCountry} /></label>
         {error && <div className="form-error" role="alert">{error}</div>}
-        <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending || avatarPending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
+        <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending || avatarPending || deletePending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
       </form>
+      {onDeleteAccount && <section className="danger-zone" aria-label="Опасная зона">
+        <div><h3>Опасная зона</h3><p>Удаление аккаунта удалит профиль, настройки и доступ к этому инстансу. Старые сообщения останутся обезличенными. Это действие нельзя отменить.</p></div>
+        {confirmingDelete ? <div className="danger-confirm dialog-form">
+          <label><span>Для подтверждения введите имя пользователя: {profile?.username}</span><input aria-label="Имя пользователя для удаления аккаунта" value={deleteName} onChange={(event) => setDeleteName(event.target.value)} autoComplete="off" spellCheck={false} disabled={deletePending}/></label>
+          <button type="button" className="button button--danger button--small" onClick={() => void removeAccount()} disabled={!profile?.username || deleteName !== profile.username || deletePending || pending || avatarPending}>{deletePending ? <span className="spinner"/> : 'Удалить аккаунт навсегда'}</button>
+          <button type="button" className="button button--ghost button--small" onClick={() => { setConfirmingDelete(false); setDeleteName(''); setDeleteError('') }} disabled={deletePending}>Отменить удаление</button>
+        </div> : <button type="button" className="button button--danger-outline" onClick={() => setConfirmingDelete(true)} disabled={pending || avatarPending}>Удалить аккаунт</button>}
+        {deleteError && <div className="form-error" role="alert">{deleteError}</div>}
+      </section>}
     </Modal>
   )
 }
@@ -209,7 +228,6 @@ interface ServerSettingsDialogProps extends AsyncDialogProps {
   corsOrigins: string[] | null
   corsOriginsLoading: boolean
   onRename(name: string): Promise<void>
-  onDeleteAccount(): Promise<void>
   onDownloadDiagnostics(): Promise<void>
   onSaveCorsOrigins(origins: string[]): Promise<string[]>
   recordingStorage?: RecordingStorage | null
@@ -228,7 +246,6 @@ export function ServerSettingsDialog({
   corsOrigins,
   corsOriginsLoading,
   onRename,
-  onDeleteAccount,
   onDownloadDiagnostics,
   onSaveCorsOrigins,
   recordingStorage = null,
@@ -249,22 +266,16 @@ export function ServerSettingsDialog({
   const [pending, setPending] = useState(false)
   const [diagnosticsPending, setDiagnosticsPending] = useState(false)
   const [corsPending, setCorsPending] = useState(false)
-  const [confirming, setConfirming] = useState(false)
   useEffect(() => {
     if (open) {
       setName(server?.name ?? '')
       setCorsValue((corsOrigins ?? []).join('\n'))
       setError('')
-      setConfirming(false)
     }
   }, [corsOrigins, open, server])
   const rename = async (event: FormEvent) => {
     event.preventDefault(); setPending(true); setError('')
     try { await onRename(name.trim()) } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
-  }
-  const remove = async () => {
-    setPending(true); setError('')
-    try { await onDeleteAccount(); onClose() } catch (caught) { setError(humanError(caught)) } finally { setPending(false) }
   }
   const owner = server?.role === 'owner'
   const downloadDiagnostics = async () => {
@@ -305,7 +316,6 @@ export function ServerSettingsDialog({
       {owner && <form className="dialog-form settings-section" onSubmit={saveCorsOrigins}><div><h3>Доступ внешних клиентов</h3><p>Разрешите браузерным клиентам на других доменах обращаться к API и WebSocket этого инстанса.</p></div><label><span>Разрешённые origin</span><textarea rows={5} value={corsValue} onChange={(event) => setCorsValue(event.target.value)} disabled={corsOriginsLoading || corsPending} placeholder={corsOriginsLoading ? 'Загрузка…' : 'https://client.example.com\nhttp://localhost:5173'} spellCheck={false}/></label><small className="field-hint">По одному точному origin на строку: схема, домен и необязательный порт. Без пути и wildcard.</small><button className="button button--secondary align-self-end" disabled={corsOriginsLoading || corsPending}>{corsPending ? <span className="spinner"/> : 'Сохранить CORS'}</button></form>}
       {owner && !storageApi && onSaveRecordingQuota && <form className="dialog-form settings-section" onSubmit={saveRecordingQuota}><div><h3>Хранилище записей</h3><p>Сколько места на сервере можно занять копиями записей звонков. Копия хранится 24 часа; файл больше 2 ГБ или сверх лимита остаётся только у записавшего.</p></div><label><span>Лимит, ГБ</span><input type="number" inputMode="numeric" step={1} min={recordingStorage ? recordingStorage.min_quota_bytes / GIB : 1} max={recordingStorage ? recordingStorage.max_quota_bytes / GIB : undefined} value={quotaValue} onChange={(event) => setQuotaValue(event.target.value)} disabled={!recordingStorage || quotaPending} placeholder={recordingStorage ? undefined : 'Загрузка…'}/></label><small className="field-hint">{recordingStorage ? `Занято ${gib(recordingStorage.used_bytes)} из ${gib(recordingStorage.quota_bytes)} ГБ · по умолчанию ${gib(recordingStorage.default_quota_bytes)} ГБ. Уменьшение не удаляет уже сохранённые копии — они исчезнут по истечении 24 часов.` : 'Загружаем текущий лимит…'}</small><button className="button button--secondary align-self-end" disabled={!recordingStorage || quotaPending}>{quotaPending ? <span className="spinner"/> : 'Сохранить лимит'}</button></form>}
       {owner && <div className="dialog-form settings-section"><div><h3>Диагностика клиентов</h3><p>HTTP, WebSocket и WebRTC-метрики автоматически хранятся на сервере 24 часа. Секреты, сообщения, SDP и ICE-адреса удаляются.</p></div><button className="button button--secondary align-self-end" type="button" disabled={diagnosticsPending} onClick={() => void downloadDiagnostics()}>{diagnosticsPending ? <span className="spinner"/> : 'Скачать JSON'}</button></div>}
-      {!owner && <div className="danger-zone"><div><h3>Удалить аккаунт</h3><p>Профиль, настройки и доступ к этому инстансу будут удалены. Старые сообщения останутся обезличенными.</p></div>{confirming ? <div className="danger-confirm"><span>Удалить аккаунт без возможности восстановления?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить аккаунт'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить аккаунт</button>}</div>}
       {owner && <div className="instance-notice"><Icon name="lock"/><div><b>Владелец инстанса</b><p>Владелец не может удалить пространство или свой аккаунт из приложения.</p></div></div>}
       {error && <div className="form-error" role="alert">{error}</div>}
       </>}

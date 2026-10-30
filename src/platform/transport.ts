@@ -2,7 +2,7 @@ import { clientDiagnostics } from './clientDiagnostics'
 
 export interface TransportRequest {
   path: string
-  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  method?: 'HEAD' | 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   token?: string | null
   body?: unknown
   rawBody?: BodyInit
@@ -88,7 +88,7 @@ export function createFetchTransport(baseUrl = ''): Transport {
         throw error
       }
 
-      if (response.status === 204) {
+      if (method === 'HEAD' || response.status === 204) {
         clientDiagnostics.record('http', 'request_completed', 'info', {
           method,
           route,
