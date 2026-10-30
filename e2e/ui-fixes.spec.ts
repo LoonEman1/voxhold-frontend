@@ -943,6 +943,10 @@ test('voice dock exposes the microphone and sound toggle state', async ({ page }
 })
 
 test('channel list updates preserve an open search query', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
+  await page.route('**/api/v1/diagnostics/client-events', (route) => route.fulfill({ status: 204 }))
   const { emit } = await openCallWorkspace(page)
   await page.getByRole('button', { name: 'Поиск', exact: true }).click()
   const input = page.getByPlaceholder('Введите слово или фразу')
@@ -954,4 +958,6 @@ test('channel list updates preserve an open search query', async ({ page }) => {
   emit('channels.changed', { server_id: 1 })
   await expect(page.getByRole('button', { name: 'новый-текстовый', exact: true })).toBeVisible()
   await expect(input).toHaveValue('keep this query')
+  await expect(page.locator('.panel-loading')).toHaveCount(0)
+  expect(errors).toEqual([])
 })
