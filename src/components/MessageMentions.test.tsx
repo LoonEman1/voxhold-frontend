@@ -7,7 +7,7 @@ import { mentionDirectory, parseMentions } from '../lib/mentions'
 afterEach(cleanup)
 function show(content: string) { render(<MessageMentions content={content} mentions={parseMentions(content, mentionDirectory([]))} currentUserId={1}/>) }
 it('only makes HTTP(S) URLs clickable, trims punctuation and preserves code', () => {
-  show('javascript:alert(1) data:text/html,test https://a.b/c). `https://code.test` ```https://block.test``` https://en.wikipedia.org/wiki/Test_(example).')
+  show('javascript:alert(1) data:text/html,test https://trusted.test@evil.test https://a.b/c). `https://code.test` ```https://block.test``` https://en.wikipedia.org/wiki/Test_(example).')
   const links = screen.getAllByRole('link')
   expect(links.map((link) => link.getAttribute('href'))).toEqual(['https://a.b/c', 'https://en.wikipedia.org/wiki/Test_(example)'])
   expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer nofollow')
