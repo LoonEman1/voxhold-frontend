@@ -15,8 +15,8 @@ it('opens a direct conversation from a member action and retains the same retry 
   let historyLoads = 0
   const sends: { content: string; client_message_id: string }[] = []
   const api = fixture(async ({ path, method, body }) => {
-    if (path.endsWith('/conversations') && method === 'POST') return { id: 7 }
-    if (path.endsWith('/conversations')) return [{ id: 7, direct: true, name: 'Беседа', members: [{ user_id: 2, username: 'member' }], unread_count: 0 }]
+    if (path.split('?')[0]!.endsWith('/conversations') && method === 'POST') return { id: 7 }
+    if (path.split('?')[0]!.endsWith('/conversations')) return [{ id: 7, direct: true, name: 'Беседа', members: [{ user_id: 2, username: 'member' }], unread_count: 0 }]
     if (path.endsWith('/messages') && method === 'POST') { const input = body as typeof sends[number]; sends.push(input); if (sends.length === 1) throw new Error('connection lost'); return { id: 1, conversation_id: 7, author: { user_id: 1, username: 'owner' }, content: input.content, created_at: 1 } }
     if (path.endsWith('/messages')) { historyLoads++; return { messages: [], has_more: false } }
     return defaults(path)
@@ -90,4 +90,22 @@ it('snapshots the attachment batch before awaiting uploads and leaves later past
   await screen.findByText(/Готово к отправке/)
   fireEvent.click(screen.getByRole('button', { name: 'Отправить набор' }))
   await waitFor(() => expect(received).toHaveBeenLastCalledWith(['later']))
+})
+
+it('does not poll lists and applies notification payloads without a list reload', async () => {
+  const request = vi.fn(({ path }: { path: string }) => defaults(path))
+  const api = fixture(request)
+  render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => {}} onNavigate={() => {}}><CommunityNavigation/></CommunityProvider>)
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(4))
+  const baseline = request.mock.calls.length
+  vi.useFakeTimers()
+  await act(async () => { await vi.advanceTimersByTimeAsync(45_000) })
+  expect(request).toHaveBeenCalledTimes(baseline)
+  act(() => window.dispatchEvent(new CustomEvent('voxhold:notification', { detail: { server_id: 1, channel_id: 2, server_name: 'Server', channel_name: 'General', mentioned: true, message: { id: 9, author: { user_id: 2, username: 'Bob' }, content: 'hello', created_at: 1 } } })))
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+  expect(request).toHaveBeenCalledTimes(baseline)
+  act(() => window.dispatchEvent(new Event('voxhold:ready')))
+  await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+  expect(request).toHaveBeenCalledTimes(baseline + 2)
+  vi.useRealTimers()
 })

@@ -303,6 +303,7 @@ export class RealtimeClient {
           this.options.onStateChange('online')
           this.syncSubscription()
           this.options.onReady?.()
+          window.dispatchEvent(new Event('voxhold:ready'))
         } else if (payload.type === 'channel.subscribed' && payload.data) {
           const data = payload.data as { server_id: number; channel_id: number }
           this.activeSubscription = { serverId: data.server_id, channelId: data.channel_id }
@@ -322,12 +323,12 @@ export class RealtimeClient {
           this.options.onSyncRequired?.(payload.data as { server_id: number; channel_id: number })
         } else if (payload.type?.startsWith('conversation.') || payload.type?.startsWith('community.')) {
           window.dispatchEvent(new CustomEvent('voxhold:feature-event', { detail: { type: payload.type, data: payload.data } }))
-          if (payload.type !== 'conversation.call-signal') window.dispatchEvent(new Event('voxhold:community'))
+          if (payload.type !== 'conversation.call-signal') window.dispatchEvent(new CustomEvent('voxhold:community', { detail: { type: payload.type, data: payload.data } }))
         } else if (payload.type === 'attachments.changed') {
           window.dispatchEvent(new CustomEvent('voxhold:attachments', { detail: payload.data }))
         } else if (payload.type === 'notification.message' && payload.data) {
           this.options.onNotification?.(payload.data as MessageNotification)
-          window.dispatchEvent(new Event('voxhold:community'))
+          window.dispatchEvent(new CustomEvent('voxhold:notification', { detail: payload.data }))
         } else if (payload.type === 'notification.settings_updated' && payload.data) {
           this.options.onNotificationSettings?.(payload.data as NotificationSettings)
         } else if (payload.type === 'message.created' && payload.data) {

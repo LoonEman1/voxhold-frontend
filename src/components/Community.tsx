@@ -6,7 +6,8 @@ import { ForwardAttribution } from './MessageQuote'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { VoxholdApi } from '../services/api'
-import type { Message, ServerMember, ServerRole } from '../domain/types'
+import { communityPages } from '../services/communityPages'
+import type { Message, MessageNotification, ServerMember, ServerRole } from '../domain/types'
 import type { Conversation, DirectMessage, InboxItem, Privacy, CustomRole } from '../domain/community'
 import { Avatar } from './Avatar'
 import { MessageAvatar, MessageHeader } from './MessageIdentity'
@@ -46,37 +47,74 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   useEffect(()=>{const changed=()=>setRoleRevision((v)=>v+1);window.addEventListener('voxhold:roles',changed);return()=>window.removeEventListener('voxhold:roles',changed)},[])
   const [conversations, setConversations] = useState<Conversation[]>([]), [selected, setSelected] = useState<number | null>(null), [creating, setCreating] = useState(false)
   const [revision, setRevision] = useState(0), [error, setError] = useState(''), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true)
+  const [listRevision, setListRevision] = useState(0)
+  const lastLoaded = useRef(0), liveInbox = useRef(new Map<number, { sequence: number; item: InboxItem }>()), notificationSequence = useRef(0)
   const [loadError, setLoadError] = useState('')
   const [privacy, setPrivacy] = useState<Privacy>({ mode: 'shared', blocked_user_ids: [] })
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null), openGeneration = useRef(0)
-  const refresh = useCallback(() => { if (refreshTimer.current === null) refreshTimer.current = setTimeout(() => { refreshTimer.current = null; setRevision((v) => v + 1) }, 500) }, [])
+  const refresh = useCallback(() => { if (refreshTimer.current === null) refreshTimer.current = setTimeout(() => { refreshTimer.current = null; setRevision((v) => v + 1); setListRevision((v) => v + 1) }, 500) }, [])
   useEffect(() => () => { if (refreshTimer.current !== null) clearTimeout(refreshTimer.current) }, [])
   const setView = (next: View) => { ++openGeneration.current; setBusy(false); updateView(next); setError(''); setCreating(false); onViewChange?.(next !== null) }
   const closeView = useRef(() => setView(null)); closeView.current = () => setView(null)
   useEffect(() => { const open = () => closeView.current(); window.addEventListener('voxhold:open-channels', open); return () => window.removeEventListener('voxhold:open-channels', open) }, [])
   const selectChat = (chat: Conversation) => { setSelected(chat.id); setView(chat.saved ? 'favorites' : chat.direct ? 'messages' : 'groups') }
-  useEffect(() => { const changed = () => refresh(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 15_000); window.addEventListener('voxhold:community', changed); window.addEventListener('focus', changed); return () => { clearInterval(timer); window.removeEventListener('voxhold:community', changed); window.removeEventListener('focus', changed) } }, [refresh])
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ type: string; data?: { conversation_id?: number; author?: { user_id: number } } }>).detail
+      if (!detail) { refresh(); return }
+      if (detail.type.startsWith('conversation.call') || detail.type === 'conversation.notification') return
+      if (detail.type === 'conversation.changed') { refresh(); return }
+      if (detail.type === 'conversation.message' && detail.data?.conversation_id) {
+        const cid = detail.data.conversation_id, mine = detail.data.author?.user_id === userId
+        setConversations((values) => {
+          const chat = values.find((v) => v.id === cid)
+          if (!chat) { refresh(); return values }
+          return [{ ...chat, unread_count: chat.unread_count + (mine ? 0 : 1) }, ...values.filter((v) => v.id !== cid)]
+        })
+      }
+      if (detail.type === 'conversation.read') setConversations((values) => values.map((v) => v.id === detail.data?.conversation_id ? { ...v, unread_count: 0 } : v))
+      setRevision((v) => v + 1)
+    }
+    const stale = () => { if (document.visibilityState === 'visible' && Date.now() - lastLoaded.current > 60_000) refresh() }
+    const notification = (event: Event) => {
+      const value = (event as CustomEvent<MessageNotification>).detail
+      if (!value?.message || value.message.author.user_id === userId) return
+      const item: InboxItem = { message_id: value.message.id, server_id: value.server_id, channel_id: value.channel_id, server_name: value.server_name, channel_name: value.channel_name, content: value.message.content, author: value.message.author.username, created_at: value.message.created_at, reason: 'mention' }
+      liveInbox.current.set(item.message_id, { sequence: ++notificationSequence.current, item })
+      if (liveInbox.current.size > 100) liveInbox.current.delete(liveInbox.current.keys().next().value!)
+      setItems((values) => [item, ...values.filter((v) => v.message_id !== item.message_id)].sort((a, b) => b.message_id - a.message_id))
+    }
+    window.addEventListener('voxhold:community', changed); window.addEventListener('voxhold:ready', refresh); window.addEventListener('voxhold:notification', notification)
+    window.addEventListener('focus', stale); document.addEventListener('visibilitychange', stale)
+    return () => { window.removeEventListener('voxhold:community', changed); window.removeEventListener('voxhold:ready', refresh); window.removeEventListener('voxhold:notification', notification); window.removeEventListener('focus', stale); document.removeEventListener('visibilitychange', stale) }
+  }, [refresh, userId])
   useEffect(() => {
     if (!token) return
     const controller = new AbortController()
+    const startedSequence = notificationSequence.current
     void Promise.allSettled([
       api.community.request<{ items: InboxItem[]; has_more: boolean }>(token, '/me/inbox', 'GET', undefined, controller.signal),
-      api.community.request<Conversation[]>(token, '/me/conversations', 'GET', undefined, controller.signal),
+      communityPages<Conversation>(api, token, '/me/conversations', 'conversations', controller.signal),
     ]).then(([inbox, chats]) => { if (controller.signal.aborted) return
-      if (inbox.status === 'fulfilled') { setItems(Array.isArray(inbox.value.items) ? inbox.value.items : []); setMoreInbox(!!inbox.value.has_more) }
+      if (inbox.status === 'fulfilled') {
+        const values = new Map((Array.isArray(inbox.value.items) ? inbox.value.items : []).map((item) => [item.message_id, item]))
+        liveInbox.current.forEach(({ sequence, item }) => { if (sequence > startedSequence) values.set(item.message_id, item) })
+        setItems([...values.values()].sort((a, b) => b.message_id - a.message_id)); setMoreInbox(!!inbox.value.has_more)
+      }
       if (chats.status === 'fulfilled') setConversations(Array.isArray(chats.value) ? chats.value : [])
       const failure = [inbox, chats].find((v) => v.status === 'rejected')
+      if (!failure) lastLoaded.current = Date.now()
       setLoadError(failure?.status === 'rejected' ? problem(failure.reason) : ''); setLoading(false)
     })
     return () => controller.abort()
-  }, [api, token, revision])
+  }, [api, token, listRevision])
   useEffect(() => {
     if (!token) return
     const controller = new AbortController()
     void api.community.request<Privacy>(token, '/me/message-privacy', 'GET', undefined, controller.signal).then((value) => { if (!controller.signal.aborted && value.mode) setPrivacy(value) }).catch(() => undefined)
     if (serverId) void api.community.request<CustomRole[]>(token, `/servers/${serverId}/roles`, 'GET', undefined, controller.signal).then((value) => { if (!controller.signal.aborted) setRoles(Array.isArray(value) ? value : []) }).catch(() => undefined)
     return () => controller.abort()
-  }, [api, token, serverId, view, roleRevision])
+  }, [api, token, serverId, roleRevision])
   const openDirect = async (id: number) => {
     setView('messages'); const generation = ++openGeneration.current
     setBusy(true)
@@ -110,7 +148,7 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   openConversation.current=(id)=>{
     const chat=conversations.find((v)=>v.id===id);if(chat){selectChat(chat);return}
     const current=++openGeneration.current;setBusy(true)
-    void api.community.request<Conversation[]>(token,'/me/conversations').then((values)=>{if(current!==openGeneration.current)return;setBusy(false);setConversations(values);const target=values.find((v)=>v.id===id);if(target)selectChat(target);else setError('Беседа больше недоступна')}).catch((e)=>{if(current===openGeneration.current){setBusy(false);setError(problem(e))}})
+    void api.community.request<Conversation>(token,`/conversations/${id}`).then((chat)=>{if(current!==openGeneration.current)return;setBusy(false);setConversations((values)=>[chat,...values.filter((v)=>v.id!==chat.id)]);selectChat(chat)}).catch((e)=>{if(current===openGeneration.current){setBusy(false);setError(problem(e))}})
   }
   useEffect(()=>{const open=(e:Event)=>openConversation.current((e as CustomEvent<number>).detail);window.addEventListener('voxhold:open-conversation',open);return()=>window.removeEventListener('voxhold:open-conversation',open)},[])
 
