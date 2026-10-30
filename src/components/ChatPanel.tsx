@@ -4,6 +4,8 @@ import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { useMemberIdentity } from '../hooks/useMemberIdentity'
+import type { VoxholdApi } from '../services/api'
 import type { Channel, ChannelRead, Message, MessageReply, ServerMember, ServerRole } from '../domain/types'
 import { formatDate, formatTime } from '../lib/format'
 import { roleMeta } from '../lib/roles'
@@ -123,9 +125,12 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const readFrameRef = useRef<number | null>(null)
   const onReadThroughRef = useRef(onReadThrough)
   onReadThroughRef.current = onReadThrough
-  const directory = useMemo(() => mentionDirectory(members), [members])
+  const featureContext = useCommunity()
+  const featureApi = featureContext?.api, featureToken = featureContext?.token
+  const identityMembers = useMemberIdentity(members)
+  const directory = useMemo(() => mentionDirectory(identityMembers), [identityMembers])
   const ownRole = currentRole ?? members.find((member) => member.user_id === currentUserId)?.role
-  const membersById = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members])
+  const membersById = useMemo(() => new Map(identityMembers.map((member) => [member.user_id, member])), [identityMembers])
   const displayMessages = useMemo(() => renderComments ? messages.filter((message) => !message.thread_root_id) : messages, [messages, renderComments])
   const virtualized = displayMessages.length > 0
   const getMessageKey = useCallback((index: number) => displayMessages[index]!.id, [displayMessages])
@@ -448,9 +453,9 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   }), [])
   const canReact = !!onSetReaction, canRenderComments = !!renderComments
   const canOpenMessage = !!onOpenMessage
-  const rowContext = useMemo(() => channel ? ({ channel, members, membersById, directory, currentUserId, ownRole, channelReads,
+  const rowContext = useMemo(() => channel ? ({ channel, featureApi, featureToken, membersById, directory, currentUserId, ownRole, channelReads,
     canReply, canReact, canRenderComments, onLoadReactors, canOpenMessage }) : null,
-    [channel, members, membersById, directory, currentUserId, ownRole, channelReads, canReply, canReact, canRenderComments, onLoadReactors, canOpenMessage])
+    [channel, featureApi, featureToken, membersById, directory, currentUserId, ownRole, channelReads, canReply, canReact, canRenderComments, onLoadReactors, canOpenMessage])
 
   if (!channel) return <section className="chat-panel"><EmptyState icon="message" title="Выберите канал">Откройте текстовый канал слева, чтобы начать разговор.</EmptyState></section>
 
@@ -475,13 +480,13 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} members={members} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} membersById={membersById} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
 
       {menuMessage && messageMenu && <MessageContextMenu key={menuMessage.id} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canManage} canPin={canManage && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
-      <ChatComposer key={channel.id} channel={channel} canCompose={canCompose} reply={reply} members={members}
+      <ChatComposer key={channel.id} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
         upload={attachmentUpload} composerFocus={composerFocus} setReplyTarget={setReplyTarget} onSend={onSend}
         onFocus={() => setComposerFocus((value) => value + 1)} readOnlyLabel={readOnlyLabel}/>
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
@@ -490,7 +495,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
 }
 
 interface MessageRowContext {
-  channel: Channel; members: ServerMember[]; membersById: ReadonlyMap<number, ServerMember>
+  channel: Channel; featureApi?: VoxholdApi; featureToken?: string; membersById: ReadonlyMap<number, ServerMember>
   directory: ReturnType<typeof mentionDirectory>; currentUserId: number; ownRole?: ServerRole
   channelReads: Readonly<Record<number, ChannelRead>>; canReply: boolean; canReact: boolean; canRenderComments: boolean
   onLoadReactors?: ReactorLoader; canOpenMessage: boolean
@@ -512,13 +517,13 @@ interface MessageRowProps {
   error?: string; reactionPending?: Record<string, boolean>; receiptOpen: boolean
 }
 const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context, actions, pinned, focused, editing, editDraft, pending, confirmDelete, error, reactionPending, receiptOpen }: MessageRowProps) {
-  const featureContext = useCommunity()
-  const { channel, members, membersById, directory, currentUserId, ownRole, channelReads, canReply, canReact, canRenderComments, onLoadReactors, canOpenMessage } = context
+  const { channel, featureApi, featureToken, membersById, directory, currentUserId, ownRole, channelReads, canReply, canReact, canRenderComments, onLoadReactors, canOpenMessage } = context
+  const featureContext = featureApi && featureToken ? { api: featureApi, token: featureToken } : null
           const role = membersById.get(message.author.user_id)?.role ?? 'member'
           const mine = message.author.user_id === currentUserId
           const mentions = parseMentions(message.content, directory).map((mention) => message.forward && mention.userId && message.forward.mention_names?.[mention.userId] ? { ...mention, label: message.forward.mention_names[mention.userId]! } : mention)
           const mentioned = !mine && !message.forward && (mentionsMe(mentions, currentUserId, ownRole) || !!message.reply && !message.reply.deleted && message.reply.author.user_id === currentUserId)
-          const readers = mine ? members.filter((member) => member.user_id !== currentUserId && (channelReads[member.user_id]?.last_read_message_id ?? 0) >= message.id) : []
+          const readers = mine ? [...membersById.values()].filter((member) => member.user_id !== currentUserId && (channelReads[member.user_id]?.last_read_message_id ?? 0) >= message.id) : []
           const showDate = !previous || !sameDay(previous.created_at, message.created_at)
           const grouped = channel.kind !== 'news' && !message.reply && !message.forward && !previous?.reply && !previous?.forward && previous && previous.author.user_id === message.author.user_id && message.created_at - previous.created_at < 300 && !showDate
   return <>
@@ -529,9 +534,9 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
                   {!grouped && <MessageHeader name={message.author.username} createdAt={message.created_at} mine={mine} role={role} badges={<CustomRoleBadges userId={message.author.user_id}/>} onOpen={() => actions.onOpenProfile(message.author.user_id, message.author.username, role)}/>}
                   {pinned && <span className="message__pin-label"><Icon name="pin" size={11}/> Закреплено</span>}
                   {message.forward && <ForwardAttribution message={message}/>}
-                  {message.reply && <MessageQuote reference={message.reply} members={members} onOpen={canOpenMessage ? actions.onOpenMessage : undefined}/>}
+                  {message.reply && <MessageQuote reference={message.reply} membersById={membersById} onOpen={canOpenMessage ? actions.onOpenMessage : undefined}/>}
                   {editing ? <div className="message-editor">
-                    <MentionComposer draft={editDraft} onChange={actions.setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void actions.saveEdit(message.id, content) }} sending={pending} channelName={channel.name} members={members} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => actions.setEditingId(null)}/>
+                    <MentionComposer draft={editDraft} onChange={actions.setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void actions.saveEdit(message.id, content) }} sending={pending} channelName={channel.name} membersById={membersById} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => actions.setEditingId(null)}/>
                     <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
                   </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) actions.onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
                   <MessageAttachments attachments={message.attachments}/>{message.poll && featureContext && <PollCard initial={message.poll} api={featureContext.api} token={featureContext.token}/>}
@@ -554,8 +559,8 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
   </>
 })
 
-function ChatComposer({ channel, canCompose, reply, members, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel }: {
-  channel: Channel; canCompose: boolean; reply: MessageReply | null; members: ServerMember[]
+function ChatComposer({ channel, canCompose, reply, membersById, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel }: {
+  channel: Channel; canCompose: boolean; reply: MessageReply | null; membersById: ReadonlyMap<number, ServerMember>
   upload: ReturnType<typeof useAttachmentUpload>; composerFocus: number; onFocus: () => void; readOnlyLabel?: string
   setReplyTarget: (value: MessageReply | null | ((current: MessageReply | null) => MessageReply | null)) => void
   onSend: ChatPanelProps['onSend']
@@ -579,9 +584,9 @@ function ChatComposer({ channel, canCompose, reply, members, upload, composerFoc
   }
 
   return <>
-      {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, members)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); onFocus() }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
+      {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, membersById)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); onFocus() }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
       {upload.control}
       {canCompose && featureContext && <ComposerTools api={featureContext.api} token={featureContext.token} destination={{kind:'channel',id:channel.id,server_id:channel.server_id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={() => setDraft('')}/>}
-      {canCompose ? <MentionComposer hasAttachments={upload.hasItems} focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} members={members} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
+      {canCompose ? <MentionComposer hasAttachments={upload.hasItems} focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} membersById={membersById} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
   </>
 }

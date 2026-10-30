@@ -7,9 +7,10 @@ import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 
 interface Option { key: string; label: string; detail: string; token: string; userId?: number }
-export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel }: {
-  hasAttachments?: boolean; focusKey?: number; submitDisabled?: boolean; draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; sending: boolean; channelName: string; members: ServerMember[]; error: string
+export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members: providedMembers, membersById, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel }: {
+  hasAttachments?: boolean; focusKey?: number; submitDisabled?: boolean; draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; sending: boolean; channelName: string; members?: ServerMember[]; membersById?: ReadonlyMap<number, ServerMember>; error: string
 }) {
+  const members = useMemo(() => providedMembers ?? [...(membersById?.values() ?? [])], [providedMembers, membersById])
   const input = useRef<HTMLTextAreaElement>(null)
   const model = useRef(new MentionDraft())
   const directory = useMemo(() => mentionDirectory(members), [members])

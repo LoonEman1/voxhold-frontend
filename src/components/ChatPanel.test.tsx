@@ -83,3 +83,25 @@ it('replaces the reactor loader scope through memoized message rows', async () =
   expect(second).toHaveBeenCalledOnce()
   expect(oldSignal?.aborted).toBe(true)
 })
+
+it('does not parse visible messages again for presence-only member updates', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(60)
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
+  const props = {
+    channel: { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 } as Channel,
+    messages: [{ id: 1, channel_id: 1, content: 'Hi <@2>', author: { user_id: 1, username: 'Alice' }, created_at: 1, edited_at: null }] as Message[],
+    loading: false, loadingOlder: false, hasMore: false, loadingNewer: false, hasNewer: false,
+    currentUserId: 2, canManage: false, pinnedMessageIds: new Set<number>(), focusedMessageId: null, channelReads: {},
+    onLoadOlder: vi.fn(async () => {}), onLoadNewer: vi.fn(async () => {}), onReturnToLatest: vi.fn(async () => {}),
+    onReadThrough: vi.fn(), onSend: vi.fn(async () => {}), onEdit: vi.fn(async () => {}), onDelete: vi.fn(async () => {}), onTogglePin: vi.fn(async () => {}), onOpenProfile: vi.fn(),
+  }
+  const member = { user_id: 2, username: 'Bob', role: 'member' as const, created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: 1 }
+  const view = render(<ChatPanel {...props} members={[member]}/>)
+  const parse = vi.spyOn(mentions, 'parseMentions')
+  view.rerender(<ChatPanel {...props} members={[{ ...member, last_seen_at: 2 }]}/>)
+  expect(parse).not.toHaveBeenCalled()
+  view.rerender(<ChatPanel {...props} members={[{ ...member, username: 'Robert' }]}/>)
+  expect(parse).toHaveBeenCalled()
+})
