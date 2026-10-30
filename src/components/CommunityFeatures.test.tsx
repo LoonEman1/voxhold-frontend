@@ -14,7 +14,7 @@ it('refreshes conversations without refetching roles/privacy for every message',
  await waitFor(()=>expect(calls.filter((v)=>v.endsWith('/roles')).length).toBe(1))
  const privacy=calls.filter((v)=>v.endsWith('/message-privacy')).length
  act(()=>window.dispatchEvent(new Event('voxhold:community')))
- await waitFor(()=>expect(calls.filter((v)=>v.endsWith('/conversations')).length).toBe(2))
+ await waitFor(()=>expect(calls.filter((v)=>v.split('?')[0]!.endsWith('/conversations')).length).toBe(2))
  expect(calls.filter((v)=>v.endsWith('/roles')).length).toBe(1)
  expect(calls.filter((v)=>v.endsWith('/message-privacy')).length).toBe(privacy)
  act(()=>window.dispatchEvent(new Event('voxhold:roles')))
