@@ -879,3 +879,32 @@ test('native context menus remain available in inputs and with Shift', async ({ 
   expect(await member.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })))).toBe(true)
   await expect(page.getByRole('menu')).toHaveCount(0)
 })
+
+test('mobile controls use readable type and muted text meets contrast in both themes', async ({ page }) => {
+  await openCallWorkspace(page)
+  for (const theme of ['dark', 'light']) {
+    const ratios = await page.evaluate((theme) => {
+      document.documentElement.dataset.theme = theme
+      const style = getComputedStyle(document.documentElement)
+      const luminance = (value: string) => {
+        let hex = value.trim().replace('#', '')
+        if (hex.length === 3) hex = [...hex].map((v) => v + v).join('')
+        const values = [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+        return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722
+      }
+      const muted = luminance(style.getPropertyValue('--muted'))
+      return ['--bg', '--surface', '--surface-2', '--surface-3'].map((key) => {
+        const background = luminance(style.getPropertyValue(key))
+        return (Math.max(muted, background) + 0.05) / (Math.min(muted, background) + 0.05)
+      })
+    }, theme)
+    ratios.forEach((ratio) => expect(ratio).toBeGreaterThanOrEqual(4.5))
+  }
+  await page.locator('.user-dock__profile').click()
+  await page.setViewportSize({ width: 375, height: 812 })
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  await expect(dialog.locator('textarea')).toBeVisible()
+  expect(await dialog.locator('textarea').evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16)
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: 'node_modules/.cache/audit-typography-mobile.png', fullPage: true })
+})
