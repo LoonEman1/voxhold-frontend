@@ -7,7 +7,7 @@ import { StorageManager } from './CommunitySettings'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 
 afterEach(cleanup)
-function fixture(request: (input: { path: string; method?: string; body?: unknown; rawBody?: BodyInit; onUploadProgress?: (n: number) => void }) => unknown) {
+function fixture(request: (input: { path: string; method?: string; body?: unknown; rawBody?: BodyInit; onUploadProgress?: (n: number) => void; signal?: AbortSignal }) => unknown) {
   return createApi({ request: async <T,>(input: Parameters<typeof request>[0]) => ({ status: 200, data: await request(input) as T }) })
 }
 const defaults = (path: string) => path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
@@ -118,4 +118,35 @@ it('does not create an active object URL for an SVG draft', async () => {
   await screen.findByText(/Готово к отправке/)
   expect(create).not.toHaveBeenCalled()
   create.mockRestore()
+
+})
+
+it('finishes a multi-page direct catch-up while further realtime revisions arrive', async () => {
+  let historyLoads = 0, pausedSignal: AbortSignal | undefined, release!: (value: unknown) => void
+  const pending = new Promise((resolve) => { release = resolve })
+  const messages = Array.from({length:150},(_,n)=>({id:n+1,conversation_id:7,author:{user_id:2,username:'member'},content:`catchup-${n+1}`,client_message_id:String(n+1),created_at:1}))
+  const api=fixture(({path,method,signal})=>{
+    if(path.endsWith('/conversations') && method==='POST')return{id:7}
+    if(path.endsWith('/conversations'))return[{id:7,direct:true,name:'Review',members:[],unread_count:0}]
+    if(path.includes('/conversations/7/messages')){
+      historyLoads++
+      if(historyLoads===1)return{messages:messages.slice(0,50),has_more:false}
+      if(historyLoads===2){pausedSignal=signal;return pending}
+      const before=Number(new URL(path,'https://example.test').searchParams.get('before')??Infinity)
+      const page=messages.filter((m)=>m.id<before).reverse()
+      return{messages:page.slice(0,50),has_more:page.length>50}
+    }
+    return defaults(path)
+  })
+  render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={()=>undefined} onNavigate={()=>undefined}><CommunityContent><div>Channels</div></CommunityContent></CommunityProvider>)
+  act(()=>window.dispatchEvent(new CustomEvent('voxhold:open-direct',{detail:2})))
+  await screen.findByText('catchup-50')
+  act(()=>window.dispatchEvent(new Event('voxhold:community')))
+  await waitFor(()=>expect(historyLoads).toBe(2))
+  act(()=>window.dispatchEvent(new Event('voxhold:community')))
+  await act(async()=>{await new Promise((resolve)=>setTimeout(resolve,600))})
+  expect(pausedSignal?.aborted).toBe(false)
+  await act(async()=>release({messages:messages.slice(100).reverse(),has_more:true}))
+  await screen.findByText('catchup-150')
+  expect(screen.getByText('catchup-51')).toBeTruthy()
 })

@@ -77,6 +77,14 @@ export function createApi(transport: Transport) {
     unwrap(transport, { ...request, token })
 
   return {
+    storageScope: transport.resolveURL?.('') || (typeof window === 'undefined' ? '' : window.location.origin),
+    linkPreviews: {
+      get: (token: string, href: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/link-preview?url=${encodeURIComponent(href)}`, signal }) as Promise<import('../domain/community').LinkPreview | null>,
+      image: (token: string, path: string, signal?: AbortSignal) => {
+        if (!/^\/api\/v1\/link-preview\/images\/[a-f0-9]{64}$/.test(path)) return Promise.reject(new Error('Invalid preview image path'))
+        return authorized(token, { path, responseType: 'blob', signal }) as Promise<Blob>
+      },
+    },
     community: {
       thumbnail: (token: string, id: string, signal?: AbortSignal) => unwrap<Blob>(transport, { token, path: `/api/v1/attachments/${encodeURIComponent(id)}/thumbnail`, responseType: 'blob', signal }),
       attachmentStatus: (token: string, id: string, signal?: AbortSignal) => unwrap<void>(transport, { token, path: `/api/v1/attachments/${encodeURIComponent(id)}/content`, method: 'HEAD', signal }),

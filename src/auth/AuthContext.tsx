@@ -93,6 +93,13 @@ export function AuthProvider({
     if (auth.session.expires_at * 1000 <= Date.now()) { expireNow(auth.session.token); setReady(true); return }
     let timer = 0
     let retryDelay = 1_000
+    let expiryTimer = 0
+    const checkExpiry = () => {
+      const left = auth.session.expires_at * 1000 - Date.now()
+      if (left <= 0) { expireNow(auth.session.token); return }
+      expiryTimer = window.setTimeout(checkExpiry, Math.min(left, 24 * 60 * 60 * 1000))
+    }
+    checkExpiry()
     const schedule = () => {
       const remaining = (auth.session.expires_at - REFRESH_MARGIN_SECONDS) * 1000 - Date.now()
       if (remaining > 0) {
@@ -125,7 +132,7 @@ export function AuthProvider({
       refreshFlight.current = { token, promise }
     }
     schedule()
-    return () => window.clearTimeout(timer)
+    return () => { window.clearTimeout(timer); window.clearTimeout(expiryTimer) }
   }, [api, auth, expireNow, persist, storage, apply])
 
   const login = useCallback(

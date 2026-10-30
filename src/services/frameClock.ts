@@ -1,19 +1,24 @@
-/**
- * Calls `tick` every `intervalMs`, also while the page is hidden. Background
- * tabs stop video frame callbacks and throttle window timers to about 1 Hz;
- * a dedicated worker's timer keeps its rate. Returns the stop function.
- */
+/** A disposable worker clock for hidden-tab canvas capture, with a timer fallback. */
 export function startFrameClock(intervalMs: number, tick: () => void): () => void {
+  let stopped = false, worker: Worker | undefined, timer: number | null = null
+  const run = () => { if (!stopped) tick() }
+  const fallback = () => {
+    if (stopped || timer !== null) return
+    worker?.terminate(); worker = undefined
+    timer = window.setInterval(run, intervalMs)
+  }
   if (typeof Worker !== 'undefined') {
     try {
-      const worker = new Worker(new URL('./frameClock.worker.ts', import.meta.url), { type: 'module' })
-      worker.onmessage = () => tick()
+      worker = new Worker(new URL('./frameClock.worker.ts', import.meta.url), { type: 'module' })
+      worker.onmessage = run
+      worker.onerror = (event) => { event.preventDefault(); fallback() }
       worker.postMessage({ intervalMs })
-      return () => worker.terminate()
-    } catch {
-      // Workers can be blocked by policy; a throttled window timer still ticks.
-    }
+    } catch { fallback() }
+  } else fallback()
+  return () => {
+    if (stopped) return
+    stopped = true
+    worker?.terminate(); worker = undefined
+    if (timer !== null) window.clearInterval(timer)
   }
-  const timer = window.setInterval(tick, intervalMs)
-  return () => window.clearInterval(timer)
 }

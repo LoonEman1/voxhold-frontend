@@ -105,3 +105,23 @@ it('does not parse visible messages again for presence-only member updates', () 
   view.rerender(<ChatPanel {...props} members={[{ ...member, username: 'Robert' }]}/>)
   expect(parse).toHaveBeenCalled()
 })
+
+it('a custom role with manage_messages must expose moderation actions', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(60)
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
+  const props = {
+    channel: { id: 1, server_id: 1, name: 'general', kind: 'text' as const, position: 0, created_by: 1, created_at: 0, permissions: 17, can_publish: false },
+    messages: [{ id: 1, channel_id: 1, content: 'moderation-probe', author: { user_id: 1, username: 'Alice' }, created_at: 0, edited_at: null }],
+    loading: false, loadingOlder: false, hasMore: false, loadingNewer: false, hasNewer: false,
+    currentUserId: 2, currentRole: 'member' as const, canManage: false, members: [], pinnedMessageIds: new Set<number>(), focusedMessageId: null, channelReads: {},
+    onLoadOlder: vi.fn(async () => undefined), onLoadNewer: vi.fn(async () => undefined), onReturnToLatest: vi.fn(async () => undefined),
+    onReadThrough: vi.fn(), onSend: vi.fn(async () => undefined), onEdit: vi.fn(async () => undefined), onDelete: vi.fn(async () => undefined),
+    onTogglePin: vi.fn(async () => undefined), onOpenProfile: vi.fn(),
+  }
+  render(<ChatPanel {...props}/>)
+  fireEvent.contextMenu(screen.getByText('moderation-probe'), { clientX: 100, clientY: 100 })
+  expect(screen.queryByRole('menuitem', { name: 'Закрепить' })).not.toBeNull()
+  expect(screen.queryByRole('menuitem', { name: 'Удалить' })).not.toBeNull()
+})

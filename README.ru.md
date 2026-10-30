@@ -152,16 +152,16 @@ HTTP transport и адаптер хранения сессии находятс�
 
 ## Релизы и обновление
 
-Frontend и backend выпускаются с общим номером **2.3.0**. Перед этим frontend
-установите backend **2.3.0** и примените миграции **000027–000030**. Они добавляют
+Frontend и backend выпускаются с общим номером **2.5.1**. Перед этим frontend
+установите backend **2.5.1** и примените миграции **000027–000031**. Они добавляют
 роли, подписки обсуждений, личные беседы и вложения. Перед обновлением сохраните проверенный бэкап.
 
-Образ frontend: `ghcr.io/looneman1/voxhold-frontend:2.3.0`.
-Теги `2.3` и `latest` перемещаются при публикации новых релизов.
+Образ frontend: `ghcr.io/looneman1/voxhold-frontend:2.5.1`.
+Теги `2.5` и `latest` перемещаются при публикации новых релизов.
 Для существующей production-установки:
 
 ```bash
-./update.sh --backend-version 2.3.0 --frontend-version 2.3.0
+./update.sh --backend-version 2.5.1 --frontend-version 2.5.1
 ```
 
 Команда запускается из [репозитория deploy](https://github.com/LoonEman1/voxhold-deploy),

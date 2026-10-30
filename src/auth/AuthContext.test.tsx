@@ -1,3 +1,4 @@
+import { ApiError } from '../services/api'
 // @vitest-environment jsdom
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
@@ -100,4 +101,28 @@ it('retains a valid session and retries transient refresh failures', async () =>
   expect(auth.token).toBe('old')
   await act(async () => vi.advanceTimersByTimeAsync(1_000))
   expect(auth.token).toBe('recovered')
+
+})
+
+it.each([0,429,503])('retains a valid session after refresh status %s and retries', async (status) => {
+  vi.useFakeTimers()
+  const m=mount(60,true)
+  await act(async () => m.pending.reject(new ApiError('temporary',status)))
+  expect(auth.token).toBe('old'); expect(m.stored()?.session.token).toBe('old')
+  m.refresh.mockResolvedValue(session('renewed'))
+  await act(async () => vi.advanceTimersByTimeAsync(1000))
+  expect(auth.token).toBe('renewed')
+})
+it('expires confirmed unauthorized refresh and does not retry', async () => {
+  const m=mount(60)
+  await act(async () => m.pending.reject(new ApiError('unauthorized',401)))
+  expect(auth.token).toBeNull(); expect(m.stored()).toBeNull()
+})
+
+it('adopts the new token when the old WebSocket is revoked before refresh returns', async () => {
+  const m=mount(60)
+  act(() => notifyUnauthorized('old'))
+  expect(auth.token).toBe('old')
+  await act(async () => m.pending.resolve(session('rotated')))
+  expect(auth.token).toBe('rotated'); expect(m.stored()?.session.token).toBe('rotated')
 })

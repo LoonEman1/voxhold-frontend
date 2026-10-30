@@ -4,7 +4,7 @@ export interface MessageLink { start: number; end: number; href: string; label: 
 export function messageLinks(content: string): MessageLink[] {
   const ignored = codeRanges(content)
   const links: MessageLink[] = []
-  for (const match of content.matchAll(/\bhttps?:\/\/[^\s<>`"']+/giu)) {
+  for (const match of content.matchAll(/\bhttps?:\/\/[^\s<>`"'\p{Cc}]+/giu)) {
     const start = match.index
     if (ignored.some(([a, b]) => start >= a && start < b)) continue
     let href = match[0]
