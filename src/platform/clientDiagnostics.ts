@@ -65,7 +65,9 @@ function loadPendingEvents() {
       && ['debug', 'info', 'warn', 'error'].includes(candidate.level ?? '')
       && !!candidate.details
       && typeof candidate.details === 'object'
-  }).slice(-MAX_PENDING_EVENTS)
+  }).slice(-MAX_PENDING_EVENTS).map((event) => ({
+    ...event, category: event.category.slice(0, 64), name: event.name.slice(0, 64), details: compactDetails(event.details),
+  }))
 }
 
 function newSessionID() {
@@ -77,7 +79,7 @@ function newSessionID() {
       existing = ''
     }
   }
-  if (existing) return existing
+  if (existing) return existing.slice(0, 128)
   const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -118,6 +120,13 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
 
 export function sanitizeDiagnosticDetails(details: Record<string, unknown> = {}) {
   return sanitizeValue(details) as Record<string, unknown>
+}
+
+function compactDetails(details: Record<string, unknown>): Record<string, unknown> {
+  try {
+    const value = sanitizeDiagnosticDetails(details)
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength > 4096 ? { truncated: true } : value
+  } catch { return { sanitization_failed: true } }
 }
 
 export class ClientDiagnostics {
@@ -240,17 +249,11 @@ export class ClientDiagnostics {
       return
     }
     if (LEVELS.indexOf(level) < LEVELS.indexOf(this.minimumLevel)) return
-    let sanitizedDetails: Record<string, unknown>
-    try {
-      sanitizedDetails = sanitizeDiagnosticDetails(details)
-      if (new TextEncoder().encode(JSON.stringify(sanitizedDetails)).byteLength > 4096) sanitizedDetails = { truncated: true }
-    } catch {
-      sanitizedDetails = { sanitization_failed: true }
-    }
+    const sanitizedDetails = compactDetails(details)
     this.pending.push({
       timestamp_ms: Date.now(),
-      category,
-      name,
+      category: category.slice(0, 64),
+      name: name.slice(0, 64),
       level,
       details: sanitizedDetails,
     })
@@ -269,7 +272,7 @@ export class ClientDiagnostics {
     const payload = () => JSON.stringify({
       session_id: this.sessionID,
       client_version: packageMetadata.version,
-      platform: typeof navigator === 'undefined' ? '' : navigator.userAgent,
+      platform: typeof navigator === 'undefined' ? '' : navigator.userAgent.slice(0, 512),
       events,
     })
     let body = payload()

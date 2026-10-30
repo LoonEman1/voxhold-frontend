@@ -124,3 +124,20 @@ it('limits keepalive payloads by encoded bytes and retains remaining events', as
   await vi.waitFor(() => expect(request.mock.calls.reduce((n, [, value]) => n + JSON.parse(String(value!.body)).events.length, 0)).toBe(30))
   diagnostics.dispose(); vi.unstubAllGlobals()
 })
+
+it('re-sanitizes and bounds a single oversized persisted event before keepalive retry', async () => {
+  sessionStorage.clear()
+  sessionStorage.setItem('voxhold.diagnostics.session.v1', 's'.repeat(100_000))
+  sessionStorage.setItem('voxhold.diagnostics.pending.v1', JSON.stringify([{ timestamp_ms: 1, category: 'c'.repeat(100_000), name: 'n'.repeat(100_000), level: 'info', details: { token: 'old-secret', field: 'x'.repeat(100_000) } }]))
+  const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 503 }))
+  vi.stubGlobal('fetch', request)
+  const diagnostics = new ClientDiagnostics('info')
+  diagnostics.setToken('session')
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce())
+  await diagnostics.flush(true)
+  const init = request.mock.calls.at(-1)![1]!
+  expect(init.keepalive).toBe(true)
+  expect(new TextEncoder().encode(String(init.body)).byteLength).toBeLessThanOrEqual(60 * 1024)
+  expect(String(init.body)).not.toContain('old-secret')
+  diagnostics.dispose(); vi.unstubAllGlobals()
+})
