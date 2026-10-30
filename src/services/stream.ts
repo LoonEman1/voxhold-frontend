@@ -241,6 +241,7 @@ interface MediaRTPDiagnosticStats extends RTCStats {
   totalSamplesReceived?: number
   qualityLimitationReason?: string
   trackIdentifier?: string
+  encoderImplementation?: string
 }
 
 function monitorPeerDiagnostics(
@@ -279,11 +280,16 @@ function monitorPeerDiagnostics(
           width: stats.frameWidth ?? null,
           height: stats.frameHeight ?? null,
           quality_limitation_reason: stats.qualityLimitationReason ?? '',
+          encoder_implementation: stats.encoderImplementation ?? '',
         })
       })
       clientDiagnostics.record('media', 'stream_rtp_stats', 'info', {
         ...context,
         connection_state: peer.connectionState,
+        // Background tabs throttle timers and frame callbacks; correlating
+        // frame rate with visibility separates that from encoder limits.
+        page_visibility: typeof document === 'undefined' ? '' : document.visibilityState,
+        page_focused: typeof document === 'undefined' ? null : document.hasFocus(),
         quality: quality.sample(report),
         reports,
       })
@@ -297,7 +303,18 @@ function monitorPeerDiagnostics(
     }
   }
   const timer = window.setInterval(() => { void sample() }, 15_000)
-  return () => window.clearInterval(timer)
+  // Sample shortly after a tab switch, once framesPerSecond covers the new state.
+  let visibilityTimer: number | null = null
+  const visibilityChanged = () => {
+    if (visibilityTimer !== null) window.clearTimeout(visibilityTimer)
+    visibilityTimer = window.setTimeout(() => { visibilityTimer = null; void sample() }, 3_000)
+  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibilityChanged)
+  return () => {
+    window.clearInterval(timer)
+    if (visibilityTimer !== null) window.clearTimeout(visibilityTimer)
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibilityChanged)
+  }
 }
 
 function monitorVideoQuality(

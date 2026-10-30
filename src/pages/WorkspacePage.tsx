@@ -1463,7 +1463,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           clientDiagnostics.record('media', 'stream_publisher_pipeline_repair', 'warn', { reason: error.message })
           // Reuse the existing display capture and PeerConnection. Replacing
           // only its video input preserves audio, viewers and capture permission.
-          const pipeline = await createSDRPublishPipeline(capture, codec, (failure) => { void repairSDRPipeline(failure) }, { preferCanvas: true })
+          // The repair skips the stalled worker but not the frame-driven
+          // transform: the canvas path throttles while the publisher's tab is hidden.
+          const pipeline = await createSDRPublishPipeline(capture, codec, (failure) => { void repairSDRPipeline(failure) }, { avoidWorker: true })
           if (streamAttemptRef.current !== publisherAttempt || serverStreamRef.current !== session || streamRoleRef.current !== 'publisher') { pipeline.close(); return }
           try { await session.replacePublisherVideoTrack(pipeline.stream.getVideoTracks()[0]!) }
           catch (failure) { pipeline.close(); throw failure }
