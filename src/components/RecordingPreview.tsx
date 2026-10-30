@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { safeImageBlob } from '../lib/safeBlob'
 import type { ChannelRecording } from '../domain/types'
 import { Icon } from './Icon'
 
@@ -18,7 +19,7 @@ export function RecordingPreview({ record, load, localReady }: { record: Channel
       try {
         const blob = await load(latest.current, controller.signal)
         if (!blob || controller.signal.aborted) return
-        image = URL.createObjectURL(blob); setURL(image)
+        image = URL.createObjectURL(safeImageBlob(blob)); setURL(image)
       } catch { /* An optional preview never prevents downloading the video. */ }
     }
     const element = ref.current

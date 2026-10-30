@@ -5,6 +5,7 @@ import { useCommunity } from './Community'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 import { bytes } from './CommunitySettings'
+import { inlineMediaType, safeObjectBlob } from '../lib/safeBlob'
 import './attachment-drafts.css'
 
 export function MessageAttachments({ attachments }: { attachments?: Attachment[] }) {
@@ -12,14 +13,15 @@ export function MessageAttachments({ attachments }: { attachments?: Attachment[]
 }
 function AttachmentView({ attachment }: { attachment: Attachment }) {
   const context = useCommunity(), [url, setURL] = useState(''), [error, setError] = useState(''), [removed, setRemoved] = useState(attachment.deleted), [expanded, setExpanded] = useState(false), [requested, setRequested] = useState(false), [revision, setRevision] = useState(0)
-  const image = attachment.mime_type.startsWith('image/'), video = attachment.mime_type.startsWith('video/')
+  const media = inlineMediaType(attachment.mime_type)
+  const image = media?.startsWith('image/') ?? false, video = media?.startsWith('video/') ?? false
   const api = context?.api, token = context?.token
   useEffect(() => { const changed = () => { setURL(''); setRevision((v) => v + 1) }; window.addEventListener('voxhold:attachments', changed); return () => window.removeEventListener('voxhold:attachments', changed) }, [])
   useEffect(() => {
     if (!api || !token || attachment.deleted || (!image && !requested)) return
     const controller = new AbortController(); let objectURL = ''
     setError('')
-    void api.community.content(token, attachment.id, controller.signal).then((blob) => { if (!controller.signal.aborted) { objectURL = URL.createObjectURL(blob); setURL(objectURL); setRemoved(false) } }).catch((caught) => { if (!controller.signal.aborted) { if (caught && typeof caught === 'object' && 'status' in caught && caught.status === 410) setRemoved(true); else setError(caught instanceof Error ? caught.message : 'Не удалось загрузить вложение') } })
+    void api.community.content(token, attachment.id, controller.signal).then((blob) => { if (!controller.signal.aborted) { objectURL = URL.createObjectURL(safeObjectBlob(blob, attachment.mime_type)); setURL(objectURL); setRemoved(false) } }).catch((caught) => { if (!controller.signal.aborted) { if (caught && typeof caught === 'object' && 'status' in caught && caught.status === 410) setRemoved(true); else setError(caught instanceof Error ? caught.message : 'Не удалось загрузить вложение') } })
     return () => { controller.abort(); if (objectURL) URL.revokeObjectURL(objectURL) }
   }, [api, token, attachment.id, attachment.deleted, image, requested, revision])
   if (attachment.deleted || removed) return <div className="attachment-deleted">Вложение удалено сервером · {attachment.filename}</div>

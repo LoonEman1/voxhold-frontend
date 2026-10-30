@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { safeImageBlob } from '../lib/safeBlob'
 import type { VoxholdApi } from '../services/api'
 
 type Entry = { url: string | null; version?: string; listeners: Set<() => void>; request?: AbortController }
@@ -41,7 +42,7 @@ class AvatarCache {
     void this.api.profile.avatar(this.token, id, version, controller.signal).then((blob) => {
       if (controller.signal.aborted) return
       if (entry.url) URL.revokeObjectURL(entry.url)
-      entry.url = URL.createObjectURL(blob)
+      entry.url = URL.createObjectURL(safeImageBlob(blob))
     }).catch(() => { /* Initials remain for inaccessible images. */ }).finally(() => {
       if (controller.signal.aborted) return
       entry.request = undefined
