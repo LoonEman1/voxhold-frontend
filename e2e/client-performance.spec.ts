@@ -311,3 +311,32 @@ test('outgoing stream volume changes actual audio amplitude and keeps capture al
   expect(samples.restored / samples.full).toBeCloseTo(0.37, 1)
   expect(samples.captureAlive).toBe(true)
 })
+
+test('200 presence updates leave message rows and mention parsing idle', async ({ page }) => {
+  // Count actual function executions in served test modules; production sources stay untouched.
+  for (const [path, name, counter] of [['components/ChatPanel.tsx', 'ChatMessageRow', 'presenceRows'], ['lib/mentions.ts', 'parseMentions', 'presenceParses']]) {
+    await page.route(`**/src/${path}*`, async (route) => {
+      const response = await route.fetch(), source = await response.text()
+      const marker = new RegExp(`function ${name}\\([\\s\\S]*?\\)\\s*\\{`)
+      expect(source).toMatch(marker)
+      await route.fulfill({ response, body: source.replace(marker, (match) => `${match}\n globalThis.${counter} = (globalThis.${counter} ?? 0) + 1;`) })
+    })
+  }
+  await page.goto('/e2e/fixtures/presence.html')
+  await expect(page.locator('[data-message-id="100"]')).toBeVisible()
+  const counts = () => page.evaluate(() => {
+    const counters = window as unknown as { presenceRows: number; presenceParses: number }
+    return { rows: counters.presenceRows, parses: counters.presenceParses }
+  })
+  const before = await counts()
+  expect(before.rows).toBeGreaterThan(0); expect(before.parses).toBeGreaterThan(0)
+  await page.evaluate(async () => {
+    const fixture = (window as unknown as { presenceFixture: { update(seen: number): void } }).presenceFixture
+    for (let i = 2; i < 202; i++) { fixture.update(i); await new Promise(requestAnimationFrame) }
+    await new Promise(requestAnimationFrame)
+  })
+  expect(await counts()).toEqual(before)
+  await page.evaluate(() => (window as unknown as { presenceFixture: { rename(): void } }).presenceFixture.rename())
+  await expect(page.locator('[data-message-id="100"]')).toContainText('Robert')
+  expect((await counts()).parses).toBeGreaterThan(before.parses)
+})
