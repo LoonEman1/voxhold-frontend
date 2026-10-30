@@ -77,6 +77,14 @@ export function createApi(transport: Transport) {
     unwrap(transport, { ...request, token })
 
   return {
+    storageScope: transport.resolveURL?.('') || (typeof window === 'undefined' ? '' : window.location.origin),
+    linkPreviews: {
+      get: (token: string, href: string, signal?: AbortSignal) => authorized(token, { path: `/api/v1/link-preview?url=${encodeURIComponent(href)}`, signal }) as Promise<import('../domain/community').LinkPreview | null>,
+      image: (token: string, path: string, signal?: AbortSignal) => {
+        if (!/^\/api\/v1\/link-preview\/images\/[a-f0-9]{64}$/.test(path)) return Promise.reject(new Error('Invalid preview image path'))
+        return authorized(token, { path, responseType: 'blob', signal }) as Promise<Blob>
+      },
+    },
     community: {
       request: <T>(token: string, path: string, method: TransportRequest['method'] = 'GET', body?: unknown, signal?: AbortSignal) => unwrap<T>(transport, { token, path: `/api/v1${path}`, method, body, signal }),
       upload: (token: string, channelId: number, id: string, file: File, onUploadProgress: (fraction: number) => void, signal?: AbortSignal, conversationId?: number) => unwrap<import('../domain/community').Attachment>(transport, { token, path: `/api/v1/${conversationId ? `conversations/${conversationId}` : `channels/${channelId}`}/attachments/${id}?filename=${encodeURIComponent(file.name)}`, method: 'PUT', rawBody: file, contentType: file.type || 'application/octet-stream', onUploadProgress, signal }),
