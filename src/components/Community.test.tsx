@@ -109,3 +109,13 @@ it('does not poll lists and applies notification payloads without a list reload'
   expect(request).toHaveBeenCalledTimes(baseline + 2)
   vi.useRealTimers()
 })
+
+it('does not create an active object URL for an SVG draft', async () => {
+  const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
+  const api = fixture(({ path }) => path.includes('/attachments/') ? { id: 'svg', filename: 'active.svg', mime_type: 'image/svg+xml', size_bytes: 6 } : defaults(path))
+  const view = render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><UploadFixture onSend={() => undefined}/></CommunityProvider>)
+  fireEvent.change(view.container.querySelector('input[type=file]')!, { target: { files: [new File(['<svg/>'], 'active.svg', { type: 'image/svg+xml' })] } })
+  await screen.findByText(/Готово к отправке/)
+  expect(create).not.toHaveBeenCalled()
+  create.mockRestore()
+})

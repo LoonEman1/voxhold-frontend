@@ -126,7 +126,7 @@ export function useAttachmentUpload(channel: Channel | null, enabled: boolean, t
     if (!context || !channel || !enabled) return
     const values: Upload[] = [...files].slice(0, Math.max(0, 10 - current.current.length)).map((file) => {
       let preview: string | undefined
-      if (file.type.startsWith('image/') && typeof URL.createObjectURL === 'function') preview = URL.createObjectURL(file)
+      if (inlineMediaType(file.type)?.startsWith('image/') && typeof URL.createObjectURL === 'function') preview = URL.createObjectURL(safeObjectBlob(file, file.type))
       return { id: crypto.randomUUID().replaceAll('-', ''), file, preview, progress: 0, state: file.size > 64 * 1024 ** 2 ? 'failed' : 'uploading', error: file.size > 64 * 1024 ** 2 ? 'Файл больше 64 МБ' : undefined }
     })
     update((items) => [...items, ...values]); values.forEach((item) => { if (item.state !== 'failed') enqueue(item.id) })
