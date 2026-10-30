@@ -2137,11 +2137,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     notify(`Роль ${username} обновлена`, 'success')
   }
 
-  const removeMemberFromServer = async (userId: number, username: string) => {
+  const banMemberOnInstance = async (userId: number, username: string) => {
     if (!token || !selectedServerId) return
     await api.servers.banMember(token, selectedServerId, userId)
     setMembers((current) => current.filter((member) => member.user_id !== userId))
-    notify(`${username} удалён с сервера`, 'success')
+    notify(`${username} забанен на инстансе`, 'success')
   }
 
   const updateUserVolume = useCallback((userId: number, volume: number) => {
@@ -2223,14 +2223,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (canRemove) items.push({
       key: 'remove',
       kind: 'action',
-      icon: 'logout',
-      label: 'Удалить с сервера',
+      icon: 'warning',
+      label: 'Забанить на инстансе',
       danger: true,
       onSelect: () => setConfirmRequest({
-        title: `Удалить ${member.username} с сервера?`,
+        title: `Забанить ${member.username} на инстансе?`,
         description: `${member.username} потеряет доступ к пространству и будет забанен на этом инстансе.`,
-        confirmLabel: 'Удалить',
-        action: () => removeMemberFromServer(member.user_id, member.username),
+        confirmLabel: 'Забанить',
+        action: () => banMemberOnInstance(member.user_id, member.username),
       }),
     })
     if (options?.volume) {

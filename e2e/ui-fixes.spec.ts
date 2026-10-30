@@ -143,7 +143,7 @@ test('participant volume updates in an open menu and the same menu opens on room
   await expect(slider).toHaveValue('195')
   await expect(menu.getByRole('menuitem', { name: 'Просмотреть профиль' })).toBeVisible()
   await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toBeVisible()
-  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Забанить на инстансе' })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await slider.press('ArrowLeft')
   await expect(slider).toHaveValue('190')
@@ -161,7 +161,7 @@ test('participant volume updates in an open menu and the same menu opens on room
   await expect(slider).toHaveValue('190')
   await page.locator('.voice-participant').filter({ hasText: 'Александр' }).click({ button: 'right' })
   await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toHaveCount(0)
-  await expect(menu.getByRole('menuitem', { name: 'Удалить с сервера' })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Забанить на инстансе' })).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
@@ -855,4 +855,15 @@ test('news channel creation configures publishers and comments', async ({ page }
   await expect(dialog.getByText('Настройки публикаций сохранены.', { exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('news-channel-settings.png'), animations: 'disabled' })
   expect(errors).toEqual([])
+})
+
+test('ban action describes instance-wide scope before confirmation', async ({ page }) => {
+  await openCallWorkspace(page, { withPeers: true })
+  await page.locator('.voice-participant').filter({ hasText: 'Мария' }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Забанить на инстансе', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Забанить Мария на инстансе?' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('будет забанен на этом инстансе')
+  await expect(dialog.getByRole('button', { name: 'Забанить', exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Отмена', exact: true }).click()
 })
