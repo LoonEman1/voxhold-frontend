@@ -15,6 +15,7 @@ export interface TransportRequest {
 export interface TransportResponse<T> {
   status: number
   data: T | null
+  retryAfterMs?: number
 }
 
 export interface Transport {
@@ -88,6 +89,7 @@ export function createFetchTransport(baseUrl = ''): Transport {
         throw error
       }
 
+      const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'))
       if (method === 'HEAD' || response.status === 204) {
         clientDiagnostics.record('http', 'request_completed', 'info', {
           method,
@@ -95,7 +97,7 @@ export function createFetchTransport(baseUrl = ''): Transport {
           status: response.status,
           duration_ms: Math.round(performance.now() - startedAt),
         })
-        return { status: response.status, data: null }
+        return { status: response.status, data: null, retryAfterMs }
       }
 
       const contentType = response.headers.get('content-type') ?? ''
@@ -115,9 +117,17 @@ export function createFetchTransport(baseUrl = ''): Transport {
         },
       )
 
-      return { status: response.status, data }
+      return { status: response.status, data, retryAfterMs }
     },
   }
+}
+
+export function parseRetryAfter(value: string | null): number | undefined {
+  if (!value?.trim()) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return seconds >= 0 ? Math.min(seconds * 1000, 30_000) : undefined
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.min(Math.max(0, date - Date.now()), 30_000) : undefined
 }
 
 function uploadRequest<T>(url: string, request: TransportRequest): Promise<TransportResponse<T>> {
@@ -130,7 +140,7 @@ function uploadRequest<T>(url: string, request: TransportRequest): Promise<Trans
     const abort = () => xhr.abort()
     const done = () => request.signal?.removeEventListener('abort', abort)
     xhr.upload.onprogress = (event) => { if (event.lengthComputable) request.onUploadProgress?.(event.loaded / event.total) }
-    xhr.onload = () => { done(); let data: T | null = null; try { data = JSON.parse(xhr.responseText) as T } catch { /* Non-JSON failure. */ } resolve({ status: xhr.status, data }) }
+    xhr.onload = () => { done(); let data: T | null = null; try { data = JSON.parse(xhr.responseText) as T } catch { /* Non-JSON failure. */ } resolve({ status: xhr.status, data, retryAfterMs: parseRetryAfter(xhr.getResponseHeader('Retry-After')) }) }
     xhr.onerror = () => { done(); reject(new Error('Соединение прервано. Повторите загрузку.')) }
     xhr.ontimeout = xhr.onerror
     xhr.onabort = () => { done(); reject(new DOMException('Upload aborted', 'AbortError')) }

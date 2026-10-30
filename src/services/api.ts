@@ -42,6 +42,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterMs?: number,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -64,7 +65,7 @@ async function unwrap<T>(transport: Transport, request: TransportRequest): Promi
       // expires the stored session; call sites no longer duplicate this.
       notifyUnauthorized(request.token)
     }
-    throw new ApiError(payload?.error || 'Сервер вернул ошибку', response.status)
+    throw new ApiError(payload?.error || 'Сервер вернул ошибку', response.status, response.retryAfterMs)
   }
 
   return response.data as T
