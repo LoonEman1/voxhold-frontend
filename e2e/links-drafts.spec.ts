@@ -43,7 +43,7 @@ test('drafts survive channel navigation and reload and clear after sending', asy
 test('custom-role moderation and cards fit a narrow viewport', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page)
   await page.goto('/e2e/fixtures/links-drafts.html')
-  await page.locator('[data-message-id="2"]').click({ button: 'right' })
+  await page.locator('[data-message-id="2"]').click({ button: 'right', position: { x: 2, y: 2 } })
   await expect(page.getByRole('menuitem', { name: 'Закрепить', exact: true })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: 'Удалить', exact: true })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Закрепить', exact: true }).click()
