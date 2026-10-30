@@ -51,6 +51,7 @@ import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import type { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, StreamQualityStats } from '../services/stream'
+import { captureScreen, capturedAudioIncludesOwnPlayback } from '../services/screenCapture'
 import { streamErrorMessage } from '../services/streamErrors'
 import type { StreamAudioGain } from '../services/streamAudioGain'
 import type { StreamPublishPipeline } from '../services/hdrPipeline'
@@ -1397,14 +1398,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
     setStreamError('')
     setStreamStatus('requesting')
+    const startAttempt = streamAttemptRef.current
+    let publisherAttempt: number | null = null
     try {
       const preferences = streamPreferencesRef.current
-      const [{ BrowserServerStreamSession, BrowserP2PStreamPublisher, selectedStreamCodec, captureScreen, capturedAudioIncludesOwnPlayback }, { capturedHDRProbe }, { createHDRPublishPipeline, createSDRPublishPipeline }, { StreamAudioGain }] = await Promise.all([
-        import('../services/stream'), import('../services/hdrCapabilities'), import('../services/hdrPipeline'), import('../services/streamAudioGain'),
-      ])
-      if (voiceSessionRef.current?.channelId !== channel.id || streamRoleRef.current) return
-      const codec = selectedStreamCodec(preferences, 'send')
-      const iceConfiguration = await ensureWebRTCConfig()
       // Reuse a capture kept alive during the signalling-loss grace period:
       // restoring the stream must not require a new getDisplayMedia gesture.
       const stash = captureStashRef.current
@@ -1420,6 +1417,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         streamCaptureRef.current = capture
         clientDiagnostics.record('media', 'stream_capture_reused', 'info')
       } else {
+        // Keep getDisplayMedia in the click turn, before fetching chunks or ICE config.
         capture = await captureScreen(preferences)
       }
       // The screen picker can stay open for a long time: the user may have left
@@ -1444,7 +1442,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setStreamRole('publisher')
       setStreamStatus('signaling')
 
-      const publisherAttempt = streamAttemptRef.current
+      publisherAttempt = streamAttemptRef.current
+      const [{ BrowserServerStreamSession, BrowserP2PStreamPublisher, selectedStreamCodec }, { capturedHDRProbe }, { createHDRPublishPipeline, createSDRPublishPipeline }, { StreamAudioGain }] = await Promise.all([
+        import('../services/stream'), import('../services/hdrCapabilities'), import('../services/hdrPipeline'), import('../services/streamAudioGain'),
+      ])
+      const codec = selectedStreamCodec(preferences, 'send')
+      const iceConfiguration = await ensureWebRTCConfig()
+      if (streamAttemptRef.current !== publisherAttempt || streamCaptureRef.current !== capture || streamRoleRef.current !== 'publisher') return
+
       const pipelineRepairBudget = new RetryBudget(2, 2 * 60_000)
       let repairingPipeline = false
       const repairSDRPipeline = async (error = new Error('Видеокодер перестал выдавать кадры')) => {
@@ -1573,7 +1578,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setStreamError('Браузер не смог убрать голоса из Voxhold из звука экрана — друзья услышат себя. Покажите отдельную вкладку или отключите звук трансляции')
       }
     } catch (error) {
-      failStream(error)
+      if (streamAttemptRef.current === (publisherAttempt ?? startAttempt)) failStream(error)
     }
   }
 
