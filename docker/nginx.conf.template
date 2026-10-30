@@ -9,7 +9,7 @@ server {
     charset utf-8;
     client_max_body_size 5m;
 
-    include /etc/nginx/security_headers.conf;
+    include /etc/nginx/conf.d/security_headers.inc;
 
     location = /healthz {
         access_log off;
@@ -43,20 +43,20 @@ server {
         try_files $uri =404;
         expires 1y;
         add_header Cache-Control "public, immutable";
-        include /etc/nginx/security_headers.conf;
+        include /etc/nginx/conf.d/security_headers.inc;
     }
 
     location /flags/ {
         try_files $uri =404;
         expires 1y;
         add_header Cache-Control "public, immutable";
-        include /etc/nginx/security_headers.conf;
+        include /etc/nginx/conf.d/security_headers.inc;
     }
 
     location / {
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache";
-        include /etc/nginx/security_headers.conf;
+        include /etc/nginx/conf.d/security_headers.inc;
     }
 
     gzip on;
