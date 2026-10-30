@@ -7,6 +7,8 @@ import { Modal } from './Modal'
 import { bytes } from '../lib/bytes'
 import { inlineMediaType, safeObjectBlob } from '../lib/safeBlob'
 import { attachmentRequest } from '../lib/attachmentRequests'
+import { retryBusy } from '../lib/retryBusy'
+import { acquireThumbnail, storeThumbnail, releaseThumbnail, dropThumbnail } from '../lib/thumbnailCache'
 import './attachment-drafts.css'
 
 interface AttachmentScope { channelId?: number; conversationId?: number }
@@ -17,6 +19,7 @@ export function MessageAttachments({ attachments, ...scope }: { attachments?: At
 function AttachmentView({ attachment, channelId, conversationId }: { attachment: Attachment } & AttachmentScope) {
   const context = useCommunity()
   const api = context?.api, userId = context?.userId
+  const thumbnailKey = `${api?.storageScope ?? ''}:${userId ?? 0}:${attachment.id}`
   const tokenRef = useRef(context?.token ?? '')
   useEffect(() => { tokenRef.current = context?.token ?? '' }, [context?.token])
   const figure = useRef<HTMLElement>(null)
@@ -41,7 +44,7 @@ function AttachmentView({ attachment, channelId, conversationId }: { attachment:
       const value = (event as CustomEvent<AttachmentChange>).detail
       if (!value || value.channel_id && value.channel_id !== channelId || value.conversation_id && value.conversation_id !== conversationId) return
       if (Array.isArray(value.attachment_ids)) {
-        if (value.attachment_ids.includes(attachment.id)) setRemoved(true)
+        if (value.attachment_ids.includes(attachment.id)) { dropThumbnail(thumbnailKey); setRemoved(true) }
         return
       }
       // Compatibility with older servers: revalidate metadata, preserving media URLs.
@@ -49,25 +52,27 @@ function AttachmentView({ attachment, channelId, conversationId }: { attachment:
       controller?.abort(); controller = new AbortController()
       const signal = controller.signal
       void api.community.attachmentStatus(tokenRef.current, attachment.id, signal).catch((caught: unknown) => {
-        if (!signal.aborted && caught && typeof caught === 'object' && 'status' in caught && (caught.status === 410 || caught.status === 404)) setRemoved(true)
+        if (!signal.aborted && caught && typeof caught === 'object' && 'status' in caught && (caught.status === 410 || caught.status === 404)) { dropThumbnail(thumbnailKey); setRemoved(true) }
       })
     }
     window.addEventListener('voxhold:attachments', changed)
     return () => { controller?.abort(); window.removeEventListener('voxhold:attachments', changed) }
-  }, [api, userId, attachment.id, attachment.deleted, removed, channelId, conversationId])
+  }, [api, userId, attachment.id, attachment.deleted, removed, channelId, conversationId, thumbnailKey])
   useEffect(() => {
     if (!api || !image || !visible || attachment.deleted || removed) return
-    const controller = new AbortController(); let objectURL = ''
-    void attachmentRequest(controller.signal, () => api.community.thumbnail(tokenRef.current, attachment.id, controller.signal)).then((blob) => {
-      if (!controller.signal.aborted) { objectURL = URL.createObjectURL(safeObjectBlob(blob, 'image/jpeg')); setPreviewURL(objectURL) }
+    const controller = new AbortController(); let leased = false
+    const cached = acquireThumbnail(thumbnailKey)
+    if (cached) { leased = true; setPreviewURL(cached) }
+    else void attachmentRequest(controller.signal, () => retryBusy(controller.signal, () => api.community.thumbnail(tokenRef.current, attachment.id, controller.signal))).then((blob) => {
+      if (!controller.signal.aborted) { const objectURL = storeThumbnail(thumbnailKey, safeObjectBlob(blob, 'image/jpeg')); leased = true; setPreviewURL(objectURL) }
     }).catch((caught: unknown) => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : 'Не удалось загрузить превью') })
-    return () => { controller.abort(); if (objectURL) URL.revokeObjectURL(objectURL) }
-  }, [api, userId, attachment.id, attachment.deleted, removed, image, visible, revision])
+    return () => { controller.abort(); if (leased) releaseThumbnail(thumbnailKey) }
+  }, [api, userId, attachment.id, attachment.deleted, removed, image, visible, revision, thumbnailKey])
   useEffect(() => {
     if (!api || !requested || attachment.deleted || removed) return
     const controller = new AbortController(); let objectURL = ''
     setError('')
-    void attachmentRequest(controller.signal, () => api.community.content(tokenRef.current, attachment.id, controller.signal)).then((blob) => {
+    void attachmentRequest(controller.signal, () => retryBusy(controller.signal, () => api.community.content(tokenRef.current, attachment.id, controller.signal))).then((blob) => {
       if (!controller.signal.aborted) { objectURL = URL.createObjectURL(safeObjectBlob(blob, attachment.mime_type)); setURL(objectURL) }
     }).catch((caught: unknown) => {
       if (!controller.signal.aborted) {

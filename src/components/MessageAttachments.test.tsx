@@ -2,10 +2,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { MessageAttachments } from './MessageAttachments'
+import { clearThumbnails } from '../lib/thumbnailCache'
+import { ApiError } from '../services/api'
 
-const context = vi.hoisted(() => ({ token: 'session', api: { community: { content: vi.fn(), thumbnail: vi.fn(), attachmentStatus: vi.fn() } } }))
+const context = vi.hoisted(() => ({ token: 'session', userId: 1, api: { storageScope: 'fixture', community: { content: vi.fn(), thumbnail: vi.fn(), attachmentStatus: vi.fn() } } }))
 vi.mock('./Community', () => ({ useCommunity: () => context }))
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); context.api.community.content.mockReset(); context.api.community.thumbnail.mockReset(); context.api.community.attachmentStatus.mockReset() })
+afterEach(() => { cleanup(); clearThumbnails(); vi.restoreAllMocks(); vi.unstubAllGlobals(); context.api.community.content.mockReset(); context.api.community.thumbnail.mockReset(); context.api.community.attachmentStatus.mockReset() })
 it('downloads SVG as an inert file without rendering an image', async () => {
   const create = vi.fn(() => 'blob:safe')
   vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: vi.fn() })
@@ -40,4 +42,22 @@ it('loads only an intersecting thumbnail and ignores other-scope changes', async
   expect(context.api.community.content).not.toHaveBeenCalled()
   window.dispatchEvent(new CustomEvent('voxhold:attachments', { detail: { channel_id: 2, attachment_ids: ['image'] } }))
   await screen.findByText(/Вложение удалено сервером/)
+})
+
+it('reuses thumbnails across virtualized remounts', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:cached'), revokeObjectURL: vi.fn() })
+  context.api.community.thumbnail.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
+  const props = { attachments: [{ id: 'cached', filename: 'cached.jpg', mime_type: 'image/jpeg', size_bytes: 10, deleted: false }] }
+  const first = render(<MessageAttachments {...props}/>); await screen.findByAltText('cached.jpg'); first.unmount()
+  render(<MessageAttachments {...props}/>); await screen.findByAltText('cached.jpg')
+  expect(context.api.community.thumbnail).toHaveBeenCalledOnce()
+})
+it('retries a busy preview automatically', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:retried'), revokeObjectURL: vi.fn() })
+  vi.spyOn(Math, 'random').mockReturnValue(0)
+  context.api.community.thumbnail.mockRejectedValueOnce(new ApiError('busy', 429, 0)).mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
+  render(<MessageAttachments attachments={[{ id: 'busy', filename: 'busy.jpg', mime_type: 'image/jpeg', size_bytes: 10, deleted: false }]}/> )
+  await screen.findByAltText('busy.jpg'); expect(context.api.community.thumbnail).toHaveBeenCalledTimes(2)
 })

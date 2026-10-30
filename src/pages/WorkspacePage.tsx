@@ -47,6 +47,7 @@ import { pickDefaultChannel } from '../lib/channels'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { mergeServerMember } from '../lib/serverMembers'
 import { downloadBlob } from '../lib/downloadBlob'
+import { clearThumbnails } from '../lib/thumbnailCache'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
@@ -93,6 +94,7 @@ function upsertPinnedMessage(current: PinnedMessage[], value: PinnedMessage) {
 }
 
 export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
+  useEffect(() => () => clearThumbnails(), [])
   const { user, token, logout, expire } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const notify = useToast()
