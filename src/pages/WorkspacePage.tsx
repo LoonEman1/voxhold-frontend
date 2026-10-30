@@ -42,6 +42,7 @@ import { useChannelHistory } from '../hooks/useChannelHistory'
 import { createMediaActivity, MediaActivityProvider, useSpeakingUsers } from '../components/MediaActivity'
 import { useWorkspaceLayout } from '../hooks/useWorkspaceLayout'
 import { newerMessage, resolveReplyReferences, withReactions } from '../lib/messageRevisions'
+import { pickDefaultChannel } from '../lib/channels'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { mergeServerMember } from '../lib/serverMembers'
 import { humanError } from '../lib/format'
@@ -710,7 +711,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       counterRefreshRef.current(serverId)
       setEditingChannel((current) => current ? next.find((channel) => channel.id === current.id) ?? null : null)
       if (activeChannelRef.current && !allowed.has(activeChannelRef.current)) { setMessagePanel(null); setMessageTarget(null); setFocusedMessageId(null); setPinnedMessages([]) }
-      setSelectedChannelId((current) => current && allowed.has(current) ? current : next.find((channel) => channel.kind !== 'voice')?.id ?? next[0]?.id ?? null)
+      setSelectedChannelId((current) => current && allowed.has(current) ? current : pickDefaultChannel(next)?.id ?? null)
       setChannelReads((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !removed.has(Number(id)))))
       recordingSyncRef.current()
     }).catch((error: unknown) => handleError(error, 'Не удалось обновить доступ к каналам'))
@@ -766,7 +767,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         const currentChannelId = activeChannelRef.current
         const nextChannelId = nextChannels.some((item) => item.id === currentChannelId)
           ? currentChannelId
-          : (nextChannels.find((item) => item.kind !== 'voice')?.id ?? nextChannels[0]?.id ?? null)
+          : (pickDefaultChannel(nextChannels)?.id ?? null)
         if (nextChannelId !== currentChannelId) {
           setPinnedMessages([])
         }
@@ -1001,8 +1002,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           return next
         })
         if (activeChannelRef.current === event.channel_id) {
-          const nextChannel = remaining.find((channel) => channel.kind !== 'voice') ?? remaining[0] ?? null
-          setPinnedMessages([]); setFocusedMessageId(null); setSelectedChannelId(nextChannel?.id ?? null)
+          const nextChannel = pickDefaultChannel(remaining)
+          setPinnedMessages([]); setFocusedMessageId(null); setMessageTarget(null); setSelectedChannelId(nextChannel?.id ?? null)
         }
       },
       onReadSnapshot: (snapshot) => snapshot.reads.forEach(applyChannelRead),
@@ -2077,8 +2078,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     channelsRef.current = remaining
     setChannels(remaining)
     if (activeChannelRef.current === channel.id) {
-      const nextChannel = remaining[0] ?? null
-      setPinnedMessages([]); setSelectedChannelId(nextChannel?.id ?? null)
+      const nextChannel = pickDefaultChannel(remaining)
+      setPinnedMessages([]); setFocusedMessageId(null); setMessageTarget(null); setSelectedChannelId(nextChannel?.id ?? null)
     }
     notify('Канал удалён', 'success')
   }
