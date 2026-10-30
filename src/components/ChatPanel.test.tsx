@@ -2,7 +2,8 @@
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from './ChatPanel'
-import type { Channel, Message } from '../domain/types'
+import * as mentions from '../lib/mentions'
+import type { Channel, Message, ReactorPage } from '../domain/types'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -26,7 +27,9 @@ describe('long chat histories', () => {
     const rows = container.querySelectorAll('[data-message-id]')
     expect(rows.length).toBeGreaterThan(0)
     expect(rows.length).toBeLessThan(80)
+    const parse = vi.spyOn(mentions, 'parseMentions')
     fireEvent.change(screen.getByLabelText('Сообщение в general'), { target: { value: 'Hello' } })
+    expect(parse).not.toHaveBeenCalled()
     expect((screen.getByLabelText('Сообщение в general') as HTMLTextAreaElement).value).toBe('Hello')
     expect(container.querySelectorAll('[data-message-id]').length).toBeLessThan(80)
   })
@@ -52,4 +55,31 @@ it('preserves stable role mentions when retrying a rejected send', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
   expect(onSend.mock.calls.map(([content]) => content)).toEqual(['<@&admin>', '<@&admin>'])
+})
+
+it('replaces the reactor loader scope through memoized message rows', async () => {
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(60)
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
+  const first = vi.fn<(messageId: number, emoji: string, signal: AbortSignal) => Promise<ReactorPage>>(async () => ({ users: [{ user_id: 10, username: 'FirstScope' }], has_more: false, next_user_id: null }))
+  const second = vi.fn(async () => ({ users: [{ user_id: 20, username: 'SecondScope' }], has_more: false, next_user_id: null }))
+  const props = {
+    channel: { id: 1, server_id: 1, name: 'general', kind: 'text' as const, position: 0, created_by: 1, created_at: 0 },
+    messages: [{ id: 1, channel_id: 1, content: 'Hello', author: { user_id: 1, username: 'Alice' }, created_at: 0, edited_at: null, reactions: [{ emoji: '👍', count: 1, me: false }] }],
+    loading: false, loadingOlder: false, hasMore: false, loadingNewer: false, hasNewer: false,
+    currentUserId: 2, canManage: false, members: [], pinnedMessageIds: new Set<number>(), focusedMessageId: null, channelReads: {},
+    onLoadOlder: vi.fn(async () => undefined), onLoadNewer: vi.fn(async () => undefined), onReturnToLatest: vi.fn(async () => undefined),
+    onReadThrough: vi.fn(), onSend: vi.fn(async () => undefined), onEdit: vi.fn(async () => undefined), onDelete: vi.fn(async () => undefined),
+    onTogglePin: vi.fn(async () => undefined), onOpenProfile: vi.fn(),
+  }
+  const { container, rerender } = render(<ChatPanel {...props} onLoadReactors={first} />)
+  fireEvent.focus(container.querySelector('.message-reaction')!)
+  await screen.findByText('FirstScope')
+  const oldSignal = first.mock.calls[0]?.[2] as AbortSignal | undefined
+  rerender(<ChatPanel {...props} onLoadReactors={second} />)
+  await screen.findByText('SecondScope')
+  expect(screen.queryByText('FirstScope')).toBeNull()
+  expect(second).toHaveBeenCalledOnce()
+  expect(oldSignal?.aborted).toBe(true)
 })
