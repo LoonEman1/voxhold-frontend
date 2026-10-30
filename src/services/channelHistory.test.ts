@@ -322,3 +322,29 @@ describe('reply navigation', () => {
     expect(store.snapshot(2).messages.map((m) => m.id)).toEqual([30])
   })
 })
+
+
+it('batches burst notifications while keeping snapshots immediately current', () => {
+  vi.useFakeTimers()
+  try {
+    const { store } = setup()
+    const listener = vi.fn()
+    store.subscribe(1, 2, listener)
+    for (let id = 1; id <= 100; id++) store.receive(message(id))
+    expect(store.snapshot(2).messages.at(-1)?.id).toBe(100)
+    expect(listener).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(8)
+    expect(listener).toHaveBeenCalledTimes(1)
+    store.receive(message(101)); store.close()
+    vi.advanceTimersByTime(8)
+    expect(listener).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})
+
+it('reconciles a previously unseen quote target instead of taking the append shortcut', () => {
+  const { store } = setup()
+  store.entry(1, 2)
+  store.receive({ ...message(10), reply: { message_id: 20, author: { user_id: 1, username: 'old' }, content: 'old', revision: 1, deleted: false } })
+  store.receive({ ...message(20, 2, 2), content: 'updated quote target' })
+  expect(store.snapshot(2).messages[0]?.reply?.content).toBe('updated quote target')
+})
