@@ -11,9 +11,12 @@ const STORAGE_KEY = 'voxhold.theme.v1'
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 function initialTheme(): Theme {
-  const saved = localStorage.getItem(STORAGE_KEY)
+  const initialized = document.documentElement.dataset.theme
+  if (initialized === 'dark' || initialized === 'light') return initialized
+  let saved: string | null = null
+  try { saved = localStorage.getItem(STORAGE_KEY) } catch { /* Use the system preference. */ }
   if (saved === 'dark' || saved === 'light') return saved
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -22,7 +25,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
-    localStorage.setItem(STORAGE_KEY, theme)
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#f3f2ed' : '#10100f')
+    try { localStorage.setItem(STORAGE_KEY, theme) } catch { /* Theme changes still work in memory. */ }
   }, [theme])
 
   const value = useMemo(() => ({
