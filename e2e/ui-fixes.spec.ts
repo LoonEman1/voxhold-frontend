@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openCallWorkspace(page: Page, options: { withPeers?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -15,8 +15,12 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
   })
   const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
   const participants = options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
-  let emit = (_type: string, _data: unknown) => {}
+  let emit = (_type: string, _data: unknown) => {}, revoke = () => {}
+  let connections = 0, joins = 0
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
+    connections++
+    if (options.reconnectIDs) participant.connection_id = `fixture-voice-${connections}`
+    revoke = () => socket.close({ code: 1008, reason: 'session expired or revoked' })
     emit = (type, data) => socket.send(JSON.stringify({ type, data }))
     socket.onMessage((raw) => {
       const event = JSON.parse(String(raw))
@@ -25,7 +29,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
         socket.send(JSON.stringify({ type: 'presence.snapshot', data: { servers: [{ server_id: 1, online_user_ids: participants.map((item) => item.user_id) }] } }))
         socket.send(JSON.stringify({ type: 'voice.snapshot', data: { participants } }))
       }
-      if (event.type === 'voice.join') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } }))
+      if (event.type === 'voice.join') { joins++; socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } })) }
       if (event.type === 'voice.state_update') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.state_updated', data: { ...participant, ...event.data } }))
       if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
     })
@@ -74,7 +78,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rol
   })
   await page.goto('/')
   await expect(page.locator('.voice-participant')).toHaveCount(participants.length)
-  return { emit }
+  return { emit, revoke: () => revoke(), counts: () => ({ connections, joins }) }
 }
 
 for (const role of ['owner', 'admin'] as const) {
@@ -960,4 +964,46 @@ test('channel list updates preserve an open search query', async ({ page }) => {
   await expect(input).toHaveValue('keep this query')
   await expect(page.locator('.panel-loading')).toHaveCount(0)
   expect(errors).toEqual([])
+})
+
+test('cross-tab rotation preserves voice and unmount does not start recovery', async ({ page, context }) => {
+  await page.route('**/src/services/mediaRecovery.ts*', async (route) => {
+    const response = await route.fetch(), source = await response.text(), marker = /begin\(intent\)\s*\{/
+    expect(source).toMatch(marker)
+    await route.fulfill({ response, body: source.replace(marker, (match) => `${match}\n globalThis.rotationRecoveries = (globalThis.rotationRecoveries ?? 0) + 1;`) })
+  })
+  let rotations = 0, release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await context.route('**/api/v1/auth/refresh', async (route) => { rotations++; await gate; await route.fulfill({ json: { token: 'rotated', expires_at: Math.floor(Date.now() / 1000) + 3600 } }) })
+  await context.route('**/api/v1/diagnostics/client-events', (route) => route.fulfill({ status: 204 }))
+  const fixture = await openCallWorkspace(page, { reconnectIDs: true })
+  await page.getByRole('button', { name: 'Подключиться к каналу', exact: true }).click()
+  await expect(page.locator('.voice-dock')).toBeVisible()
+  await expect(page.locator('.channel-voice-users .is-me')).toHaveCount(1)
+  expect(await page.evaluate(() => (window as unknown as { rotationRecoveries?: number }).rotationRecoveries ?? 0)).toBe(0)
+  const baseline = fixture.counts()
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('voxhold.session.v1')!)
+    saved.session.expires_at = Math.floor(Date.now() / 1000) + 60
+    localStorage.setItem('voxhold.session.v1', JSON.stringify(saved))
+  })
+  const second = await context.newPage()
+  try {
+    await second.goto('/e2e/fixtures/auth-race.html')
+    await expect.poll(() => rotations).toBe(1)
+    fixture.revoke()
+    const recoveries = () => page.evaluate(() => (window as unknown as { rotationRecoveries?: number }).rotationRecoveries ?? 0)
+    await expect.poll(recoveries).toBe(1)
+    await expect(page.locator('.workspace')).toBeVisible()
+    release()
+    await expect(second.getByText('rotated', { exact: true })).toBeVisible()
+    await expect.poll(() => fixture.counts().joins).toBe(baseline.joins + 1)
+    await expect.poll(() => fixture.counts().connections).toBe(baseline.connections + 1)
+    expect(await recoveries()).toBe(1)
+    await expect(page.locator('.voice-dock')).toBeVisible()
+    await page.locator('.user-dock').getByRole('button', { name: 'Выйти', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Выйти из аккаунта?' }).getByRole('button', { name: 'Выйти', exact: true }).click()
+    await expect(page.locator('.workspace')).toHaveCount(0)
+    expect(await recoveries()).toBe(1)
+  } finally { release(); await second.close() }
 })
