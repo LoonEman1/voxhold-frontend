@@ -77,7 +77,7 @@ async function respond(request: TransportRequest): Promise<unknown> {
   }
   throw new Error(`Fixture route missing: ${request.path}`)
 }
-const api = createApi({ request: async <T,>(request: TransportRequest) => ({ status: 200, data: await respond(request) as T }) })
+const api = createApi({ request: async <T,>(request: TransportRequest) => ({ status: 200, data: structuredClone(await respond(request)) as T }) })
 const storage: SessionStorageAdapter = { read: <T,>() => ({ user: { id: 1, username: 'Alice', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }) as T, write: () => {}, remove: () => {} }
 Object.assign(window, { reliabilityFixture: {
   requests,

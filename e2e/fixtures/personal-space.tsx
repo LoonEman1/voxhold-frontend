@@ -19,7 +19,7 @@ const api = createApi({ request: async <T,>({ path, method, body }: { path: stri
   let data: unknown = { ok: true }
   if (path.endsWith('/me/inbox')) data = { items: [{ message_id: 11, channel_id: 1, server_id: 1, server_name: 'FirstInstance', channel_name: 'общий', author: 'Миша', content: 'Александр, посмотри новый план на выходные', created_at: now, reason: 'mention' }], has_more: false }
   else if (path.endsWith('/message-privacy')) { if (method === 'PUT') privacy = { ...privacy, ...body as Privacy }; data = privacy }
-  else if (path.endsWith('/me/conversations')) {
+  else if (path.split('?')[0]!.endsWith('/me/conversations')) {
     if (method === 'POST') { const input = body as { user_ids: number[]; name: string }; const existing = input.user_ids.length === 1 && conversations.find((v) => v.direct && v.members.some((m) => m.user_id === input.user_ids[0])); if (existing) data = existing; else { const value = { id: conversations.length + 10, name: input.name ?? '', direct: input.user_ids.length === 1, unread_count: 0, members: members.filter((m) => m.user_id === 1 || input.user_ids.includes(m.user_id)) }; conversations.push(value); data = value } }
     else data = conversations
   } else if (/\/conversations\/\d+\/messages$/.test(path)) {
