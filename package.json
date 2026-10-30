@@ -1,7 +1,7 @@
 {
   "name": "voxhold-frontend",
   "private": true,
-  "version": "2.4.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "prepare:flags": "node scripts/prepare-flags.mjs",
@@ -16,7 +16,8 @@
     "test:e2e:performance": "playwright test --config playwright.performance.config.ts",
     "test:e2e:features": "playwright test --config playwright.features.config.ts",
     "test:e2e:community": "playwright test --config playwright.community.config.ts",
-    "test:e2e:ui": "playwright test --config playwright.ui.config.ts"
+    "test:e2e:ui": "playwright test --config playwright.ui.config.ts",
+    "bench:optimization": "playwright test --config playwright.optimization.config.ts"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.22",

@@ -1,3 +1,21 @@
+# Voxhold Frontend 2.5.0
+
+Минорный релиз от 30 октября 2026 года. Совместный выпуск с backend 2.5.0;
+новых миграций нет, актуальная схема — 000031.
+
+- Ввод текста изолирован от истории, строки сообщений мемоизированы. Набор
+  сообщения больше не перерисовывает видимые сообщения и их read receipts.
+- Новые сообщения дописываются без полной пересборки истории в обычном случае;
+  обновления интерфейса при входящем потоке объединяются в короткие пачки.
+- Редактирования, удаления, цитаты и снимки реакций сохраняют прежний порядок
+  применения. Смена канала/аккаунта отменяет старые запросы списка реакций.
+- Добавлены воспроизводимые браузерные замеры набора текста и истории.
+
+The composer is isolated from history rendering; memoized message rows preserve
+stable interactions and reactor cache scopes. Ordered append and short notification
+batches reduce work for incoming bursts without delaying the store snapshot.
+No API or database migration is required beyond the existing 000031 schema.
+
 # Voxhold Frontend 2.4.0
 
 Минорный релиз от 29 октября 2026 года. Требуется backend 2.4.0 и миграция 000031.
