@@ -8,10 +8,10 @@ import { Avatar } from '../components/Avatar'
 import { MembersSidebar } from '../components/MembersSidebar'
 import { Brand } from '../components/Brand'
 import { ChatPanel } from '../components/ChatPanel'
-import { VoiceSettingsDialog } from '../components/VoiceSettingsDialog'
+import { VoiceSettingsDialog } from '../components/LazyWorkspaceDialogs'
 import { WorkspaceDialogBoundary } from '../components/WorkspaceDialogBoundary'
 import { WorkspaceContentBoundary } from '../components/WorkspaceContentBoundary'
-import { MemberCard } from '../components/MemberCard'
+import { MemberCard } from '../components/LazyWorkspaceDialogs'
 import { CommunityProvider, CommunityNavigation, CommunitySidebar, CommunityContent, openCommunityChannels } from '../components/Community'
 import { NewsComments } from '../components/NewsComments'
 import { NewsChannelSettings } from '../components/NewsChannelSettings'
@@ -19,12 +19,14 @@ import { ContextMenu, type ContextMenuItem, type ContextMenuState } from '../com
 import { Icon } from '../components/Icon'
 import { ModalLoading } from '../components/ModalLoading'
 import type { ReactorLoader } from '../components/MessageReactions'
-import { MessageSearchPanel, PinnedMessagesPanel } from '../components/MessagePanels'
+import { MessageSearchPanel, PinnedMessagesPanel } from '../components/LazyWorkspaceDialogs'
 import { MessageNotificationCenter } from '../services/messageNotifications'
 import { MessageNotifications } from '../components/MessageNotifications'
-import { PersistentStreamPlayer } from '../components/PersistentStreamPlayer'
+import type { PersistentStreamPlayer as StreamPlayer } from '../components/PersistentStreamPlayer'
+import type { ComponentProps } from 'react'
 import { useToast } from '../components/Toast'
-import { VoicePanel, type VoiceConnectionStatus } from '../components/VoicePanel'
+import type { VoiceConnectionStatus } from '../components/VoicePanel'
+import { VoicePanel } from '../components/LazyWorkspaceDialogs'
 import {
   ChannelSettingsDialog,
   ConfirmDialog,
@@ -34,7 +36,7 @@ import {
   MemberProfileDialog,
   ProfileDialog,
   ServerSettingsDialog,
-} from '../components/WorkspaceDialogs'
+} from '../components/LazyWorkspaceDialogs'
 import type { Message, MessageReply, MessageNotification, NotificationSettings, ActiveStream, Channel, ChannelKind, ChannelRead, InstanceMetadata, PinnedMessage, Profile, RecordingStorage, Server, ServerMember, ServerRole, StreamDynamicRange, StreamRendition, VoiceParticipant } from '../domain/types'
 import { useChannelHistory } from '../hooks/useChannelHistory'
 import { createMediaActivity, MediaActivityProvider, useSpeakingUsers } from '../components/MediaActivity'
@@ -45,10 +47,10 @@ import { mergeServerMember } from '../lib/serverMembers'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
-import { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, capturedAudioIncludesOwnPlayback, captureScreen, selectedStreamCodec, streamErrorMessage, supportedStreamCodecs, type StreamQualityStats } from '../services/stream'
-import { StreamAudioGain } from '../services/streamAudioGain'
-import { capturedHDRProbe, detectHDRCapabilities, streamWatchCapabilities } from '../services/hdrCapabilities'
-import { createHDRPublishPipeline, createSDRPublishPipeline, type StreamPublishPipeline } from '../services/hdrPipeline'
+import type { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, StreamQualityStats } from '../services/stream'
+import { streamErrorMessage } from '../services/streamErrors'
+import type { StreamAudioGain } from '../services/streamAudioGain'
+import type { StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
 import { BrowserVoiceInput } from '../services/voiceInput'
@@ -59,6 +61,8 @@ import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUs
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { useTheme } from '../theme/ThemeContext'
 
+const LazyStreamPlayer = lazy(() => import('../components/PersistentStreamPlayer').then((module) => ({ default: module.PersistentStreamPlayer })))
+function PersistentStreamPlayer(props: ComponentProps<typeof StreamPlayer>) { return <Suspense fallback={null}><LazyStreamPlayer {...props}/></Suspense> }
 const ForwardMessageDialog = lazy(() => import('../components/ForwardMessageDialog').then((module) => ({ default: module.ForwardMessageDialog })))
 const ChannelNotificationsDialog = lazy(() => import('../components/ChannelNotificationsDialog').then((module) => ({ default: module.ChannelNotificationsDialog })))
 const ChannelAccessSettings = lazy(() => import('../components/ChannelAccessSettings').then((module) => ({ default: module.ChannelAccessSettings })))
@@ -1391,6 +1395,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamStatus('requesting')
     try {
       const preferences = streamPreferencesRef.current
+      const [{ BrowserServerStreamSession, BrowserP2PStreamPublisher, selectedStreamCodec, captureScreen, capturedAudioIncludesOwnPlayback }, { capturedHDRProbe }, { createHDRPublishPipeline, createSDRPublishPipeline }, { StreamAudioGain }] = await Promise.all([
+        import('../services/stream'), import('../services/hdrCapabilities'), import('../services/hdrPipeline'), import('../services/streamAudioGain'),
+      ])
+      if (voiceSessionRef.current?.channelId !== channel.id || streamRoleRef.current) return
       const codec = selectedStreamCodec(preferences, 'send')
       const iceConfiguration = await ensureWebRTCConfig()
       // Reuse a capture kept alive during the signalling-loss grace period:
@@ -1582,6 +1590,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     const streamServerId = activeVoice.serverId
     const activeStream = streamsRef.current[channel.id]
     if (!activeStream || streamRoleRef.current) return
+    let runtime: typeof import('../services/stream')
+    let hdr: typeof import('../services/hdrCapabilities')
+    try { [runtime, hdr] = await Promise.all([import('../services/stream'), import('../services/hdrCapabilities')]) }
+    catch (error) { failStream(error); return }
+    if (voiceSessionRef.current?.channelId !== channel.id || streamRoleRef.current) return
+    const { BrowserServerStreamSession, BrowserP2PStreamViewer, supportedStreamCodecs } = runtime
+    const { detectHDRCapabilities, streamWatchCapabilities } = hdr
     if (!supportedStreamCodecs('receive').includes(activeStream.codec)) {
       setStreamError(`Кодек ${activeStream.codec.toUpperCase()} не поддерживается этим браузером`)
       return

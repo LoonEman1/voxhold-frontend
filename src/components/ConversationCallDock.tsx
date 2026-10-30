@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VoxholdApi } from '../services/api'
 import type { CallState, CallSignal } from '../domain/community'
-import { ConversationCall } from '../services/conversationCall'
+import type { ConversationCall } from '../services/conversationCall'
 import { loadVoicePreferences } from '../services/voiceSettings'
 
 function RemoteMedia({ stream, name, deaf }: { stream: MediaStream; name: string; deaf: boolean }) {
@@ -13,17 +13,24 @@ function RemoteMedia({ stream, name, deaf }: { stream: MediaStream; name: string
 }
 export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; token: string; userId: number }) {
   const call = useRef<ConversationCall | null>(null), [state, setState] = useState<CallState | null>(null), [media, setMedia] = useState<Record<number, MediaStream>>({}), [error, setError] = useState(''), [pending, setPending] = useState(false), [muted, setMuted] = useState(false), [deaf, setDeaf] = useState(false), [sharing, setSharing] = useState(false)
+  const startGeneration = useRef(0), opening = useRef(false)
   const tokenRef = useRef(token)
   useEffect(() => { tokenRef.current = token }, [token])
-  const leave = useCallback(() => { call.current?.close(); call.current = null; setState(null); setMedia({}); setPending(false); setSharing(false); setMuted(false); setDeaf(false) }, [])
+  const leave = useCallback(() => { startGeneration.current++; opening.current = false; call.current?.close(); call.current = null; setState(null); setMedia({}); setPending(false); setSharing(false); setMuted(false); setDeaf(false) }, [])
   useEffect(() => {
     let alive = true
     const start = async (event: Event) => {
-      const cid = (event as CustomEvent<number>).detail; if (!Number.isSafeInteger(cid)) return; if(call.current){setError('Сначала завершите текущий звонок');return}
+      const cid = (event as CustomEvent<number>).detail; if (!Number.isSafeInteger(cid)) return; if(call.current || opening.current){setError('Сначала завершите текущий звонок');return}
+      opening.current = true
+      const generation = ++startGeneration.current
       window.dispatchEvent(new Event('voxhold:direct-call-starting'))
       setError(''); setPending(true); setState({ conversation_id: cid, revision:0, members: [] })
-      const instance = new ConversationCall(api, () => tokenRef.current, cid, userId, { state: (v) => { if (alive) setState(v) }, media: (id, stream) => { if (alive) setMedia((v) => ({ ...v, [id]: new MediaStream(stream.getTracks()) })) }, removed: (id) => { if (alive) setMedia((v) => Object.fromEntries(Object.entries(v).filter(([key]) => Number(key) !== id))) }, error: (value) => { if (alive) setError(value) }, screen: (v) => { if (alive) setSharing(v) }, ended: () => { if (alive) leave() } })
-      call.current = instance
+      let runtime: typeof import('../services/conversationCall')
+      try { runtime = await import('../services/conversationCall') }
+      catch (caught) { if (alive && startGeneration.current === generation) { leave(); setError(caught instanceof Error ? caught.message : 'Не удалось загрузить звонок') }; return }
+      if (!alive || startGeneration.current !== generation) return
+      const instance = new runtime.ConversationCall(api, () => tokenRef.current, cid, userId, { state: (v) => { if (alive) setState(v) }, media: (id, stream) => { if (alive) setMedia((v) => ({ ...v, [id]: new MediaStream(stream.getTracks()) })) }, removed: (id) => { if (alive) setMedia((v) => Object.fromEntries(Object.entries(v).filter(([key]) => Number(key) !== id))) }, error: (value) => { if (alive) setError(value) }, screen: (v) => { if (alive) setSharing(v) }, ended: () => { if (alive) leave() } })
+      call.current = instance; opening.current = false
       try { await instance.start(); if (alive && call.current === instance) setPending(false) }
       catch (e) { if (alive && call.current === instance) { leave(); setError(e instanceof Error ? e.message : 'Не удалось начать звонок') } }
     }
