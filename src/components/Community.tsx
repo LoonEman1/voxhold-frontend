@@ -284,7 +284,7 @@ function DirectChat({ api, token, id, saved = false, currentUserId, revision, on
             {!grouped && <MessageAvatar userId={m.author.user_id} name={m.author.username} onOpen={openProfile}/>}
             <div className="message__body">
               {!grouped && <MessageHeader name={m.author.username} createdAt={m.created_at} mine={mine} onOpen={openProfile}/>}
-              {m.forward && <ForwardAttribution message={asMessage(m)}/>}<p>{m.content}</p><MessageAttachments attachments={m.attachments}/>{m.poll && <PollCard initial={m.poll} api={api} token={token}/>}
+              {m.forward && <ForwardAttribution message={asMessage(m)}/>}<p>{m.content}</p><MessageAttachments conversationId={id} attachments={m.attachments}/>{m.poll && <PollCard initial={m.poll} api={api} token={token}/>}
               <MessageReactions message={asMessage(m)} currentUserId={currentUserId} onReact={(emoji)=>void react(m,emoji)} loadReactors={(mid,emoji,signal,after)=>api.community.request(token,`/conversations/${id}/messages/${mid}/reactions/${encodeURIComponent(emoji)}?after=${after??0}`,'GET',undefined,signal)}/>
               {saved && <SavedNote key={`${m.id}:${m.note}`} value={m.note??''} onSave={async(note)=>{await api.community.request(token,`/conversations/${id}/messages/${m.id}/note`,'PATCH',{note});setMessages((v)=>v.map((value)=>value.id===m.id?{...value,note}:value));onRefresh()}}/>}
             </div>

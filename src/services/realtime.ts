@@ -324,7 +324,7 @@ export class RealtimeClient {
           window.dispatchEvent(new CustomEvent('voxhold:feature-event', { detail: { type: payload.type, data: payload.data } }))
           if (payload.type !== 'conversation.call-signal') window.dispatchEvent(new Event('voxhold:community'))
         } else if (payload.type === 'attachments.changed') {
-          window.dispatchEvent(new Event('voxhold:attachments'))
+          window.dispatchEvent(new CustomEvent('voxhold:attachments', { detail: payload.data }))
         } else if (payload.type === 'notification.message' && payload.data) {
           this.options.onNotification?.(payload.data as MessageNotification)
           window.dispatchEvent(new Event('voxhold:community'))
