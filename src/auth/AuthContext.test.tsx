@@ -66,3 +66,38 @@ it('schedules long sessions without overflowing browser timers',async()=>{
   await act(async()=>m.pending.resolve(session('new')))
   expect(auth.token).toBe('new')
 })
+
+it('waits for an in-flight rotation before accepting an old-token 401', async () => {
+  const m = mount()
+  act(() => notifyUnauthorized('old'))
+  expect(auth.token).toBe('old')
+  await act(async () => m.pending.resolve(session('new')))
+  expect(auth.token).toBe('new')
+  expect(m.stored()?.session.token).toBe('new')
+})
+it('waits for a rotation in another tab before expiring', async () => {
+  let stored: AuthPayload | null = { user, session: session('old') }
+  const lock = deferred<void>()
+  const storage = {
+    read: <T,>() => stored as T | null,
+    write: (_key: string, value: unknown) => { stored = value as AuthPayload },
+    remove: () => { stored = null },
+    withLock: async <T,>(_key: string, action: () => Promise<T>) => { await lock.promise; return action() },
+  }
+  render(<AuthProvider api={{ auth: {} } as VoxholdApi} storage={storage}><Probe/></AuthProvider>)
+  act(() => notifyUnauthorized('old'))
+  expect(auth.token).toBe('old')
+  stored = { user, session: session('other-tab') }
+  await act(async () => lock.resolve())
+  expect(auth.token).toBe('other-tab')
+})
+it('retains a valid session and retries transient refresh failures', async () => {
+  vi.useFakeTimers()
+  const m = mount()
+  const { ApiError } = await import('../services/api')
+  m.refresh.mockImplementationOnce(async () => session('recovered'))
+  await act(async () => m.pending.reject(new ApiError('temporarily unavailable', 503)))
+  expect(auth.token).toBe('old')
+  await act(async () => vi.advanceTimersByTimeAsync(1_000))
+  expect(auth.token).toBe('recovered')
+})

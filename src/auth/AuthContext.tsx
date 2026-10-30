@@ -10,7 +10,7 @@ import {
 } from 'react'
 import type { AuthPayload, User } from '../domain/types'
 import type { SessionStorageAdapter } from '../platform/transport'
-import type { VoxholdApi } from '../services/api'
+import { ApiError, type VoxholdApi } from '../services/api'
 import { onUnauthorized } from '../services/authEvents'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 
@@ -64,7 +64,7 @@ export function AuthProvider({
   const persist = useCallback((next: PersistedAuth | null) => apply(next, true), [apply])
   useEffect(() => storage.subscribe?.(STORAGE_KEY, () => apply(storage.read<PersistedAuth>(STORAGE_KEY), false)), [storage, apply])
 
-  const expire = useCallback((expectedToken?: string) => {
+  const expireNow = useCallback((expectedToken?: string) => {
     if (expectedToken && authRef.current?.session.token !== expectedToken) return
     // Another tab may already have rotated this request's token before its
     // storage notification reaches us. Adopt that generation instead.
@@ -73,14 +73,26 @@ export function AuthProvider({
     else persist(null)
   }, [storage, apply, persist])
 
+  const expire = useCallback((expectedToken?: string) => {
+    if (!expectedToken) { expireNow(); return }
+    if (authRef.current?.session.token !== expectedToken) return
+    // Rotation revokes the old token before its response has been persisted.
+    const settle = () => { if (mounted.current) expireNow(expectedToken) }
+    const flight = refreshFlight.current
+    if (flight?.token === expectedToken) { void flight.promise.then(settle, settle); return }
+    if (storage.withLock) { void storage.withLock(STORAGE_KEY, async () => settle()).catch(settle); return }
+    settle()
+  }, [storage, expireNow])
+
   useEffect(() => onUnauthorized((token) => expire(token)), [expire])
 
   // One scheduler owns startup and renewal. StrictMode may replay this effect;
   // reuse the in-flight rotation and apply it only to its original generation.
   useEffect(() => {
     if (!auth) { setReady(true); return }
-    if (auth.session.expires_at * 1000 <= Date.now()) { expire(auth.session.token); setReady(true); return }
+    if (auth.session.expires_at * 1000 <= Date.now()) { expireNow(auth.session.token); setReady(true); return }
     let timer = 0
+    let retryDelay = 1_000
     const schedule = () => {
       const remaining = (auth.session.expires_at - REFRESH_MARGIN_SECONDS) * 1000 - Date.now()
       if (remaining > 0) {
@@ -99,8 +111,13 @@ export function AuthProvider({
         const session = await api.auth.refresh(token)
         if (current()) persist({ ...auth, session })
       }
-      const promise = (storage.withLock ? storage.withLock(STORAGE_KEY, rotate) : rotate()).catch(() => {
-        if (current()) expire(token)
+      const promise = (storage.withLock ? storage.withLock(STORAGE_KEY, rotate) : rotate()).catch((error: unknown) => {
+        if (!current()) return
+        const transient = error instanceof ApiError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500)
+        const remaining = auth.session.expires_at * 1000 - Date.now()
+        if (!transient || remaining <= 0) { expireNow(token); return }
+        timer = window.setTimeout(schedule, Math.min(retryDelay, remaining))
+        retryDelay = Math.min(retryDelay * 2, 30_000)
       }).finally(() => {
         if (refreshFlight.current?.promise === promise) refreshFlight.current = null
         if (mounted.current) setReady(true)
@@ -109,7 +126,7 @@ export function AuthProvider({
     }
     schedule()
     return () => window.clearTimeout(timer)
-  }, [api, auth, expire, persist, storage, apply])
+  }, [api, auth, expireNow, persist, storage, apply])
 
   const login = useCallback(
     async (username: string, password: string) => {
