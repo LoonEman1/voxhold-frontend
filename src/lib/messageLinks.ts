@@ -17,7 +17,7 @@ export function messageLinks(content: string): MessageLink[] {
     }
     try {
       const parsed = new URL(href)
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) continue
       links.push({ start, end: start + href.length, href, label: href.length > 80 ? `${href.slice(0, 77)}…` : href })
     } catch { /* Invalid URL remains ordinary text. */ }
   }
