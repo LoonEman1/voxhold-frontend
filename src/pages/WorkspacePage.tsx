@@ -45,6 +45,7 @@ import { newerMessage, resolveReplyReferences, withReactions } from '../lib/mess
 import { pickDefaultChannel } from '../lib/channels'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { mergeServerMember } from '../lib/serverMembers'
+import { downloadBlob } from '../lib/downloadBlob'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
@@ -2052,14 +2053,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     await clientDiagnostics.flush()
     const payload = await api.diagnostics.list(token)
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const href = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = href
-    anchor.download = `voxhold-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
-    document.body.append(anchor)
-    anchor.click()
-    anchor.remove()
-    URL.revokeObjectURL(href)
+    downloadBlob(blob, `voxhold-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
     notify(`Диагностика выгружена: ${payload.events.length} событий`, 'success')
   }
 
