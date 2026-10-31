@@ -1,5 +1,6 @@
+import { inputConstraints } from '../services/voiceInput'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { BrowserVoiceSession, inputConstraints, voiceErrorMessage } from '../services/voice'
+import { BrowserVoiceSession, voiceErrorMessage } from '../services/voice'
 import {
   DEFAULT_VOICE_PREFERENCES,
   VOICE_BITRATES,

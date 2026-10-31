@@ -58,7 +58,7 @@ import type { StreamAudioGain } from '../services/streamAudioGain'
 import type { StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
-import { BrowserVoiceInput } from '../services/voiceInput'
+import type { BrowserVoiceInput } from '../services/voiceInput'
 import { RetryBudget, SignallingRecoveryCoordinator } from '../services/mediaRecovery'
 import { uiSounds, type UISound } from '../services/uiSounds'
 import { createWebRTCConfigService } from '../services/webrtcConfig'
@@ -602,9 +602,16 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * signalling reconnect never asks for permission again.
    */
   const ensureVoiceInput = useCallback(async (): Promise<BrowserVoiceInput | null> => {
+    const pending = voiceSessionRef.current
+    let Input: typeof BrowserVoiceInput
+    try { Input = (await import('../services/voiceInput')).BrowserVoiceInput } catch (error) {
+      if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
+      return null
+    }
+    if (!pending || voiceSessionRef.current !== pending) return null
     let input = voiceInputRef.current
     if (!input) {
-      input = new BrowserVoiceInput({
+      input = new Input({
         onLevel: (level) => {
           voiceInputLevelRef.current = level
           recomputeSpeakingUsers()

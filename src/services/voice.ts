@@ -5,12 +5,10 @@ import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
-import { BrowserVoiceInput } from './voiceInput'
+import type { BrowserVoiceInput } from './voiceInput'
 import { readPeerStats } from './peerStats'
 import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
 
-export { inputConstraints } from './voiceInput'
-export { BrowserVoiceInput } from './voiceInput'
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
