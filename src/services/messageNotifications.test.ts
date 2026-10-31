@@ -4,7 +4,7 @@ import type { MessageNotification } from '../domain/types'
 import { MessageNotificationCenter } from './messageNotifications'
 const event = (id = 5): MessageNotification => ({ server_id: 1, channel_id: 7, server_name: 'First', channel_name: 'general', mentioned: true, message: { id, author: { user_id: 2, username: 'Alice' }, content: 'Привет <@1>', created_at: 1 } })
 const disposers: (() => void)[] = []
-beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); vi.spyOn(document, 'hasFocus').mockReturnValue(false) })
+beforeEach(() => { vi.stubGlobal('BroadcastChannel', undefined); localStorage.clear(); vi.useFakeTimers(); vi.spyOn(document, 'hasFocus').mockReturnValue(false) })
 afterEach(() => { disposers.splice(0).forEach((dispose) => dispose()); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers() })
 function setup(reading = { serverId: null as number | null, channelId: null as number | null, following: false }) {
   const sound = vi.fn(), open = vi.fn()
@@ -67,4 +67,52 @@ it('uses current reading state instead of its own stale heartbeat after scrollin
   await center.receive(event())
   expect(center.snapshot()).toHaveLength(1)
   expect(sound).toHaveBeenCalledOnce()
+})
+
+class TestBroadcastChannel {
+  static peers = new Set<TestBroadcastChannel>()
+  onmessage: ((event: MessageEvent<unknown>) => void) | null = null
+  constructor(public name: string) { TestBroadcastChannel.peers.add(this) }
+  postMessage(data: unknown) { for (const peer of TestBroadcastChannel.peers) if (peer !== this && peer.name === this.name) peer.onmessage?.({ data } as MessageEvent<unknown>) }
+  close() { TestBroadcastChannel.peers.delete(this) }
+}
+it('uses broadcasts without reading-heartbeat storage writes and releases only the departing reader', async () => {
+  vi.stubGlobal('BroadcastChannel', TestBroadcastChannel)
+  const write = vi.spyOn(Storage.prototype, 'setItem')
+  vi.mocked(document.hasFocus).mockReturnValue(true)
+  const a = setup({ serverId: 1, channelId: 7, following: true })
+  const b = setup({ serverId: 1, channelId: 7, following: true })
+  vi.mocked(document.hasFocus).mockReturnValue(false)
+  const background = setup() // Learns existing readers through the startup handshake.
+  await background.center.receive(event(100))
+  expect(background.sound).not.toHaveBeenCalled()
+  a.center.contextChanged() // One reader releases; the other is still reading.
+  await background.center.receive(event(101))
+  expect(background.sound).not.toHaveBeenCalled()
+  b.center.contextChanged()
+  await background.center.receive(event(102))
+  expect(background.sound).toHaveBeenCalledOnce()
+  expect(write.mock.calls.some(([key]) => key.startsWith('voxhold.notifications.reading:'))).toBe(false)
+  disposers.splice(0).forEach((dispose) => dispose())
+  expect(TestBroadcastChannel.peers.size).toBe(0)
+})
+it('expires crashed-tab broadcasts and falls back if channel construction is denied', async () => {
+  vi.stubGlobal('BroadcastChannel', TestBroadcastChannel)
+  const background = setup()
+  const crashed = new TestBroadcastChannel('voxhold.notifications:instance:1')
+  crashed.postMessage({ tabId: 'crashed', at: Date.now(), serverId: 1, channelId: 7, following: true })
+  crashed.close() // Abrupt tab termination sends no release.
+  await background.center.receive(event(105))
+  expect(background.sound).not.toHaveBeenCalled()
+  vi.advanceTimersByTime(5_001)
+  await background.center.receive(event(103))
+  expect(background.sound).toHaveBeenCalledOnce()
+  disposers.splice(0).forEach((dispose) => dispose())
+  vi.stubGlobal('BroadcastChannel', class { constructor() { throw new Error('denied') } })
+  vi.mocked(document.hasFocus).mockReturnValue(true)
+  setup({ serverId: 1, channelId: 7, following: true })
+  vi.mocked(document.hasFocus).mockReturnValue(false)
+  const fallback = setup()
+  await fallback.center.receive(event(104))
+  expect(fallback.sound).not.toHaveBeenCalled()
 })

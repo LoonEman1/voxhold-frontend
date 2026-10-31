@@ -150,3 +150,21 @@ it('finishes a multi-page direct catch-up while further realtime revisions arriv
   await screen.findByText('catchup-150')
   expect(screen.getByText('catchup-51')).toBeTruthy()
 })
+
+it('retries a busy upload automatically with the same attachment ID and a visible note', async () => {
+  const uploads: string[] = []
+  const api = createApi({ request: async <T,>(request: { path: string; method?: string }) => {
+    if (request.path.includes('/attachments/') && request.method === 'PUT') {
+      uploads.push(request.path)
+      if (uploads.length === 1) return { status: 429, data: { error: 'busy' } as T, retryAfterMs: 200 }
+      return { status: 200, data: { id: 'ready', filename: 'retry.txt', mime_type: 'text/plain', size_bytes: 2 } as T }
+    }
+    return { status: 200, data: defaults(request.path) as T }
+  } })
+  const view = render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => {}} onNavigate={() => {}}><UploadFixture onSend={() => {}}/></CommunityProvider>)
+  fireEvent.change(view.container.querySelector('input[type=file]')!, { target: { files: [new File(['hi'], 'retry.txt', { type: 'text/plain' })] } })
+  await screen.findByText('Сервер занят, повторяем…')
+  await screen.findByText(/Готово к отправке/)
+  expect(uploads).toHaveLength(2); expect(uploads[0]).toBe(uploads[1])
+  expect(screen.queryByText('Сервер занят, повторяем…')).toBeNull()
+})

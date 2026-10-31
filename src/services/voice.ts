@@ -5,12 +5,10 @@ import { remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 import { cloneRTCConfiguration } from './webrtcConfig'
-import { BrowserVoiceInput } from './voiceInput'
+import type { BrowserVoiceInput } from './voiceInput'
 import { readPeerStats } from './peerStats'
 import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
 
-export { inputConstraints } from './voiceInput'
-export { BrowserVoiceInput } from './voiceInput'
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
@@ -148,9 +146,11 @@ export class BrowserVoiceSession {
   private autoplayRetryHandler: (() => void) | null = null
   private unsubscribeInput: (() => void) | null = null
   private readonly visibilityHandler = () => {
-    if (!this.closed && typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      this.resumeAudio()
-    }
+    if (this.closed || typeof document === 'undefined') return
+    if (document.visibilityState === 'hidden') {
+      if (this.levelTimer !== null) window.clearInterval(this.levelTimer)
+      this.levelTimer = null
+    } else if (document.visibilityState === 'visible') { this.resumeAudio(); this.ensureLevelTimer() }
   }
 
   constructor(private readonly options: VoiceMediaOptions) {
@@ -377,12 +377,12 @@ export class BrowserVoiceSession {
   }
 
   private ensureLevelTimer() {
-    if (this.levelTimer !== null || !this.options.onRemoteLevels) return
+    if (this.closed || !this.peer || this.levelTimer !== null || !this.options.onRemoteLevels || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     this.levelTimer = window.setInterval(() => { void this.sampleRemoteLevels() }, 200)
   }
 
   private async sampleRemoteLevels() {
-    if (this.closed || this.levelsSampling) return
+    if (this.closed || this.levelsSampling || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     this.levelsSampling = true
     const values = new Map<string, number>()
     try {
@@ -398,7 +398,7 @@ export class BrowserVoiceSession {
       }
     } catch { /* The analyser can still meter audio when getStats is unavailable. */ }
     finally { this.levelsSampling = false }
-    if (this.closed) return
+    if (this.closed || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     const levels: VoiceRemoteLevel[] = []
     this.remoteOutputs.forEach((output, trackId) => {
       const connectionId = this.trackOwners.get(trackId)

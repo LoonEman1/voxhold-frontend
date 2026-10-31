@@ -48,7 +48,10 @@ class FakeWebSocket {
 }
 
 describe('RealtimeClient', () => {
+  const clients = new Set<RealtimeClient>()
   beforeEach(() => {
+    const connect = RealtimeClient.prototype.connect
+    vi.spyOn(RealtimeClient.prototype, 'connect').mockImplementation(function (this: RealtimeClient) { clients.add(this); connect.call(this) })
     vi.stubGlobal('window', {
       dispatchEvent: vi.fn(),
       location: { protocol: 'http:', host: 'localhost:3000', href: 'http://localhost:3000/' },
@@ -59,6 +62,7 @@ describe('RealtimeClient', () => {
   })
 
   afterEach(() => {
+    clients.forEach((client) => client.close()); clients.clear(); vi.restoreAllMocks()
     FakeWebSocket.latest = null
     vi.unstubAllGlobals()
   })

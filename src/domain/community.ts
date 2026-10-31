@@ -1,4 +1,4 @@
-export interface Attachment { id: string; filename: string; mime_type: string; size_bytes: number; deleted: boolean }
+export interface Attachment { width?: number; height?: number; id: string; filename: string; mime_type: string; size_bytes: number; deleted: boolean }
 export interface LinkPreview { url: string; title: string; description?: string; site_name: string; image_path?: string }
 export interface CustomRole { id: number; name: string; color: string; permissions: number; user_ids: number[] }
 export interface InboxItem { message_id: number; channel_id: number; server_id: number; thread_root_id?: number; server_name: string; channel_name: string; author: string; content: string; created_at: number; reason: 'mention' | 'reply' | 'thread' }

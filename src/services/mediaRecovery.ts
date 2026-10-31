@@ -254,7 +254,7 @@ export async function sampleInboundVideoStats(
   peer: RTCPeerConnection,
 ): Promise<InboundVideoSample | null> {
   if (typeof peer.getStats !== 'function') return null
-  const report = await readPeerStats(peer)
+  const report = await readPeerStats(peer, 1_900)
   let result: InboundVideoSample | null = null
   report.forEach((raw) => {
     if (result) return

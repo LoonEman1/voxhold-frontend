@@ -337,7 +337,7 @@ function monitorVideoQuality(
     if (sampling || peer.connectionState === 'closed') return
     sampling = true
     try {
-      const report = await readPeerStats(peer)
+      const report = await readPeerStats(peer, 1_900)
       let video: VideoRTPStats | undefined
       report.forEach((value) => {
         const candidate = value as VideoRTPStats

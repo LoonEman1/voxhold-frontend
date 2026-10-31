@@ -189,3 +189,5 @@ Community 2.3: [attachments, conversations, inbox, roles and text threads](docs/
 For a separate API origin, set `CSP_CONNECT_EXTRA=" https://api.example.com wss://api.example.com"` in the frontend runtime environment as well as `VITE_API_BASE_URL` at build time. The default CSP permits same-origin connections only. HSTS is configured by the HTTPS edge.
 
 [Audit fixes and verification](docs/audit-2.5-fixes-status.md). Backend migration **000032** must run before this coordinated update.
+
+[Patch 2.5.3: changes, checks and measurements](docs/audit-2.5.3-status.md).
