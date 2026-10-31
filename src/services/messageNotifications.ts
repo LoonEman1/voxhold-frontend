@@ -2,6 +2,7 @@ import { previewMentions } from '../lib/mentions'
 import type { MessageNotification, NotificationSettings } from '../domain/types'
 
 interface Reading { serverId: number | null; channelId: number | null; following: boolean }
+type ReadingStamp = Reading & { tabId: string; at: number }
 interface Dependencies {
   reading: () => Reading
   sound: () => void
@@ -27,6 +28,9 @@ export class MessageNotificationCenter {
   private tabId = crypto.randomUUID()
   private publishedReading: string | null = null
   private publishedReadingAt = -Infinity
+  private channel: BroadcastChannel | null = null
+  private ownReading: ReadingStamp | null = null
+  private remoteReading = new Map<string, ReadingStamp>()
   private readingKey: string
   private seenKey: string
 
@@ -39,6 +43,21 @@ export class MessageNotificationCenter {
   private emit() { this.listeners.forEach((listener) => listener()) }
   start() {
     this.started = true; this.generation++
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        this.channel = new BroadcastChannel(`voxhold.notifications:${this.scope}`)
+        this.channel.onmessage = ({ data }: MessageEvent<unknown>) => {
+          if (!data || typeof data !== 'object' || !('tabId' in data) || typeof data.tabId !== 'string' || data.tabId === this.tabId) return
+          if ('request' in data) { if (this.ownReading && Date.now() - this.ownReading.at < 5_000) this.channel?.postMessage(this.ownReading); return }
+          if ('released' in data) { this.remoteReading.delete(data.tabId); return }
+          if (!('at' in data) || typeof data.at !== 'number' || !Number.isFinite(data.at) || !('channelId' in data) || !Number.isSafeInteger(data.channelId) || !('serverId' in data) || !Number.isSafeInteger(data.serverId) || !('following' in data) || data.following !== true) return
+          this.remoteReading.delete(data.tabId); this.remoteReading.set(data.tabId, data as ReadingStamp)
+          if (this.remoteReading.size > 64) this.remoteReading.delete(this.remoteReading.keys().next().value!)
+        }
+        // A newly opened tab has missed earlier heartbeats; ask its peers for a snapshot.
+        this.channel.postMessage({ tabId: this.tabId, request: true })
+      }
+    } catch { this.channel?.close(); this.channel = null }
     const refresh = () => this.contextChanged()
     window.addEventListener('focus', refresh); window.addEventListener('blur', refresh); document.addEventListener('visibilitychange', refresh)
     const heartbeat = setInterval(refresh, 2_000)
@@ -46,7 +65,7 @@ export class MessageNotificationCenter {
     return () => {
       this.started = false; this.generation++; clearInterval(heartbeat)
       window.removeEventListener('focus', refresh); window.removeEventListener('blur', refresh); document.removeEventListener('visibilitychange', refresh)
-      this.releaseReading(); this.timers.forEach(clearTimeout); this.timers.clear(); this.desktop.forEach((item) => item.close()); this.desktop.clear()
+      this.releaseReading(); this.channel?.close(); this.channel = null; this.remoteReading.clear(); this.timers.forEach(clearTimeout); this.timers.clear(); this.desktop.forEach((item) => item.close()); this.desktop.clear()
       this.items = []; this.emit()
     }
   }
@@ -56,18 +75,29 @@ export class MessageNotificationCenter {
     const signature = `${reading.serverId}:${reading.channelId}`, now = Date.now()
     if (signature === this.publishedReading && now >= this.publishedReadingAt && now - this.publishedReadingAt < 1_000) return
     try {
-      localStorage.setItem(this.readingKey, JSON.stringify({ ...reading, tabId: this.tabId, at: now }))
+      this.ownReading = { ...reading, tabId: this.tabId, at: now }
+      if (this.channel) this.channel.postMessage(this.ownReading)
+      else localStorage.setItem(this.readingKey, JSON.stringify(this.ownReading))
       this.publishedReading = signature; this.publishedReadingAt = now
     } catch { /* Private browsing can disable storage. */ }
   }
   private releaseReading() {
     if (this.publishedReading === null) return
-    this.publishedReading = null; this.publishedReadingAt = -Infinity
+    this.publishedReading = null; this.publishedReadingAt = -Infinity; this.ownReading = null
+    if (this.channel) { this.channel.postMessage({ tabId: this.tabId, released: true }); return }
     try { if (JSON.parse(localStorage.getItem(this.readingKey) ?? 'null')?.tabId === this.tabId) localStorage.removeItem(this.readingKey) } catch { /* Optional cross-tab state. */ }
   }
   private isReading(event: MessageNotification) {
     const reading = this.dependencies.reading()
     if (document.visibilityState === 'visible' && document.hasFocus() && reading.following && reading.serverId === event.server_id && reading.channelId === event.channel_id) return true
+    if (this.channel) {
+      const now = Date.now()
+      for (const [id, other] of this.remoteReading) {
+        if (now < other.at || now - other.at >= 5_000) { this.remoteReading.delete(id); continue }
+        if (other.serverId === event.server_id && other.channelId === event.channel_id) return true
+      }
+      return false
+    }
     try {
       const other = JSON.parse(localStorage.getItem(this.readingKey) ?? 'null') as { tabId: string; at: number; serverId: number; channelId: number } | null
       return !!other && other.tabId !== this.tabId && Date.now() >= other.at && Date.now() - other.at < 5_000 && other.serverId === event.server_id && other.channelId === event.channel_id
