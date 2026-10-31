@@ -1,0 +1,226 @@
+{
+  "composer": {
+    "baseline": {
+      "label": "baseline-2.5.2",
+      "cpu_throttle": 4,
+      "browser": "151.0.7922.34",
+      "rows": [
+        {
+          "round": 1,
+          "script_ms": 465.72099999999995,
+          "commits": 244,
+          "render_total_ms": 72.6000000089407,
+          "render_p95_ms": 0.7999999970197678,
+          "history": {
+            "elapsed_ms": 80,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 2,
+          "script_ms": 436.0569999999999,
+          "commits": 244,
+          "render_total_ms": 68.80000005662441,
+          "render_p95_ms": 0.7000000029802322,
+          "history": {
+            "elapsed_ms": 244,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 3,
+          "script_ms": 379.15900000000005,
+          "commits": 244,
+          "render_total_ms": 57.00000002980232,
+          "render_p95_ms": 0.6000000014901161,
+          "history": {
+            "elapsed_ms": 208.5,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 4,
+          "script_ms": 372.0399999999999,
+          "commits": 244,
+          "render_total_ms": 56.70000000298023,
+          "render_p95_ms": 0.6000000014901161,
+          "history": {
+            "elapsed_ms": 125,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 5,
+          "script_ms": 367.6330000000001,
+          "commits": 244,
+          "render_total_ms": 49.299999967217445,
+          "render_p95_ms": 0.5,
+          "history": {
+            "elapsed_ms": 145.39999999850988,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        }
+      ]
+    },
+    "patch": {
+      "label": "patch-2.5.3",
+      "cpu_throttle": 4,
+      "browser": "151.0.7922.34",
+      "rows": [
+        {
+          "round": 1,
+          "script_ms": 483.2540000000001,
+          "commits": 244,
+          "render_total_ms": 78.69999997317791,
+          "render_p95_ms": 0.8999999985098839,
+          "history": {
+            "elapsed_ms": 96,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 2,
+          "script_ms": 438.95400000000006,
+          "commits": 244,
+          "render_total_ms": 70.50000005215406,
+          "render_p95_ms": 0.7000000029802322,
+          "history": {
+            "elapsed_ms": 430.19999999552965,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 3,
+          "script_ms": 394.8760000000002,
+          "commits": 244,
+          "render_total_ms": 59.30000000447035,
+          "render_p95_ms": 0.6999999955296516,
+          "history": {
+            "elapsed_ms": 232,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 4,
+          "script_ms": 385.459,
+          "commits": 244,
+          "render_total_ms": 58.6000000461936,
+          "render_p95_ms": 0.6000000014901161,
+          "history": {
+            "elapsed_ms": 98.10000000149012,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        },
+        {
+          "round": 5,
+          "script_ms": 373.3019999999998,
+          "commits": 244,
+          "render_total_ms": 53.400000013411045,
+          "render_p95_ms": 0.6000000014901161,
+          "history": {
+            "elapsed_ms": 173.10000000149012,
+            "notifications": 1,
+            "messages": 1000,
+            "last_id": 2000
+          },
+          "visible_rows": 20
+        }
+      ]
+    }
+  },
+  "voice": [
+    {
+      "version": "2.5.2",
+      "participants": 5,
+      "phases": [
+        {
+          "hidden": false,
+          "duration_seconds": 30,
+          "calls": 150,
+          "wait_ms": 30.799999974668026,
+          "inbound_tracks": 4,
+          "remote_levels": 4,
+          "script_ms": 10.411
+        },
+        {
+          "hidden": true,
+          "duration_seconds": 30,
+          "calls": 150,
+          "wait_ms": 26.799999997019768,
+          "inbound_tracks": 4,
+          "remote_levels": 4,
+          "script_ms": 9.399
+        }
+      ]
+    },
+    {
+      "version": "2.5.3",
+      "participants": 5,
+      "phases": [
+        {
+          "hidden": false,
+          "duration_seconds": 30,
+          "calls": 150,
+          "wait_ms": 30.500000022351742,
+          "inbound_tracks": 4,
+          "remote_levels": 4,
+          "script_ms": 10.091000000000001
+        },
+        {
+          "hidden": true,
+          "duration_seconds": 30,
+          "calls": 2,
+          "wait_ms": 0.4000000059604645,
+          "inbound_tracks": 4,
+          "remote_levels": 4,
+          "script_ms": 3.995
+        }
+      ]
+    }
+  ],
+  "memory": {
+    "legacy_control_limit_MiB": 1536,
+    "legacy_peak_RSS_MiB": 781.125,
+    "patch_limit_MiB": 768,
+    "patch_peak_RSS_MiB": 611.21484375,
+    "legacy_same_768MiB_limit": {
+      "OOMKilled": true,
+      "ExitCode": 137
+    },
+    "photo_dimensions": [
+      6000,
+      4000
+    ],
+    "jobs": 2,
+    "patch_workers": 1,
+    "legacy_workers": 2,
+    "sampling_ms": 2
+  }
+}
