@@ -1011,3 +1011,15 @@ test('cross-tab rotation preserves voice and unmount does not start recovery', a
     expect(await recoveries()).toBe(1)
   } finally { release(); await second.close() }
 })
+
+test('profile modal traps Tab, supports reverse Tab and restores its trigger on Escape', async ({ page }) => {
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  const trigger = page.getByRole('button', { name: 'Профиль', exact: true })
+  await trigger.click()
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  const first = dialog.getByRole('button', { name: 'Закрыть', exact: true })
+  const last = dialog.getByRole('button', { name: /Включить .* тему/ })
+  await last.focus(); await page.keyboard.press('Tab'); await expect(first).toBeFocused()
+  await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused()
+  await page.keyboard.press('Escape'); await expect(dialog).toBeHidden(); await expect(trigger).toBeFocused()
+})
