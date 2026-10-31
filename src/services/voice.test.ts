@@ -237,6 +237,27 @@ describe('BrowserVoiceSession', () => {
     } finally { session.close(); input.close(); vi.useRealTimers() }
   })
 
+  it('pauses remote level polling while hidden, resumes it, and removes the listener on close', async () => {
+    vi.useFakeTimers()
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const input = new BrowserVoiceInput(); await input.start(DEFAULT_VOICE_PREFERENCES)
+    const levels = vi.fn()
+    const session = new BrowserVoiceSession({ input, onAnswer: vi.fn(), onICECandidate: vi.fn(), onConnectionStateChange: vi.fn(), onError: vi.fn(), onRemoteLevels: levels })
+    try {
+      await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+      const peer = FakePeerConnection.latest!
+      Object.assign(peer, { getStats: vi.fn(async () => new Map() as unknown as RTCStatsReport) })
+      peer.ontrack?.({ track: new FakeTrack() } as unknown as RTCTrackEvent)
+      await vi.advanceTimersByTimeAsync(200); expect(levels).toHaveBeenCalled()
+      levels.mockClear(); visibility.mockReturnValue('hidden'); document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(600); expect(levels).not.toHaveBeenCalled()
+      visibility.mockReturnValue('visible'); document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(200); expect(levels).toHaveBeenCalled()
+      session.close(); levels.mockClear(); document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(600); expect(levels).not.toHaveBeenCalled()
+    } finally { session.close(); input.close(); vi.useRealTimers() }
+  })
+
   it('stops remote outputs exactly once and never touches the shared input', async () => {
     const input = new BrowserVoiceInput()
     await input.start(DEFAULT_VOICE_PREFERENCES)

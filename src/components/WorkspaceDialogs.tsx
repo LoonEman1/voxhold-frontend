@@ -12,37 +12,14 @@ import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
+import { useTheme } from '../theme/ThemeContext'
 
 interface AsyncDialogProps {
   open: boolean
   onClose: () => void
 }
 
-export function ConfirmDialog({ open, onClose, title, description, confirmLabel, onConfirm }: AsyncDialogProps & {
-  title: string
-  description: string
-  confirmLabel: string
-  onConfirm(): Promise<void>
-}) {
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
-  useEffect(() => { if (open) { setPending(false); setError('') } }, [open])
-  const confirm = async () => {
-    if (pending) return
-    setPending(true); setError('')
-    try { await onConfirm(); onClose() } catch (caught) { setError(humanError(caught)); setPending(false) }
-  }
-  return (
-    <Modal open={open} onClose={pending ? () => undefined : onClose} title={title} eyebrow="ПОДТВЕРЖДЕНИЕ">
-      <div className="logout-confirm">
-        <span><Icon name="trash" size={26}/></span>
-        <p>{description}</p>
-        {error && <div className="form-error" role="alert">{error}</div>}
-        <div><button className="button button--ghost" type="button" onClick={onClose} disabled={pending}>Отмена</button><button className="button button--danger" type="button" onClick={() => void confirm()} disabled={pending}>{pending ? <span className="spinner"/> : confirmLabel}</button></div>
-      </div>
-    </Modal>
-  )
-}
+export { ConfirmDialog } from './ConfirmDialog'
 
 export function LogoutConfirmDialog({ open, onClose, onConfirm }: AsyncDialogProps & { onConfirm(): Promise<void> }) {  const [pending, setPending] = useState(false)
   useEffect(() => { if (open) setPending(false) }, [open])
@@ -112,6 +89,7 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
 export { InviteUserDialog } from './InviteUserDialog'
 
 export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false, onDeleteAccount }: AsyncDialogProps & { profile: Profile | null; onDeleteAccount?: () => Promise<void>; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+  const { theme, toggleTheme } = useTheme()
   const [about, setAbout] = useState('')
   const [country, setCountry] = useState('')
   const [error, setError] = useState('')
@@ -141,6 +119,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending || avatarPending || deletePending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
       </form>
+      <section className="profile-appearance" aria-label="Оформление"><h3>Оформление</h3><button type="button" className="button button--ghost theme-toggle" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/>{theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}</button></section>
       {onDeleteAccount && <section className="danger-zone" aria-label="Опасная зона">
         <div><h3>Опасная зона</h3><p>Удаление аккаунта удалит профиль, настройки и доступ к этому инстансу. Старые сообщения останутся обезличенными. Это действие нельзя отменить.</p></div>
         {confirmingDelete ? <div className="danger-confirm dialog-form">

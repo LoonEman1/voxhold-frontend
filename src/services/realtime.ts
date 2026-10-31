@@ -141,11 +141,30 @@ export class RealtimeClient {
   private authenticated = false
   private awaitingUnsubscribe = false
   private requestSequence = 0
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private pongTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingPing: string | null = null
+  private lastMessageAt = 0
+  private hiddenAt: number | null = null
+  private readonly visibility = () => {
+    if (document.visibilityState === 'hidden') { this.hiddenAt ??= Date.now(); return }
+    const elapsed = this.hiddenAt === null ? 0 : Date.now() - this.hiddenAt
+    this.hiddenAt = null
+    if (elapsed <= 30_000) return
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.clearPing(); this.heartbeat(true)
+    } else this.reconnectImmediately()
+  }
 
   constructor(private readonly options: RealtimeOptions) {}
 
   connect() {
     this.intentionallyClosed = false
+    window.addEventListener?.('online', this.reconnectImmediately)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.visibility)
+      if (document.visibilityState === 'hidden') this.hiddenAt = Date.now()
+    }
     this.open()
   }
 
@@ -261,26 +280,62 @@ export class RealtimeClient {
     })
     this.intentionallyClosed = true
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    window.removeEventListener?.('online', this.reconnectImmediately)
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.visibility)
+    this.hiddenAt = null
+    this.resetSocket()?.close(1000, 'client closed')
+  }
+
+  private clearPing() {
+    clearTimeout(this.pongTimer ?? undefined)
+    this.pongTimer = null; this.pendingPing = null
+  }
+
+  private clearHeartbeat() {
+    clearInterval(this.heartbeatTimer ?? undefined)
+    this.heartbeatTimer = null; this.clearPing()
+  }
+
+  private resetSocket() {
     const socket = this.socket
-    this.socket = null
-    socket?.close(1000, 'client closed')
-    this.authenticated = false
-    this.activeSubscription = null
-    this.pendingSubscription = null
-    this.awaitingUnsubscribe = false
+    this.socket = null; this.clearHeartbeat()
+    this.authenticated = this.awaitingUnsubscribe = false; this.activeSubscription = this.pendingSubscription = null
+    return socket
+  }
+
+  private heartbeat(force = false) {
+    if (!this.authenticated || this.pendingPing || (!force && Date.now() - this.lastMessageAt < 20_000)) return
+    this.pendingPing = this.send('ping', {})
+    if (this.pendingPing) this.pongTimer = setTimeout(() => this.abandonSocket('heartbeat_timeout'), 10_000)
+  }
+
+  private abandonSocket(reason: string) {
+    clientDiagnostics.record('websocket', reason, 'warn')
+    const socket = this.resetSocket()
+    this.options.onStateChange('offline')
+    if (!this.intentionallyClosed) this.scheduleReconnect()
+    socket?.close(4000, reason)
+  }
+
+  private readonly reconnectImmediately = () => {
+    if (this.intentionallyClosed || this.socket?.readyState === WebSocket.OPEN) return
+    if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null; this.attempts = 0
+    this.resetSocket()?.close()
+    this.open()
   }
 
   private open() {
+    if (this.intentionallyClosed) return
     if (this.socket && this.socket.readyState < WebSocket.CLOSING) return
     clientDiagnostics.record('websocket', 'connecting', 'info', {
       attempt: this.attempts + 1,
     })
+    this.resetSocket()
     this.options.onStateChange('connecting')
     const socket = new WebSocket(websocketUrl(this.options.baseUrl ?? ''))
     this.socket = socket
-    this.authenticated = false
-    this.activeSubscription = null
-    this.pendingSubscription = null
 
     socket.addEventListener('open', () => {
       if (this.socket !== socket) return
@@ -290,14 +345,20 @@ export class RealtimeClient {
 
     socket.addEventListener('message', (event) => {
       if (this.socket !== socket) return
+      this.lastMessageAt = Date.now()
       try {
         const payload = JSON.parse(String(event.data)) as RealtimeEvent
+        if (this.pendingPing && payload.request_id === this.pendingPing && (payload.type === 'pong' || payload.type === 'error')) {
+          this.clearPing(); return
+        }
         clientDiagnostics.record('websocket', 'event_received', 'debug', {
           event_type: payload.type,
           request_id: payload.request_id ?? null,
           payload_bytes: typeof event.data === 'string' ? event.data.length : null,
         })
         if (payload.type === 'ready') {
+          this.clearHeartbeat()
+          this.heartbeatTimer = setInterval(() => this.heartbeat(), 25_000)
           this.attempts = 0
           this.authenticated = true
           this.options.onStateChange('online')
@@ -446,11 +507,7 @@ export class RealtimeClient {
         was_clean: event.wasClean,
         intentionally_closed: this.intentionallyClosed,
       })
-      this.socket = null
-      this.authenticated = false
-      this.activeSubscription = null
-      this.pendingSubscription = null
-      this.awaitingUnsubscribe = false
+      this.resetSocket()
       this.options.onStateChange('offline')
       if (isAuthClose(event.code, event.reason)) {
         this.options.onUnauthorized()
@@ -476,8 +533,7 @@ export class RealtimeClient {
       })
       return null
     }
-    this.requestSequence += 1
-    const requestId = String(this.requestSequence)
+    const requestId = String(++this.requestSequence)
     this.socket.send(JSON.stringify({ request_id: requestId, type, data }))
     clientDiagnostics.record('websocket', 'event_sent', 'debug', {
       event_type: type,

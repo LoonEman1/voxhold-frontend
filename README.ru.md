@@ -188,3 +188,5 @@ Community 2.3: [attachments, conversations, inbox, roles and text threads](docs/
 При отдельном origin API задайте `CSP_CONNECT_EXTRA=" https://api.example.com wss://api.example.com"` в окружении frontend-контейнера и `VITE_API_BASE_URL` при сборке. По умолчанию CSP разрешает соединения только с текущим origin. HSTS настраивается на HTTPS-прокси.
 
 [Исправления аудита и проверки](docs/audit-2.5-fixes-status.md). Перед согласованным обновлением необходимо выполнить миграцию backend **000032**.
+
+[Patch 2.5.3: changes, checks and measurements](docs/audit-2.5.3-status.md).

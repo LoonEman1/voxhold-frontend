@@ -797,6 +797,9 @@ test('news channels appear first, keep reader permissions and hide the empty gro
   const panel = page.getByRole('complementary', { name: 'Комментарии к публикации' })
   await expect(panel.getByText(comment.content, { exact: true })).toBeVisible()
   await expect(panel.getByLabel('Сообщение в новости-команды')).toBeVisible()
+  expect((await page.locator('.content-header h1').boundingBox())!.width).toBeGreaterThanOrEqual(200)
+  await expect(page.locator('.members-sidebar')).toBeHidden()
+  expect(await page.locator('.content-shell').evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('news-comments-desktop.png') })
   channels = [voice, text, { ...news, comments_enabled: false, unread_count: 0 }]
   emit('channels.changed', { server_id: 1 })
@@ -805,6 +808,7 @@ test('news channels appear first, keep reader permissions and hide the empty gro
   await page.setViewportSize({ width: 375, height: 812 })
   expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await expect(page.locator('.channel-sidebar')).not.toBeInViewport()
+  for (const button of await page.locator('.content-header button:visible').all()) await expect(button).toHaveAccessibleName(/.+/)
   await page.screenshot({ path: testInfo.outputPath('news-comments-mobile.png'), animations: 'disabled' })
   await panel.getByRole('button', { name: 'Закрыть комментарии' }).click()
   channels = [voice, text]
@@ -1006,4 +1010,49 @@ test('cross-tab rotation preserves voice and unmount does not start recovery', a
     await expect(page.locator('.workspace')).toHaveCount(0)
     expect(await recoveries()).toBe(1)
   } finally { release(); await second.close() }
+})
+
+test('profile modal traps Tab, supports reverse Tab and restores its trigger on Escape', async ({ page }) => {
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  const trigger = page.getByRole('button', { name: 'Профиль', exact: true })
+  await trigger.click()
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  const first = dialog.getByRole('button', { name: 'Закрыть', exact: true })
+  const last = dialog.getByRole('button', { name: /Включить .* тему/ })
+  await last.focus(); await page.keyboard.press('Tab'); await expect(first).toBeFocused()
+  await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused()
+  await page.keyboard.press('Escape'); await expect(dialog).toBeHidden(); await expect(trigger).toBeFocused()
+})
+
+test('reduced motion keeps the spinner and static loading bar visible', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  await page.evaluate(() => { const root = document.createElement('div'); root.innerHTML = '<span class="spinner" role="status" aria-label="Загрузка"></span><div class="loader-line"><i></i></div>'; document.body.append(root) })
+  await expect(page.getByRole('status', { name: 'Загрузка' })).toBeVisible()
+  await expect(page.locator('.loader-line i')).toBeVisible()
+  await expect(page.locator('.loader-line i')).toHaveCSS('animation-name', 'none')
+  const duration = await page.locator('.spinner').evaluate((node) => parseFloat(getComputedStyle(node).animationDuration))
+  expect(duration).toBeLessThanOrEqual(.00001)
+})
+
+test('role deletion opens a nested confirmation and Escape preserves the settings dialog', async ({ page }) => {
+  let deleted = false
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (route.request().method() === 'DELETE') deleted = true
+    return route.fulfill({ json: path.endsWith('/roles') && !deleted ? [{ id: 1, name: 'Авторы', permissions: 15, color: '#aaa', user_ids: [] }] : [] })
+  })
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  await page.getByRole('button', { name: 'Роли сервера', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: 'Настройки ролей', exact: true })
+  await settings.getByRole('button', { name: 'Удалить', exact: true }).click()
+  const confirmation = page.getByRole('dialog', { name: 'Удалить роль?', exact: true })
+  await expect(confirmation).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(confirmation).toBeHidden(); await expect(settings).toBeVisible()
+  expect(await page.evaluate(() => document.body.classList.contains('modal-open'))).toBe(true)
+  await settings.getByRole('button', { name: 'Удалить', exact: true }).click()
+  await confirmation.getByRole('button', { name: 'Удалить роль', exact: true }).click()
+  await expect(confirmation).toBeHidden(); expect(deleted).toBe(true)
+  await expect(settings).toBeVisible()
 })

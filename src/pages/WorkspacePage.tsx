@@ -47,6 +47,7 @@ import { pickDefaultChannel } from '../lib/channels'
 import { channelHasUnreadMessages } from '../lib/channelUnread'
 import { mergeServerMember } from '../lib/serverMembers'
 import { downloadBlob } from '../lib/downloadBlob'
+import { clearThumbnails } from '../lib/thumbnailCache'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
@@ -57,13 +58,12 @@ import type { StreamAudioGain } from '../services/streamAudioGain'
 import type { StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
 import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
-import { BrowserVoiceInput } from '../services/voiceInput'
+import type { BrowserVoiceInput } from '../services/voiceInput'
 import { RetryBudget, SignallingRecoveryCoordinator } from '../services/mediaRecovery'
 import { uiSounds, type UISound } from '../services/uiSounds'
 import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
-import { useTheme } from '../theme/ThemeContext'
 
 const LazyStreamPlayer = lazy(() => import('../components/PersistentStreamPlayer').then((module) => ({ default: module.PersistentStreamPlayer })))
 function PersistentStreamPlayer(props: ComponentProps<typeof StreamPlayer>) { return <Suspense fallback={null}><LazyStreamPlayer {...props}/></Suspense> }
@@ -93,8 +93,8 @@ function upsertPinnedMessage(current: PinnedMessage[], value: PinnedMessage) {
 }
 
 export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
+  useEffect(() => () => clearThumbnails(), [])
   const { user, token, logout, expire } = useAuth()
-  const { theme, toggleTheme } = useTheme()
   const notify = useToast()
   const workspaceLayout = useWorkspaceLayout()
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
@@ -602,9 +602,16 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * signalling reconnect never asks for permission again.
    */
   const ensureVoiceInput = useCallback(async (): Promise<BrowserVoiceInput | null> => {
+    const pending = voiceSessionRef.current
+    let Input: typeof BrowserVoiceInput
+    try { Input = (await import('../services/voiceInput')).BrowserVoiceInput } catch (error) {
+      if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
+      return null
+    }
+    if (!pending || voiceSessionRef.current !== pending) return null
     let input = voiceInputRef.current
     if (!input) {
-      input = new BrowserVoiceInput({
+      input = new Input({
         onLevel: (level) => {
           voiceInputLevelRef.current = level
           recomputeSpeakingUsers()
@@ -672,6 +679,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }).catch((error: unknown) => handleError(error))
   }
 
+  const presenceStateRef = useRef({ onlineByServer, lastSeenByUser, viewedProfile })
+  presenceStateRef.current = { onlineByServer, lastSeenByUser, viewedProfile }
+
   counterRefreshRef.current = (serverId: number) => {
     if (!token || serverId !== activeServerRef.current) return
     const pending = counterTimersRef.current.get(serverId)
@@ -685,7 +695,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       void api.channels.unreadCounts(token, serverId, request.signal).then((counts) => {
         if (request.signal.aborted || activeServerRef.current !== serverId) return
         const values = new Map(counts.map((item) => [item.channel_id, item.unread_count]))
-        setChannels((current) => { const next = current.map((channel) => channel.server_id === serverId ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel); channelsRef.current = next; return next })
+        if (!channelsRef.current.some((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0))) return
+        setChannels((current) => {
+          if (!current.some((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0))) return current
+          const next = current.map((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0) ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel)
+          channelsRef.current = next; return next
+        })
       }).catch(() => undefined)
     }, 80))
   }
@@ -886,16 +901,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onPresenceSnapshot: (snapshot) => {
         const next: Record<number, number[]> = {}
         snapshot.servers.forEach((server) => { next[server.server_id] = server.online_user_ids })
+        presenceStateRef.current.onlineByServer = next
         setOnlineByServer(next)
       },
       onPresenceUpdated: (update) => {
-        if (update.server_id === activeServerRef.current && update.last_seen_at) {
+        const state = presenceStateRef.current
+        if (update.server_id === activeServerRef.current && update.last_seen_at && ((state.lastSeenByUser[update.user_id] ?? 0) < update.last_seen_at || state.viewedProfile?.user_id === update.user_id && (state.viewedProfile.last_seen_at ?? 0) < update.last_seen_at)) {
           const at = update.last_seen_at
+          presenceStateRef.current.lastSeenByUser = { ...state.lastSeenByUser, [update.user_id]: Math.max(state.lastSeenByUser[update.user_id] ?? 0, at) }
           setLastSeenByUser((current) => (current[update.user_id] ?? 0) >= at ? current : { ...current, [update.user_id]: at })
-          setViewedProfile((current) => current?.user_id === update.user_id ? { ...current, last_seen_at: Math.max(current.last_seen_at ?? 0, at) } : current)
+          setViewedProfile((current) => current?.user_id === update.user_id && (current.last_seen_at ?? 0) < at ? { ...current, last_seen_at: Math.max(current.last_seen_at ?? 0, at) } : current)
         }
+        if ((state.onlineByServer[update.server_id] ?? []).includes(update.user_id) === (update.status === 'online')) return
+        const pendingUsers = new Set(state.onlineByServer[update.server_id] ?? [])
+        if (update.status === 'online') pendingUsers.add(update.user_id); else pendingUsers.delete(update.user_id)
+        presenceStateRef.current.onlineByServer = { ...state.onlineByServer, [update.server_id]: [...pendingUsers] }
         setOnlineByServer((current) => {
           const users = new Set(current[update.server_id] ?? [])
+          if (users.has(update.user_id) === (update.status === 'online')) return current
           if (update.status === 'online') users.add(update.user_id)
           else users.delete(update.user_id)
           return { ...current, [update.server_id]: [...users] }
@@ -2415,12 +2438,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         <header className="content-header">
           <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'news' ? 'news' : selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'news' ? 'Новости и объявления' : selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
           <div className="content-header__actions">
-            {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
+            {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} aria-label="Поиск" title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
             {selectedServer && <button className="header-action" onMouseEnter={() => { void loadRecordingsDialog().catch(() => undefined) }} onFocus={() => { void loadRecordingsDialog().catch(() => undefined) }} onClick={() => { recordingSyncRef.current(); setRecordingsOpen(true) }} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
-            {chatVisible && selectedChannel?.kind !== 'voice' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
-            <button className="header-action theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/><span>{theme === 'dark' ? 'Светлая' : 'Тёмная'}</span></button>
-            {selectedServer && canManage && <button className="header-action" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
-            <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
+            {chatVisible && selectedChannel?.kind !== 'voice' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} aria-label="Закрепы" title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
+            {selectedServer && canManage && <button className="header-action" aria-label="Пригласить" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
+            <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} aria-label={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
           </div>
         </header>
 

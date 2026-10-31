@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { Profiler } from 'react'
 import type { ActiveStream } from '../domain/types'
 import { createApi } from '../services/api'
 import { WorkspacePage } from './WorkspacePage'
@@ -50,7 +51,7 @@ const api = createApi({ request: async <T,>(request: { path: string }) => {
   let data: unknown = {}
   if (request.path.endsWith('/me/servers')) data = [{ id: 1, name: 'Fixture', role: 'member', created_by: 2, created_at: 1, joined_at: 1 }]
   else if (request.path.endsWith('/channels')) data = [{ id: 1, server_id: 1, name: 'voice', kind: 'voice', position: 0, created_by: 2, created_at: 1 }]
-  else if (request.path.endsWith('/members')) data = []
+  else if (request.path.endsWith('/members') || request.path.endsWith('/notification-counts')) data = []
   else if (request.path.endsWith('/recordings')) data = { recordings: [] }
   else if (request.path.endsWith('/webrtc/config')) data = { ice_servers: [], ice_transport_policy: 'all' }
   return { status: 200, data: data as T }
@@ -98,4 +99,33 @@ it('does not resume a failed leave for an unrelated permission error', async () 
   await act(async () => undefined)
   expect(fixture.watch).toHaveBeenCalledOnce()
   expect(screen.getByTestId('stream-state').textContent).toBe('idle')
+})
+
+it('does not commit a Workspace render for repeated presence or identical unread counters', async () => {
+  const commits = vi.fn(), unread = vi.spyOn(api.channels, 'unreadCounts')
+  render(<Profiler id="workspace" onRender={commits}><WorkspacePage api={api}/></Profiler>)
+  await screen.findByRole('button', { name: 'Join fixture' })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)) })
+  act(() => emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'online', last_seen_at: 100 }))
+  const afterOnline = commits.mock.calls.length
+  act(() => emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'online', last_seen_at: 100 }))
+  expect(commits.mock.calls.length).toBe(afterOnline)
+  act(() => emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'offline', last_seen_at: 101 }))
+  const afterOffline = commits.mock.calls.length
+  act(() => emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'offline', last_seen_at: 101 }))
+  expect(commits.mock.calls.length).toBe(afterOffline)
+  // Opposite transitions in one React batch must not be mistaken for duplicates.
+  act(() => {
+    emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'online' })
+    emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'offline' })
+  })
+  const afterBurst = commits.mock.calls.length
+  act(() => emit('onPresenceUpdated', { server_id: 1, user_id: 2, status: 'offline' }))
+  expect(commits.mock.calls.length).toBe(afterBurst)
+  unread.mockClear()
+  act(() => window.dispatchEvent(new Event('focus')))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)) })
+  expect(unread).toHaveBeenCalledOnce()
+  expect(await unread.mock.results[0]!.value).toEqual([])
+  expect(commits.mock.calls.length).toBe(afterBurst)
 })

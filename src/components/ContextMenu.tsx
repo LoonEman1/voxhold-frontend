@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Icon, type IconName } from './Icon'
 
 export interface ContextMenuAction {
@@ -51,12 +51,15 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose
     })
   }, [menu])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    const root = ref.current
+    root?.querySelector<HTMLElement>('button[role="menuitem"]:not(:disabled), button:not(:disabled), input:not(:disabled)')?.focus({ preventScroll: true })
     const closeOnPointerDown = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) onCloseRef.current()
     }
     const closeOnKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Escape' && !event.defaultPrevented) onCloseRef.current()
     }
     const closeOnScroll = () => onCloseRef.current()
     window.addEventListener('pointerdown', closeOnPointerDown, true)
@@ -65,6 +68,7 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose
     window.addEventListener('blur', closeOnScroll)
     document.addEventListener('scroll', closeOnScroll, true)
     return () => {
+      if (root?.contains(document.activeElement) && previous?.isConnected) previous.focus({ preventScroll: true })
       window.removeEventListener('pointerdown', closeOnPointerDown, true)
       window.removeEventListener('keydown', closeOnKey)
       window.removeEventListener('resize', closeOnScroll)
@@ -74,7 +78,16 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose
   }, [])
 
   return (
-    <div ref={ref} className="context-menu" role="menu" style={{ left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()}>
+    <div ref={ref} className="context-menu" role="menu" style={{ left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return }
+      if (event.target instanceof Element && event.target.closest('input, select, textarea')) return
+      const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')]
+      if (!items.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+      event.preventDefault()
+      const index = items.indexOf(document.activeElement as HTMLButtonElement)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (index + 1) % items.length : (index - 1 + items.length) % items.length
+      items[next]?.focus({ preventScroll: true })
+    }}>
       {menu.title && <div className="context-menu__title">{menu.title}</div>}
       {menu.items.map((item) => {
         if (item.kind === 'separator') return <div className="context-menu__separator" key={item.key} role="separator"/>
