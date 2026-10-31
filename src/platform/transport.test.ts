@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createFetchTransport, parseRetryAfter } from './transport'
 import { createApi } from '../services/api'
+import { ClientDiagnostics, clientDiagnostics } from './clientDiagnostics'
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -70,4 +71,24 @@ it('retries a rate limit with a short Retry-After hint', async () => {
   const result = createFetchTransport().request({ path: '/read' })
   await vi.advanceTimersByTimeAsync(0); await vi.advanceTimersByTimeAsync(999); expect(fetch).toHaveBeenCalledTimes(1)
   await vi.advanceTimersByTimeAsync(1); await expect(result).resolves.toMatchObject({ status: 204 }); expect(fetch).toHaveBeenCalledTimes(2)
+})
+
+it('filters fast successful HTTP events at info level but retains slow requests', async () => {
+  const diagnostics = new ClientDiagnostics('info')
+  diagnostics.setToken('test')
+  const record = vi.spyOn(clientDiagnostics, 'record').mockImplementation(diagnostics.record.bind(diagnostics))
+  let clock = 0, duration = 1
+  vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  const fetch = vi.fn(async () => { clock += duration; return new Response(null, { status: 204 }) })
+  vi.stubGlobal('fetch', fetch)
+  const transport = createFetchTransport()
+  try {
+    await transport.request({ path: '/fast' }); await diagnostics.flush()
+    expect(record).toHaveBeenLastCalledWith('http', 'request_completed', 'debug', expect.objectContaining({ duration_ms: 1 }))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    duration = 1500
+    await transport.request({ path: '/slow', method: 'HEAD' })
+    expect(record).toHaveBeenLastCalledWith('http', 'request_completed', 'warn', expect.objectContaining({ duration_ms: 1500 }))
+    await diagnostics.flush(); expect(fetch).toHaveBeenCalledTimes(3)
+  } finally { diagnostics.dispose() }
 })

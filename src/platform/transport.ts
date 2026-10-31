@@ -88,7 +88,8 @@ export function createFetchTransport(baseUrl = ''): Transport {
           const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'))
           const retry = readonly && attempt < 2 && ([502, 503, 504].includes(response.status) || response.status === 429 && retryAfterMs !== undefined && retryAfterMs <= 10_000)
           if (retry) {
-            clientDiagnostics.record('http', 'request_completed', 'warn', { method, route, status: response.status, attempt: attempt + 1, duration_ms: Math.round(performance.now() - startedAt) })
+            const duration = Math.round(performance.now() - startedAt)
+            clientDiagnostics.record('http', 'request_completed', requestLevel(response.status, duration), { method, route, status: response.status, attempt: attempt + 1, duration_ms: duration })
             await response.body?.cancel().catch(() => {})
             await waitForRetry(retrySignal, (retryAfterMs ?? 400 * 3 ** attempt) + Math.random() * 200)
             continue
@@ -97,7 +98,8 @@ export function createFetchTransport(baseUrl = ''): Transport {
           const contentType = response.headers.get('content-type') ?? ''
           const data = empty ? null : response.ok && request.responseType === 'blob' ? await response.blob() as T : contentType.includes('application/json') ? await response.json() as T : null
           if (signal?.aborted) throw signal.reason
-          clientDiagnostics.record('http', 'request_completed', empty || response.ok ? 'info' : 'warn', { method, route, status: response.status, attempt: attempt + 1, duration_ms: Math.round(performance.now() - startedAt) })
+          const duration = Math.round(performance.now() - startedAt)
+          clientDiagnostics.record('http', 'request_completed', requestLevel(response.status, duration), { method, route, status: response.status, attempt: attempt + 1, duration_ms: duration })
           return { status: response.status, data, retryAfterMs }
         } catch (caught) {
           const error = timeout?.aborted && signal?.aborted && !userSignal?.aborted ? new DOMException('Время ожидания ответа истекло', 'TimeoutError') : caught
@@ -108,6 +110,10 @@ export function createFetchTransport(baseUrl = ''): Transport {
       }
     },
   }
+}
+
+function requestLevel(status: number, duration: number): 'debug' | 'info' | 'warn' {
+  return duration >= 1000 || status >= 500 ? 'warn' : status >= 400 ? 'info' : 'debug'
 }
 
 export function parseRetryAfter(value: string | null): number | undefined {
