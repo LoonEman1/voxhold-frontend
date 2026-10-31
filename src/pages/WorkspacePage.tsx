@@ -679,6 +679,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }).catch((error: unknown) => handleError(error))
   }
 
+  const presenceStateRef = useRef({ onlineByServer, lastSeenByUser, viewedProfile })
+  presenceStateRef.current = { onlineByServer, lastSeenByUser, viewedProfile }
+
   counterRefreshRef.current = (serverId: number) => {
     if (!token || serverId !== activeServerRef.current) return
     const pending = counterTimersRef.current.get(serverId)
@@ -692,7 +695,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       void api.channels.unreadCounts(token, serverId, request.signal).then((counts) => {
         if (request.signal.aborted || activeServerRef.current !== serverId) return
         const values = new Map(counts.map((item) => [item.channel_id, item.unread_count]))
-        setChannels((current) => { const next = current.map((channel) => channel.server_id === serverId ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel); channelsRef.current = next; return next })
+        if (!channelsRef.current.some((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0))) return
+        setChannels((current) => {
+          if (!current.some((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0))) return current
+          const next = current.map((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0) ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel)
+          channelsRef.current = next; return next
+        })
       }).catch(() => undefined)
     }, 80))
   }
@@ -893,16 +901,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onPresenceSnapshot: (snapshot) => {
         const next: Record<number, number[]> = {}
         snapshot.servers.forEach((server) => { next[server.server_id] = server.online_user_ids })
+        presenceStateRef.current.onlineByServer = next
         setOnlineByServer(next)
       },
       onPresenceUpdated: (update) => {
-        if (update.server_id === activeServerRef.current && update.last_seen_at) {
+        const state = presenceStateRef.current
+        if (update.server_id === activeServerRef.current && update.last_seen_at && ((state.lastSeenByUser[update.user_id] ?? 0) < update.last_seen_at || state.viewedProfile?.user_id === update.user_id && (state.viewedProfile.last_seen_at ?? 0) < update.last_seen_at)) {
           const at = update.last_seen_at
+          presenceStateRef.current.lastSeenByUser = { ...state.lastSeenByUser, [update.user_id]: Math.max(state.lastSeenByUser[update.user_id] ?? 0, at) }
           setLastSeenByUser((current) => (current[update.user_id] ?? 0) >= at ? current : { ...current, [update.user_id]: at })
-          setViewedProfile((current) => current?.user_id === update.user_id ? { ...current, last_seen_at: Math.max(current.last_seen_at ?? 0, at) } : current)
+          setViewedProfile((current) => current?.user_id === update.user_id && (current.last_seen_at ?? 0) < at ? { ...current, last_seen_at: Math.max(current.last_seen_at ?? 0, at) } : current)
         }
+        if ((state.onlineByServer[update.server_id] ?? []).includes(update.user_id) === (update.status === 'online')) return
+        const pendingUsers = new Set(state.onlineByServer[update.server_id] ?? [])
+        if (update.status === 'online') pendingUsers.add(update.user_id); else pendingUsers.delete(update.user_id)
+        presenceStateRef.current.onlineByServer = { ...state.onlineByServer, [update.server_id]: [...pendingUsers] }
         setOnlineByServer((current) => {
           const users = new Set(current[update.server_id] ?? [])
+          if (users.has(update.user_id) === (update.status === 'online')) return current
           if (update.status === 'online') users.add(update.user_id)
           else users.delete(update.user_id)
           return { ...current, [update.server_id]: [...users] }
