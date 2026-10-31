@@ -286,3 +286,7 @@ input::placeholder, textarea::placeholder { color: #66665f; }
 @media (max-width: 760px) {
   input, textarea, select, .composer textarea { font-size: 16px !important; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .loader-line i { animation: none !important; transform: none; }
+}

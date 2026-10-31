@@ -1,3 +1,5 @@
+import { RoleManager } from '../../src/components/CommunitySettings'
+import { Modal } from '../../src/components/Modal'
 import { ThemeProvider } from '../../src/theme/ThemeContext'
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -25,7 +27,9 @@ function Fixture() {
       <aside className="channel-sidebar" style={{ width: 260, padding: 16 }}><b>FirstInstance</b><div className="channel-row is-active" style={{ marginTop: 24 }}><button className="channel-row__main"><span>первый-голосовой</span><span className="record-dot is-active" title="Канал записывается"/><i>1</i></button></div><div className="user-dock"><button className="user-dock__profile" onClick={() => setDialog('profile')}><Avatar userId={1} name="Александр" online/><span><b>Александр</b><small>В сети</small></span></button></div></aside>
       <section className="voice-stage-layout"><div className="voice-room"><header className="voice-stage-status"><span>Голосовая связь установлена</span></header><div className="voice-stage-content"><button className="voice-participant"><div className="voice-participant__avatar"><Avatar userId={1} name="Александр"/></div><span><b>Александр</b></span></button></div><footer className="voice-stage-footer"><CallControls selfMute={false} selfDeaf={false} recording={active} recordBusy={false} canRecord canShare chatOpen={false} onMute={() => {}} onDeaf={() => {}} onRecord={() => setActive(!active)} onRecordings={() => setDialog('records')} onChat={() => {}} onShare={() => {}} onLeave={() => {}}/></footer><button className="button" onClick={() => setDialog('profile')}>Профиль</button></div></section>
       <aside className="members-sidebar" style={{ width: 220 }}><header>УЧАСТНИКИ · 2</header><div className="member-group">{['Александр', 'ОченьДлинноеИмяУчастника'].map((name, index) => <button key={name} className="member-row"><Avatar userId={index ? undefined : 1} name={name} size="small" online={!index}/><span><b>{name}</b><small>Владелец сервера</small></span></button>)}</div></aside>
+      <button onClick={() => setDialog('roles')}>Роли сервера</button>
     </main>
+    <Modal open={dialog === 'roles'} onClose={() => setDialog('')} title="Настройки ролей"><RoleManager api={api} token="fixture" serverId={1} members={[]}/></Modal>
     <RecordingsDialog open={dialog === 'records'} onClose={() => setDialog('')} records={[record]} locals={[{ key: 'scope:fixture', scope: 'scope', record, bytes: record.size_bytes, chunks: 1, duration: 38000, finished: true }]} serverId={1} progress={{}} voiceActive onDownload={async () => {}} onRemoveLocal={async () => {}} onRetry={() => {}} channels={[{ id: 7, name: 'первый-голосовой' } as never]}/>
     <ProfileDialog open={dialog === 'profile'} profile={profile} hasAvatar={!!version} onClose={() => setDialog('')} onSubmit={async () => {}} onAvatar={async (file, crop) => { if (file) setVersion((await api.profile.uploadAvatar('fixture', file, crop)).etag); else { await api.profile.removeAvatar('fixture'); setVersion('') } }}/>
   </AvatarProvider>

@@ -1023,3 +1023,36 @@ test('profile modal traps Tab, supports reverse Tab and restores its trigger on 
   await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused()
   await page.keyboard.press('Escape'); await expect(dialog).toBeHidden(); await expect(trigger).toBeFocused()
 })
+
+test('reduced motion keeps the spinner and static loading bar visible', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  await page.evaluate(() => { const root = document.createElement('div'); root.innerHTML = '<span class="spinner" role="status" aria-label="Загрузка"></span><div class="loader-line"><i></i></div>'; document.body.append(root) })
+  await expect(page.getByRole('status', { name: 'Загрузка' })).toBeVisible()
+  await expect(page.locator('.loader-line i')).toBeVisible()
+  await expect(page.locator('.loader-line i')).toHaveCSS('animation-name', 'none')
+  const duration = await page.locator('.spinner').evaluate((node) => parseFloat(getComputedStyle(node).animationDuration))
+  expect(duration).toBeLessThanOrEqual(.00001)
+})
+
+test('role deletion opens a nested confirmation and Escape preserves the settings dialog', async ({ page }) => {
+  let deleted = false
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (route.request().method() === 'DELETE') deleted = true
+    return route.fulfill({ json: path.endsWith('/roles') && !deleted ? [{ id: 1, name: 'Авторы', permissions: 15, color: '#aaa', user_ids: [] }] : [] })
+  })
+  await page.goto('/e2e/fixtures/ui-fixes.html')
+  await page.getByRole('button', { name: 'Роли сервера', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: 'Настройки ролей', exact: true })
+  await settings.getByRole('button', { name: 'Удалить', exact: true }).click()
+  const confirmation = page.getByRole('dialog', { name: 'Удалить роль?', exact: true })
+  await expect(confirmation).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(confirmation).toBeHidden(); await expect(settings).toBeVisible()
+  expect(await page.evaluate(() => document.body.classList.contains('modal-open'))).toBe(true)
+  await settings.getByRole('button', { name: 'Удалить', exact: true }).click()
+  await confirmation.getByRole('button', { name: 'Удалить роль', exact: true }).click()
+  await expect(confirmation).toBeHidden(); expect(deleted).toBe(true)
+  await expect(settings).toBeVisible()
+})
