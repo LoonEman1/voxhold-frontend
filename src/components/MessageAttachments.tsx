@@ -83,8 +83,11 @@ function AttachmentView({ attachment, channelId, conversationId }: { attachment:
     return () => { controller.abort(); if (objectURL) URL.revokeObjectURL(objectURL) }
   }, [api, userId, attachment.id, attachment.mime_type, attachment.deleted, removed, requested, revision])
   if (attachment.deleted || removed) return <div className="attachment-deleted">Вложение удалено сервером · {attachment.filename}</div>
+  const sized = image && Number.isFinite(attachment.width) && Number.isFinite(attachment.height) && attachment.width! > 0 && attachment.height! > 0
+  const box = sized ? { aspectRatio: `${attachment.width} / ${attachment.height}`, maxHeight: 320, width: `min(100%, ${Math.max(1, Math.round(320 * attachment.width! / attachment.height!))}px)` } : undefined
   return <figure ref={figure} className="attachment-card">
-    {image && (previewURL || url) ? <button type="button" className="attachment-image" onClick={() => { setExpanded(true); setRequested(true) }} aria-label={`Открыть изображение ${attachment.filename}`}><img src={previewURL || url} alt={attachment.filename} loading="lazy"/></button>
+    {image && (previewURL || url) ? <button type="button" className={`attachment-image ${sized ? 'attachment-image--sized' : ''}`} style={box} onClick={() => { setExpanded(true); setRequested(true) }} aria-label={`Открыть изображение ${attachment.filename}`}><img src={previewURL || url} alt={attachment.filename} loading="lazy"/></button>
+      : image && sized ? <button type="button" className="attachment-image attachment-image--sized attachment-image--placeholder" style={box} onClick={() => setRequested(true)}><span role="status">Загрузка изображения… · {attachment.filename}</span></button>
       : video && url ? <video controls preload="metadata" src={url}/>
       : <button type="button" onClick={() => setRequested(true)}>{image ? 'Загрузка изображения…' : video ? 'Посмотреть видео' : 'Загрузить файл'} · {attachment.filename}</button>}
     <figcaption>{attachment.filename} · {bytes(attachment.size_bytes)}{url ? <a href={url} download={attachment.filename}>Скачать</a> : image && <button type="button" onClick={() => setRequested(true)}>Скачать оригинал</button>}</figcaption>

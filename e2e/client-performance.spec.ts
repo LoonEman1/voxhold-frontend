@@ -340,3 +340,26 @@ test('200 presence updates leave message rows and mention parsing idle', async (
   await expect(page.locator('[data-message-id="100"]')).toContainText('Robert')
   expect((await counts()).parses).toBeGreaterThan(before.parses)
 })
+
+test('image history keeps its scroll position when delayed thumbnails finish after scrolling up', async ({ page }) => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/v1/**', async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith('/thumbnail')) {
+      await gate
+      await route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64') })
+    } else await route.fulfill({ json: { items: [], conversations: [], has_more: false } })
+  })
+  await page.goto('/e2e/fixtures/performance.html?images')
+  await expect(page.locator('[data-message-id="6000"]')).toBeVisible()
+  const root = page.locator('.messages')
+  await root.evaluate((node) => { node.scrollTop -= 1500 })
+  await page.waitForTimeout(250)
+  const before = await root.evaluate((node) => node.scrollTop), anchor = await visibleAnchor(page)
+  release()
+  await expect(page.locator('.attachment-image img').first()).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(Math.abs(await root.evaluate((node) => node.scrollTop) - before)).toBeLessThanOrEqual(4)
+  expect((await visibleAnchor(page)).id).toBe(anchor.id)
+  expect(Math.abs((await visibleAnchor(page)).offset - anchor.offset)).toBeLessThanOrEqual(4)
+})

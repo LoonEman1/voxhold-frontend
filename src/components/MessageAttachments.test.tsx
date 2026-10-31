@@ -61,3 +61,18 @@ it('retries a busy preview automatically', async () => {
   render(<MessageAttachments attachments={[{ id: 'busy', filename: 'busy.jpg', mime_type: 'image/jpeg', size_bytes: 10, deleted: false }]}/> )
   await screen.findByAltText('busy.jpg'); expect(context.api.community.thumbnail).toHaveBeenCalledTimes(2)
 })
+
+it('reserves identical image geometry before and after the thumbnail loads', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:geometry'), revokeObjectURL: vi.fn() })
+  let finish!: (blob: Blob) => void
+  context.api.community.thumbnail.mockReturnValue(new Promise<Blob>((resolve) => { finish = resolve }))
+  const { container } = render(<MessageAttachments attachments={[{ id: 'sized', filename: 'sized.jpg', mime_type: 'image/jpeg', size_bytes: 10, deleted: false, width: 800, height: 400 }]}/>)
+  const before = container.querySelector<HTMLButtonElement>('.attachment-image')!
+  expect(before.style.aspectRatio).toBe('800 / 400')
+  expect(before.style.width).toBe('min(100%, 640px)')
+  const style = before.getAttribute('style')
+  finish(new Blob(['jpeg'], { type: 'image/jpeg' }))
+  await screen.findByAltText('sized.jpg')
+  expect(container.querySelector('.attachment-image')!.getAttribute('style')).toBe(style)
+})

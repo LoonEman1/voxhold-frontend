@@ -33,3 +33,8 @@
 .community-privacy[open] summary,.conversation-create[open] summary { margin-bottom:12px }
 .attachment-card a { color:var(--violet) }
 @media(max-width:600px){ .community-modal-body { padding:0 16px 20px }.modal-card > .community-settings { padding:0 16px 20px } }
+
+.attachment-image--sized { position:relative; min-height:0; overflow:hidden }
+.attachment-image--sized img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain }
+.attachment-image--placeholder { background:var(--line) !important; border-radius:6px }
+.attachment-image--placeholder span { position:absolute; inset:0; display:grid; place-items:center; padding:8px }
