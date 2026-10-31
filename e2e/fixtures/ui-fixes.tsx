@@ -1,3 +1,4 @@
+import { ThemeProvider } from '../../src/theme/ThemeContext'
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Avatar } from '../../src/components/Avatar'
@@ -29,4 +30,4 @@ function Fixture() {
     <ProfileDialog open={dialog === 'profile'} profile={profile} hasAvatar={!!version} onClose={() => setDialog('')} onSubmit={async () => {}} onAvatar={async (file, crop) => { if (file) setVersion((await api.profile.uploadAvatar('fixture', file, crop)).etag); else { await api.profile.removeAvatar('fixture'); setVersion('') } }}/>
   </AvatarProvider>
 }
-createRoot(document.getElementById('root')!).render(<Fixture/> )
+createRoot(document.getElementById('root')!).render(<ThemeProvider><Fixture/></ThemeProvider>)

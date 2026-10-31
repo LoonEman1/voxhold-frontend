@@ -797,6 +797,9 @@ test('news channels appear first, keep reader permissions and hide the empty gro
   const panel = page.getByRole('complementary', { name: 'Комментарии к публикации' })
   await expect(panel.getByText(comment.content, { exact: true })).toBeVisible()
   await expect(panel.getByLabel('Сообщение в новости-команды')).toBeVisible()
+  expect((await page.locator('.content-header h1').boundingBox())!.width).toBeGreaterThanOrEqual(200)
+  await expect(page.locator('.members-sidebar')).toBeHidden()
+  expect(await page.locator('.content-shell').evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('news-comments-desktop.png') })
   channels = [voice, text, { ...news, comments_enabled: false, unread_count: 0 }]
   emit('channels.changed', { server_id: 1 })
@@ -805,6 +808,7 @@ test('news channels appear first, keep reader permissions and hide the empty gro
   await page.setViewportSize({ width: 375, height: 812 })
   expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   await expect(page.locator('.channel-sidebar')).not.toBeInViewport()
+  for (const button of await page.locator('.content-header button:visible').all()) await expect(button).toHaveAccessibleName(/.+/)
   await page.screenshot({ path: testInfo.outputPath('news-comments-mobile.png'), animations: 'disabled' })
   await panel.getByRole('button', { name: 'Закрыть комментарии' }).click()
   channels = [voice, text]

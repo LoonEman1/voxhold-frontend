@@ -64,7 +64,6 @@ import { uiSounds, type UISound } from '../services/uiSounds'
 import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
-import { useTheme } from '../theme/ThemeContext'
 
 const LazyStreamPlayer = lazy(() => import('../components/PersistentStreamPlayer').then((module) => ({ default: module.PersistentStreamPlayer })))
 function PersistentStreamPlayer(props: ComponentProps<typeof StreamPlayer>) { return <Suspense fallback={null}><LazyStreamPlayer {...props}/></Suspense> }
@@ -96,7 +95,6 @@ function upsertPinnedMessage(current: PinnedMessage[], value: PinnedMessage) {
 export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => () => clearThumbnails(), [])
   const { user, token, logout, expire } = useAuth()
-  const { theme, toggleTheme } = useTheme()
   const notify = useToast()
   const workspaceLayout = useWorkspaceLayout()
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
@@ -2417,12 +2415,11 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         <header className="content-header">
           <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'news' ? 'news' : selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'news' ? 'Новости и объявления' : selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
           <div className="content-header__actions">
-            {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
+            {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} aria-label="Поиск" title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
             {selectedServer && <button className="header-action" onMouseEnter={() => { void loadRecordingsDialog().catch(() => undefined) }} onFocus={() => { void loadRecordingsDialog().catch(() => undefined) }} onClick={() => { recordingSyncRef.current(); setRecordingsOpen(true) }} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
-            {chatVisible && selectedChannel?.kind !== 'voice' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
-            <button className="header-action theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/><span>{theme === 'dark' ? 'Светлая' : 'Тёмная'}</span></button>
-            {selectedServer && canManage && <button className="header-action" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
-            <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
+            {chatVisible && selectedChannel?.kind !== 'voice' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} aria-label="Закрепы" title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
+            {selectedServer && canManage && <button className="header-action" aria-label="Пригласить" onClick={() => setDialog('invite')}><Icon name="userPlus"/><span>Пригласить</span></button>}
+            <button className={`header-action members-toggle ${workspaceLayout.membersOpen ? 'is-active' : ''}`} onClick={workspaceLayout.toggleMembers} aria-label={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'} title={workspaceLayout.membersOpen ? 'Скрыть участников' : 'Показать участников'}><Icon name="people"/><span>{members.length}</span></button>
           </div>
         </header>
 
