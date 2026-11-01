@@ -477,3 +477,13 @@ export interface ClientDiagnosticsPayload {
   retention_seconds: number
   events: StoredClientDiagnosticEvent[]
 }
+
+export interface AccountSession {
+  id: number
+  created_at: number
+  last_used_at: number | null
+  expires_at: number
+  user_agent: string
+  client_ip: string
+  current: boolean
+}

@@ -12,6 +12,7 @@ import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
+import { SecuritySettings, type SecurityActions } from './SecuritySettings'
 import { useTheme } from '../theme/ThemeContext'
 
 interface AsyncDialogProps {
@@ -88,7 +89,7 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
 
 export { InviteUserDialog } from './InviteUserDialog'
 
-export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false, onDeleteAccount }: AsyncDialogProps & { profile: Profile | null; onDeleteAccount?: () => Promise<void>; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false, onDeleteAccount, security }: AsyncDialogProps & { profile: Profile | null; security?: SecurityActions; onDeleteAccount?: (password: string) => Promise<void>; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const { theme, toggleTheme } = useTheme()
   const [about, setAbout] = useState('')
   const [country, setCountry] = useState('')
@@ -97,13 +98,14 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   const [avatarPending, setAvatarPending] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleteName, setDeleteName] = useState('')
+  const [deletePassword, setDeletePassword] = useState('')
   const [deletePending, setDeletePending] = useState(false)
   const [deleteError, setDeleteError] = useState('')
-  useEffect(() => { if (open) { setConfirmingDelete(false); setDeleteName(''); setDeleteError('') } }, [open, profile?.user_id])
+  useEffect(() => { if (open) { setConfirmingDelete(false); setDeleteName(''); setDeletePassword(''); setDeleteError('') } }, [open, profile?.user_id])
   const removeAccount = async () => {
-    if (!onDeleteAccount || !profile?.username || deleteName !== profile.username || deletePending || pending || avatarPending) return
+    if (!onDeleteAccount || !profile?.username || deleteName !== profile.username || !deletePassword || deletePending || pending || avatarPending) return
     setDeletePending(true); setDeleteError('')
-    try { await onDeleteAccount(); onClose() } catch (caught) { setDeleteError(humanError(caught)) } finally { setDeletePending(false) }
+    try { await onDeleteAccount(deletePassword); onClose() } catch (caught) { setDeleteError(humanError(caught)) } finally { setDeletePending(false) }
   }
   useEffect(() => { if (open) { setAbout(profile?.about ?? ''); setCountry(profile?.country_code ?? ''); setError('') } }, [open, profile])
   const submit = async (event: FormEvent) => {
@@ -120,12 +122,14 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
         <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending || avatarPending || deletePending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
       </form>
       <section className="profile-appearance" aria-label="Оформление"><h3>Оформление</h3><button type="button" className="button button--ghost theme-toggle" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/>{theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}</button></section>
+      {security && <SecuritySettings actions={security}/>}
       {onDeleteAccount && <section className="danger-zone" aria-label="Опасная зона">
         <div><h3>Опасная зона</h3><p>Удаление аккаунта удалит профиль, настройки и доступ к этому инстансу. Старые сообщения останутся обезличенными. Это действие нельзя отменить.</p></div>
         {confirmingDelete ? <div className="danger-confirm dialog-form">
           <label><span>Для подтверждения введите имя пользователя: {profile?.username}</span><input aria-label="Имя пользователя для удаления аккаунта" value={deleteName} onChange={(event) => setDeleteName(event.target.value)} autoComplete="off" spellCheck={false} disabled={deletePending}/></label>
-          <button type="button" className="button button--danger button--small" onClick={() => void removeAccount()} disabled={!profile?.username || deleteName !== profile.username || deletePending || pending || avatarPending}>{deletePending ? <span className="spinner"/> : 'Удалить аккаунт навсегда'}</button>
-          <button type="button" className="button button--ghost button--small" onClick={() => { setConfirmingDelete(false); setDeleteName(''); setDeleteError('') }} disabled={deletePending}>Отменить удаление</button>
+          <label><span>Пароль для подтверждения</span><input type="password" aria-label="Пароль для удаления аккаунта" value={deletePassword} onChange={(event) => setDeletePassword(event.target.value)} autoComplete="current-password"/></label>
+          <button type="button" className="button button--danger button--small" onClick={() => void removeAccount()} disabled={!profile?.username || deleteName !== profile.username || !deletePassword || deletePending || pending || avatarPending}>{deletePending ? <span className="spinner"/> : 'Удалить аккаунт навсегда'}</button>
+          <button type="button" className="button button--ghost button--small" onClick={() => { setConfirmingDelete(false); setDeleteName(''); setDeletePassword(''); setDeleteError('') }} disabled={deletePending}>Отменить удаление</button>
         </div> : <button type="button" className="button button--danger-outline" onClick={() => setConfirmingDelete(true)} disabled={pending || avatarPending}>Удалить аккаунт</button>}
         {deleteError && <div className="form-error" role="alert">{deleteError}</div>}
       </section>}
