@@ -30,7 +30,7 @@ export class ConversationCall {
   // registered a device key; screen video passes through unencrypted.
   private e2ee: CallE2EE | null = null
   private e2eeDeviceId = ''
-  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean) => void; ended: () => void; keyChanged?: (userId: number) => void }) {}
+  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState, encrypted: boolean) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean) => void; ended: () => void; keyChanged?: (userId: number) => void }) {}
   setToken(token: string) { this.credentials = token }
   private get token() { return typeof this.credentials === 'string' ? this.credentials : this.credentials() }
   async start() {
@@ -117,7 +117,8 @@ export class ConversationCall {
       this.e2ee.setParticipants(state.members.map((m) => ({ connectionId: `${m.user_id}:${m.session_id}`, userId: m.user_id, deviceId: m.e2ee_device_id })))
       this.e2ee.setReceiverOwners(new Map([...this.peers.values()].filter((p) => this.encryptedWith(p.member)).map((p) => [`peer:${p.member.user_id}`, `${p.member.user_id}:${p.member.session_id}`])))
     }
-    this.callbacks.state(state)
+    // Our own encryption, not member data alone: the server writes that.
+    this.callbacks.state(state, !!this.e2ee && remote.length > 0 && remote.every((m) => this.encryptedWith(m)))
     for (const signal of this.earlySignals.splice(0)) this.signal(signal)
   }
   private addPeer(member: CallMember) {

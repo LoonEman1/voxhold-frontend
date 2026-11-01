@@ -8,6 +8,12 @@
  * is distributed first and used for sending 1 s later; receivers keep previous
  * keys for 10 s (worker). Key ids cycle through 0-7, enough because no more
  * than 6 keys of one sender are alive at once.
+ *
+ * Every key carries a generation from the wall clock, kept strictly growing,
+ * so it also grows across rejoins. A receiver installs only a newer key of a
+ * sender: the relay cannot roll it back to an older key (and replay old
+ * frames), and a key sent twice does not reset the replay window. The current
+ * key is accepted once more after the sender left, since its keys were dropped.
  */
 import type { LocalDevice } from './deviceKeys'
 import { unwrapSenderKey, wrapSenderKey, type WrapContext } from './keyWrap'
@@ -61,7 +67,9 @@ interface SessionOptions {
 export class SenderKeySession {
   private readonly clock: Clock
   private members = new Map<string, RoomMember>()
-  private latest: { keyId: number; key: Uint8Array<ArrayBuffer> } | null = null
+  private latest: { keyId: number; gen: number; key: Uint8Array<ArrayBuffer> } | null = null
+  private lastGen = 0
+  private readonly received = new Map<string, { gen: number; installed: boolean }>()
   private nextKeyId = 0
   private lastRotation = -Infinity
   private rotationTimer: ReturnType<typeof setTimeout> | null = null
@@ -90,7 +98,12 @@ export class SenderKeySession {
     if (this.closed) return
     const next = new Map(list.filter((member) => member.userId !== this.options.self.userId || member.deviceId !== this.options.self.deviceId).map((member) => [senderId(member), member]))
     const changed = next.size !== this.members.size || [...next.keys()].some((id) => !this.members.has(id))
-    for (const id of this.members.keys()) if (!next.has(id)) this.options.sink.removeSender(id)
+    for (const id of this.members.keys()) {
+      if (next.has(id)) continue
+      this.options.sink.removeSender(id)
+      const seen = this.received.get(id)
+      if (seen) seen.installed = false
+    }
     this.members = next
     if (changed) this.scheduleRotation()
     const waiting = this.pending.splice(0)
@@ -114,7 +127,9 @@ export class SenderKeySession {
     const keyId = this.nextKeyId
     this.nextKeyId = (keyId + 1) % 8
     const key = crypto.getRandomValues(new Uint8Array(32))
-    this.latest = { keyId, key }
+    const gen = Math.max(this.clock.now(), this.lastGen + 1)
+    this.lastGen = gen
+    this.latest = { keyId, gen, key }
     try {
       await Promise.all([...this.members.values()].map((member) => this.sendLatest(member)))
     } catch (error) {
@@ -131,7 +146,7 @@ export class SenderKeySession {
     const latest = this.latest
     if (!latest) return
     const publicKey = await this.options.directory.publicKey(member)
-    const payload = await wrapSenderKey(this.options.self.privateKey, publicKey, this.context(this.self, member), latest.keyId, latest.key)
+    const payload = await wrapSenderKey(this.options.self.privateKey, publicKey, this.context(this.self, member), latest.keyId, latest.gen, latest.key)
     if (!this.closed && this.members.has(senderId(member))) this.options.transport.sendKey(member, payload)
   }
 
@@ -146,7 +161,12 @@ export class SenderKeySession {
     try {
       const publicKey = await this.options.directory.publicKey(from)
       const unwrapped = await unwrapSenderKey(this.options.self.privateKey, publicKey, this.context(from, this.self), payload)
-      if (!this.closed && this.members.has(senderId(from))) this.options.sink.addReceiveKey(senderId(from), unwrapped.keyId, unwrapped.key)
+      const id = senderId(from)
+      if (this.closed || !this.members.has(id)) return
+      const seen = this.received.get(id)
+      if (seen && (unwrapped.gen < seen.gen || (unwrapped.gen === seen.gen && seen.installed))) return
+      this.received.set(id, { gen: unwrapped.gen, installed: true })
+      this.options.sink.addReceiveKey(id, unwrapped.keyId, unwrapped.key)
     } catch (error) {
       this.options.onError?.(error)
     }

@@ -15,6 +15,7 @@ import { Modal } from './Modal'
 import { SlowmodeSettings, type SlowmodeActions } from './SlowmodeSettings'
 import { E2EESettings, type E2EEPolicyActions } from './E2EESettings'
 import { SafetyCode } from './SafetyCode'
+import type { SafetyCodeResult } from '../services/e2ee/safetyCode'
 import { BanManager } from './BanManager'
 import { SecuritySettings, type SecurityActions } from './SecuritySettings'
 import { useTheme } from '../theme/ThemeContext'
@@ -141,7 +142,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout, safetyCode }: AsyncDialogProps & { safetyCode?: () => Promise<string>; onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
+export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout, safetyCode }: AsyncDialogProps & { safetyCode?: () => Promise<SafetyCodeResult>; onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
   const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
