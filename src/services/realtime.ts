@@ -186,6 +186,10 @@ export class RealtimeClient {
     if (!sent) this.awaitingUnsubscribe = false
   }
 
+  sendTyping(serverId: number, channelId: number) {
+    return this.send('typing.start', { server_id: serverId, channel_id: channelId })
+  }
+
   joinVoice(serverId: number, channelId: number, selfMute: boolean, selfDeaf: boolean) {
     return this.send('voice.join', {
       server_id: serverId,
@@ -392,7 +396,11 @@ export class RealtimeClient {
           window.dispatchEvent(new CustomEvent('voxhold:notification', { detail: payload.data }))
         } else if (payload.type === 'notification.settings_updated' && payload.data) {
           this.options.onNotificationSettings?.(payload.data as NotificationSettings)
+        } else if (payload.type === 'typing' && payload.data) {
+          window.dispatchEvent(new CustomEvent('voxhold:typing', { detail: payload.data }))
         } else if (payload.type === 'message.created' && payload.data) {
+          const posted = payload.data as Message
+          window.dispatchEvent(new CustomEvent('voxhold:typing', { detail: { channel_id: posted.channel_id, user_id: posted.author?.user_id, expires_at: 0 } }))
           this.options.onMessage(payload.data as Message)
         } else if (payload.type === 'message.reactions_changed' && payload.data) {
           this.options.onMessageReactions?.(payload.data as MessageReactions)

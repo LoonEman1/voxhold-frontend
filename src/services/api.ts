@@ -1,4 +1,6 @@
 import type {
+  ServerBan,
+  AccountSession,
   ApiErrorPayload,
   ChannelRecording,
   RecordingStorage,
@@ -131,8 +133,18 @@ export function createApi(transport: Transport) {
         authorized(token, { path: '/api/v1/auth/logout', method: 'POST' }) as Promise<void>,
     },
     account: {
-      delete: (token: string) =>
-        authorized(token, { path: '/api/v1/account', method: 'DELETE' }) as Promise<void>,
+      delete: (token: string, password: string) =>
+        authorized(token, { path: '/api/v1/account', method: 'DELETE', body: { password } }) as Promise<void>,
+      changePassword: (token: string, current: string, next: string, confirm: string) =>
+        authorized(token, { path: '/api/v1/me/password', method: 'PUT', body: { current_password: current, new_password: next, new_password_confirm: confirm } }) as Promise<void>,
+      sessions: async (token: string) => {
+        const payload = (await authorized(token, { path: '/api/v1/me/sessions' })) as { sessions?: AccountSession[] } | null
+        return Array.isArray(payload?.sessions) ? payload.sessions : []
+      },
+      revokeSession: (token: string, id: number) =>
+        authorized(token, { path: `/api/v1/me/sessions/${url(id)}`, method: 'DELETE' }) as Promise<void>,
+      revokeOtherSessions: (token: string) =>
+        authorized(token, { path: '/api/v1/me/sessions', method: 'DELETE' }) as Promise<void>,
     },
     profile: {
       // The version makes each URL immutable, so the HTTP cache needs no revalidation.
@@ -159,10 +171,15 @@ export function createApi(transport: Transport) {
           method: 'PATCH',
           body: { role },
         }) as Promise<ServerMember>,
-      banMember: (token: string, serverId: number, userId: number) =>
+      listBans: async (token: string, serverId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans` })) as { bans: ServerBan[] }).bans,
+      unbanMember: (token: string, serverId: number, userId: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`, method: 'DELETE' }) as Promise<void>,
+      banMember: (token: string, serverId: number, userId: number, reason?: string) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`,
           method: 'POST',
+          ...(reason ? { body: { reason } } : {}),
         }) as Promise<void>,
     },
     recordings: {

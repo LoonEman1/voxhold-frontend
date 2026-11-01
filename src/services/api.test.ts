@@ -69,11 +69,12 @@ describe('Voxhold API client', () => {
   it('deletes the current instance account', async () => {
     const { api, request } = mockTransport({ status: 204, data: null })
 
-    await api.account.delete('session')
+    await api.account.delete('session', 'secret-pass')
 
     expect(request).toHaveBeenCalledWith({
       path: '/api/v1/account',
       method: 'DELETE',
+      body: { password: 'secret-pass' },
       token: 'session',
     })
   })

@@ -1,0 +1,7 @@
+.message-code { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, currentColor 12%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+.message-codeblock { display: block; margin: 4px 0; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, currentColor 10%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-quote { display: block; margin: 2px 0; padding-left: 10px; border-left: 3px solid color-mix(in srgb, currentColor 35%, transparent); opacity: 0.9; }
+.message-spoiler { border-radius: 4px; cursor: pointer; background: currentColor; color: transparent; user-select: none; }
+.message-spoiler > * { color: transparent; }
+.message-spoiler.is-shown { background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; cursor: auto; user-select: auto; }
+.message-spoiler.is-shown > * { color: inherit; }
