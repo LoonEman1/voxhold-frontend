@@ -133,4 +133,17 @@ describe('time-limited TURN credentials', () => {
     await service.load()
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+
+  it('keeps still-valid credentials when the early refresh fails', async () => {
+    const soon = Math.floor(Date.now() / 1000) + 60
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ ...fullPayload, credential_expires_at: soon })
+      .mockRejectedValue(new Error('offline'))
+    const service = createWebRTCConfigService({ fetcher, sleep: async () => {} })
+    await service.load()
+    const state = await service.load()
+    expect(state.degraded).toBe(false)
+    expect(firstServer(state.configuration).credential).toBe('secret')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
 })

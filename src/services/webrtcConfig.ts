@@ -92,6 +92,11 @@ export function createWebRTCConfigService(options: WebRTCConfigServiceOptions) {
           })
           return { configuration: cloneRTCConfiguration(cache), degraded: false }
         } catch (error) {
+          // An early refresh failed, but the cached credentials still work:
+          // keep them instead of delaying the call or degrading to host-only.
+          if (cache && cacheExpiresAtMs !== null && cacheExpiresAtMs > Date.now()) {
+            return { configuration: cloneRTCConfiguration(cache), degraded: false }
+          }
           if (attempt >= retryDelaysMs.length) {
             clientDiagnostics.record('webrtc', 'webrtc_config_degraded', 'warn', {
               error_name: error instanceof Error ? error.name : typeof error,
