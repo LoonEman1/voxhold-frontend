@@ -931,6 +931,7 @@ test('account deletion belongs to the profile and requires a typed username', as
   const confirmation = dialog.getByRole('button', { name: 'Удалить аккаунт навсегда' })
   await expect(confirmation).toBeDisabled()
   await dialog.getByLabel('Имя пользователя для удаления аккаунта').fill('Александр')
+  await dialog.getByLabel('Пароль для удаления аккаунта').fill('secret-pass')
   await expect(confirmation).toBeEnabled()
   expect(deletes).toBe(0)
   await dialog.getByRole('button', { name: 'Отменить удаление' }).click()
