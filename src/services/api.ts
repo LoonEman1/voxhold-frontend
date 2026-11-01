@@ -171,6 +171,8 @@ export function createApi(transport: Transport) {
           method: 'PATCH',
           body: { role },
         }) as Promise<ServerMember>,
+      setMemberTimeout: (token: string, serverId: number, userId: number, until: number | null) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/members/${url(userId)}/timeout`, method: 'PUT', body: { until } }) as Promise<void>,
       listBans: async (token: string, serverId: number) =>
         ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans` })) as { bans: ServerBan[] }).bans,
       unbanMember: (token: string, serverId: number, userId: number) =>

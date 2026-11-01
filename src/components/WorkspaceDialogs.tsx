@@ -139,7 +139,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
+export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout }: AsyncDialogProps & { onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
   const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
@@ -174,6 +174,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
           <CustomRoleBadges userId={profile.user_id}/>{onMessage && <button className="button button--primary" onClick={onMessage}>Написать</button>}
           {canChangeRole && <div className="member-role-control"><span>Роль</span><div><button className={role === 'member' ? 'is-active' : ''} onClick={() => void changeRole('member')} disabled={pending}>Участник</button><button className={role === 'admin' ? 'is-active' : ''} onClick={() => void changeRole('admin')} disabled={pending}>Администратор</button></div></div>}
           {canBan && <div className="member-kick-control">{confirmKick ? <><span>Забанить аккаунт {profile.username} на всём инстансе?</span><input aria-label="Причина бана" placeholder="Причина (необязательно)" maxLength={500} value={banReason} onChange={(event) => setBanReason(event.target.value)}/><button className="button button--danger button--small" onClick={() => void ban()} disabled={pending}>{pending ? <span className="spinner"/> : 'Забанить'}</button><button className="button button--ghost button--small" onClick={() => setConfirmKick(false)} disabled={pending}>Отмена</button></> : <button className="button button--danger-outline button--small" onClick={() => setConfirmKick(true)}>Забанить аккаунт</button>}</div>}
+          {canBan && onTimeout && <TimeoutControl onTimeout={onTimeout} onError={setManageError}/>}
           {manageError && <div className="form-error" role="alert">{manageError}</div>}
         </section>}
       </div>}
@@ -308,5 +309,29 @@ export function ServerSettingsDialog({
       {error && <div className="form-error" role="alert">{error}</div>}
       </>}
     </Modal>
+  )
+}
+
+const timeoutChoices: [number, string][] = [[300, '5 минут'], [3600, '1 час'], [86400, '1 день'], [604800, '1 неделя']]
+
+function TimeoutControl({ onTimeout, onError }: { onTimeout(seconds: number | null): Promise<void>; onError(message: string): void }) {
+  const [seconds, setSeconds] = useState(timeoutChoices[0]![0])
+  const [pending, setPending] = useState(false)
+  const run = async (value: number | null) => {
+    if (pending) return
+    setPending(true); onError('')
+    try { await onTimeout(value) } catch (caught) { onError(humanError(caught)) } finally { setPending(false) }
+  }
+  return (
+    <div className="member-role-control" aria-label="Тайм-аут">
+      <span>Тайм-аут</span>
+      <div>
+        <select aria-label="Длительность тайм-аута" value={seconds} onChange={(event) => setSeconds(Number(event.target.value))} disabled={pending}>
+          {timeoutChoices.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <button type="button" onClick={() => void run(seconds)} disabled={pending}>Выдать</button>
+        <button type="button" onClick={() => void run(null)} disabled={pending}>Снять</button>
+      </div>
+    </div>
   )
 }
