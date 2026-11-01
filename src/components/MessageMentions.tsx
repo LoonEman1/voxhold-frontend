@@ -1,4 +1,6 @@
 import { Fragment } from 'react'
+import { FormattedMessage } from './FormattedMessage'
+import './message-format.css'
 import { messageLinks } from '../lib/messageLinks'
 import { parseMentions, mentionsMe, type Mention, type MentionDirectory } from '../lib/mentions'
 import type { ServerRole } from '../domain/types'
