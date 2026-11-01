@@ -160,7 +160,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       load: () => api.channels.getSlowmode(token, serverId, channelId),
       save: async (seconds) => { await api.channels.setSlowmode(token, serverId, channelId, seconds) },
     }
-  }, [token, editingChannel])
+  }, [token, editingChannel, api.channels])
   const [viewedProfile, setViewedProfile] = useState<Profile | null>(null)
   const [viewedProfileRole, setViewedProfileRole] = useState<ServerRole>('member')
   const [viewedProfileLoading, setViewedProfileLoading] = useState(false)
