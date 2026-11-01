@@ -40,7 +40,7 @@ it('preserves stable role mentions when retrying a rejected send', async () => {
   const onSend = vi.fn().mockRejectedValueOnce(new Error('Очередь заполнена')).mockResolvedValue(undefined)
   render(<ChatPanel
     channel={channel} messages={[]} loading={false} loadingOlder={false} hasMore={false}
-    loadingNewer={false} hasNewer={false} currentUserId={2} canManage={false} members={[]}
+    loadingNewer={false} hasNewer={false} currentUserId={2} currentRole="admin" canManage={false} members={[]}
     pinnedMessageIds={new Set()} focusedMessageId={null} channelReads={{}}
     onLoadOlder={vi.fn(async () => undefined)} onLoadNewer={vi.fn(async () => undefined)}
     onReturnToLatest={vi.fn(async () => undefined)} onReadThrough={vi.fn()}

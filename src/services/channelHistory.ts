@@ -1,6 +1,7 @@
 import type { Message, MessageSyncPage, MessageReactions, MessageReply } from '../domain/types'
 import type { VoxholdApi } from './api'
 import { newerMessage, resolveReplyReferences, withReactions } from '../lib/messageRevisions'
+import { humanError } from '../lib/format'
 
 export const MAX_CACHED_CHANNELS = 8
 export const MAX_CHANNEL_MESSAGES = 1_000
@@ -331,7 +332,7 @@ export class ChannelHistoryStore {
     } catch (error) {
       // A WS acknowledgement may have arrived while the HTTP reply was lost.
       if (!entry.state.pending.some((item) => item.id === id)) return
-      this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? { ...item, status: 'failed', error: error instanceof Error ? error.message : 'Ошибка сети' } : item) })
+      this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? { ...item, status: 'failed', error: error instanceof Error ? humanError(error) : 'Ошибка сети' } : item) })
     } finally { clearTimeout(timer); entry.controller.signal.removeEventListener('abort', abort); this.trim() }
   }
   async forward(serverId: number, channelId: number, source: ForwardSource, key: string): Promise<Message> {
