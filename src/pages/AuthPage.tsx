@@ -94,6 +94,7 @@ export function AuthPage({ invite, inviteToken }: { invite?: InviteLinkPreview; 
             <label>
               <span>Имя пользователя</span>
               <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="например, neva" minLength={3} maxLength={32} required autoFocus />
+              {mode !== 'login' && <small>3–32 символа: буквы, цифры, пробел, «_», «.», «-». Регистр не важен: «Admin» и «admin» — одно имя.</small>}
             </label>
             <label>
               <span>Пароль</span>

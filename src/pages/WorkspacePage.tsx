@@ -1,3 +1,5 @@
+import { useUnreadTitle } from '../hooks/useUnreadTitle'
+import type { SecurityActions } from '../components/SecuritySettings'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useServerMembers } from '../hooks/useServerMembers'
@@ -95,6 +97,15 @@ function upsertPinnedMessage(current: PinnedMessage[], value: PinnedMessage) {
 export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => () => clearThumbnails(), [])
   const { user, token, logout, expire } = useAuth()
+  const securityActions = useMemo<SecurityActions>(() => {
+    const need = () => { if (!token) throw new Error('Сессия истекла'); return token }
+    return {
+      changePassword: (current, next, confirm) => api.account.changePassword(need(), current, next, confirm),
+      loadSessions: () => api.account.sessions(need()),
+      revokeSession: (id) => api.account.revokeSession(need(), id),
+      revokeOthers: () => api.account.revokeOtherSessions(need()),
+    }
+  }, [token, api.account])
   const notify = useToast()
   const workspaceLayout = useWorkspaceLayout()
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
@@ -104,6 +115,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
+  const unreadTotal = useMemo(() => channels.reduce((sum, channel) => sum + (channel.unread_count ?? 0), 0), [channels])
+  useUnreadTitle(unreadTotal, 0)
   const [notificationChannel, setNotificationChannel] = useState<Channel | null>(null)
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null)
@@ -2163,9 +2176,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     notify(`Роль ${updated.username} обновлена`, 'success')
   }
 
-  const banViewedMember = async () => {
+  const banViewedMember = async (reason?: string) => {
     if (!token || !selectedServerId || !viewedProfile) return
-    await api.servers.banMember(token, selectedServerId, viewedProfile.user_id)
+    await api.servers.banMember(token, selectedServerId, viewedProfile.user_id, reason)
     setMembers((current) => current.filter((member) => member.user_id !== viewedProfile.user_id))
     setDialog(null)
     notify(`${viewedProfile.username} забанен на инстансе`, 'success')
@@ -2508,7 +2521,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
       <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} accessPanel={dialog === 'channelSettings' && editingChannel && token ? <Suspense fallback={<p>Загружаем…</p>}>{editingChannel.kind === 'news' && <NewsChannelSettings key={`news-${editingChannel.id}`} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/>}<ChannelAccessSettings key={editingChannel.id} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/></Suspense> : null} onRename={renameChannel} onRemove={deleteChannel}/>
       <InviteUserDialog onListLinks={listInviteLinks} onRevokeLink={revokeInviteLink} open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
-      <ProfileDialog onDeleteAccount={servers.some((server) => server.role === 'owner') ? undefined : async () => { if (!token) throw new Error('Сессия истекла'); await api.account.delete(token); expire() }} open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && !!avatarVersions.get(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
+      <ProfileDialog security={securityActions} onDeleteAccount={servers.some((server) => server.role === 'owner') ? undefined : async (password: string) => { if (!token) throw new Error('Сессия истекла'); await api.account.delete(token, password); expire() }} open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && !!avatarVersions.get(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog onMessage={viewedProfile && viewedProfile.user_id !== user?.id ? () => { window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: viewedProfile.user_id })); setDialog(null) } : undefined} online={onlineUserIds.has(viewedProfile?.user_id ?? 0)} open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>
       {dialog === 'voiceSettings' && <VoiceSettingsDialog open onClose={() => setDialog(null)} preferences={voicePreferences} devices={voiceDevices} getInputLevel={getVoiceInputLevel} voiceActive={!!voiceSession} loadingDevices={voiceDevicesLoading} onChange={updateVoicePreferences} onRefreshDevices={refreshVoiceDevices}/>}
       {dialog === 'streamSettings' && <Suspense fallback={<ModalLoading title="Трансляция экрана" onClose={() => setDialog(null)}/>}> <StreamSettingsDialog open={dialog === 'streamSettings'} busy={streamStatus !== 'idle'} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/> </Suspense>}
