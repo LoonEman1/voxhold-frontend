@@ -7,8 +7,8 @@ import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 
 interface Option { key: string; label: string; detail: string; token: string; userId?: number }
-export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members: providedMembers, membersById, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel }: {
-  hasAttachments?: boolean; focusKey?: number; submitDisabled?: boolean; draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; sending: boolean; channelName: string; members?: ServerMember[]; membersById?: ReadonlyMap<number, ServerMember>; error: string
+export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members: providedMembers, membersById, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel, canMentionRoles = false }: {
+  hasAttachments?: boolean; focusKey?: number; submitDisabled?: boolean; draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; canMentionRoles?: boolean; sending: boolean; channelName: string; members?: ServerMember[]; membersById?: ReadonlyMap<number, ServerMember>; error: string
 }) {
   const members = useMemo(() => providedMembers ?? [...(membersById?.values() ?? [])], [providedMembers, membersById])
   const input = useRef<HTMLTextAreaElement>(null)
@@ -40,9 +40,9 @@ export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDi
   const options = useMemo<Option[]>(() => {
     if (needle === null || dismissed === queryKey) return []
     const users = members.filter((member) => member.username.toLowerCase().includes(needle)).slice(0, 6).map((member) => ({ key: `user-${member.user_id}`, label: member.username, detail: roleMeta[member.role].label, token: `<@${member.user_id}>`, userId: member.user_id }))
-    const roles = (['owner', 'admin', 'member'] as ServerRole[]).filter((role) => `${roleMeta[role].label} ${role}`.toLowerCase().includes(needle)).map((role) => ({ key: `role-${role}`, label: roleMeta[role].shortLabel, detail: 'Все участники с этой ролью', token: `<@&${role}>` }))
+    const roles = (canMentionRoles ? ['owner', 'admin', 'member'] as ServerRole[] : []).filter((role) => `${roleMeta[role].label} ${role}`.toLowerCase().includes(needle)).map((role) => ({ key: `role-${role}`, label: roleMeta[role].shortLabel, detail: 'Все участники с этой ролью', token: `<@&${role}>` }))
     return [...users, ...roles]
-  }, [members, needle, queryKey, dismissed]) // The query key includes caret/text.
+  }, [members, needle, queryKey, dismissed, canMentionRoles]) // The query key includes caret/text.
   const choose = (option: Option) => {
     const start = caret - (query?.[1]?.length ?? 0) - 1
     const label = `@${option.label}`

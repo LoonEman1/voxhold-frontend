@@ -45,7 +45,7 @@ it('updates settings from another device while ignoring a late initial load', as
 })
 it('inserts stable user/role tokens with the keyboard and keeps Shift+Enter for newlines', () => {
   const send = vi.fn()
-  function Composer() { const [draft, setDraft] = useState(''); return <MentionComposer draft={draft} onChange={setDraft} onSubmit={send} sending={false} channelName="general" members={members} error=""/> }
+  function Composer() { const [draft, setDraft] = useState(''); return <MentionComposer canMentionRoles draft={draft} onChange={setDraft} onSubmit={send} sending={false} channelName="general" members={members} error=""/> }
   render(<Composer/>); const input = screen.getByRole('textbox')
   fireEvent.change(input, { target: { value: '@Nik', selectionStart: 4 } })
   expect(screen.getByRole('option', { name: /Nikita/ })).toBeTruthy()
@@ -71,4 +71,9 @@ it('does not close a new dialog after an older save finishes after unmount', asy
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить' })); first.unmount()
   complete({ server_id: 1, channel_id: 7, mode: 'all' }); await Promise.resolve()
   expect(input.onClose).not.toHaveBeenCalled(); expect(input.onSaved).not.toHaveBeenCalled()
+})
+it('does not offer role mentions to users who cannot ping roles', () => {
+  render(<MentionComposer draft="" onChange={() => {}} onSubmit={() => {}} sending={false} channelName="general" members={members} error=""/>)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '@Адм', selectionStart: 4 } })
+  expect(screen.queryByRole('option', { name: /Админ/ })).toBeNull()
 })
