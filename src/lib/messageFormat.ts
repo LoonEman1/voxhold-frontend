@@ -30,7 +30,27 @@ function findSingleStar(src: string, from: number, to: number): number {
   return -1
 }
 
-function parseInline(src: string, from: number, to: number, depth: number): FormatNode[] {
+const MARKERS = new Set(['*', '~', '|', '`', BACKSLASH])
+
+/**
+ * Neutralizes markers inside protected ranges (links), so that
+ * https://example.com/a*b*c stays one link. A trailing marker run stays live:
+ * in "**https://example.com**" the link regex swallows the closing "**", which
+ * must still end the bold.
+ */
+function maskProtected(content: string, ranges: readonly { start: number; end: number }[]): string {
+  if (!ranges.length) return content
+  const units = content.split('')
+  for (const range of ranges) {
+    let end = Math.min(range.end, units.length)
+    while (end > range.start && MARKERS.has(units[end - 1] as string)) end--
+    for (let index = Math.max(0, range.start); index < end; index++) if (MARKERS.has(units[index] as string)) units[index] = 'x'
+  }
+  return units.join('')
+}
+
+// src is the masked text used to find markers; original provides code text.
+function parseInline(src: string, original: string, from: number, to: number, depth: number): FormatNode[] {
   const out: FormatNode[] = []
   let textStart = from
   let i = from
@@ -46,7 +66,7 @@ function parseInline(src: string, from: number, to: number, depth: number): Form
       const fence = src.slice(i, run)
       const close = src.indexOf(fence, run)
       if (close > run && close + fence.length <= to) {
-        flush(i); out.push({ type: 'code', text: src.slice(run, close) }); i = close + fence.length; textStart = i; continue
+        flush(i); out.push({ type: 'code', text: original.slice(run, close) }); i = close + fence.length; textStart = i; continue
       }
       i = run; continue
     }
@@ -57,7 +77,7 @@ function parseInline(src: string, from: number, to: number, depth: number): Form
         if (close > i + 2 && close + 2 <= to) {
           flush(i)
           const type = pair === '**' ? 'bold' : pair === '~~' ? 'strike' : 'spoiler'
-          out.push({ type, children: parseInline(src, i + 2, close, depth + 1) })
+          out.push({ type, children: parseInline(src, original, i + 2, close, depth + 1) })
           i = close + 2; textStart = i; continue
         }
         i += 2; continue
@@ -65,7 +85,7 @@ function parseInline(src: string, from: number, to: number, depth: number): Form
       if (ch === '*' && src[i + 1] !== '*' && src[i + 1] !== ' ' && src[i + 1] !== '\n') {
         const close = findSingleStar(src, i + 1, to)
         if (close > i + 1 && src[close - 1] !== ' ') {
-          flush(i); out.push({ type: 'italic', children: parseInline(src, i + 1, close, depth + 1) }); i = close + 1; textStart = i; continue
+          flush(i); out.push({ type: 'italic', children: parseInline(src, original, i + 1, close, depth + 1) }); i = close + 1; textStart = i; continue
         }
       }
     }
@@ -75,16 +95,18 @@ function parseInline(src: string, from: number, to: number, depth: number): Form
   return out
 }
 
-export function parseFormatting(content: string): FormatNode[] {
+/** `protect` lists source ranges (links) whose inner markers stay literal. */
+export function parseFormatting(content: string, protect: readonly { start: number; end: number }[] = []): FormatNode[] {
   if (content.length === 0 || content.length > MAX_FORMAT_LENGTH) return content ? [{ type: 'text', start: 0, end: content.length }] : []
+  const src = maskProtected(content, protect)
   const out: FormatNode[] = []
   let paragraphStart = 0
   let pos = 0
-  const flushParagraph = (end: number) => { if (end > paragraphStart) out.push(...parseInline(content, paragraphStart, end, 0)) }
+  const flushParagraph = (end: number) => { if (end > paragraphStart) out.push(...parseInline(src, content, paragraphStart, end, 0)) }
   while (pos < content.length) {
     const lineEnd = content.indexOf('\n', pos) < 0 ? content.length : content.indexOf('\n', pos)
-    if (content.startsWith('```', pos)) {
-      const closing = content.indexOf('```', pos + 3)
+    if (src.startsWith('```', pos)) {
+      const closing = src.indexOf('```', pos + 3)
       if (closing > pos + 3) {
         flushParagraph(pos)
         out.push({ type: 'codeblock', text: content.slice(pos + 3, closing).replace(/^\n/, '').replace(/\n$/, '') })
@@ -99,7 +121,7 @@ export function parseFormatting(content: string): FormatNode[] {
       const lines: FormatNode[][] = []
       while (pos < content.length && content.startsWith('> ', pos)) {
         const end = content.indexOf('\n', pos) < 0 ? content.length : content.indexOf('\n', pos)
-        lines.push(parseInline(content, pos + 2, end, 0))
+        lines.push(parseInline(src, content, pos + 2, end, 0))
         pos = end < content.length ? end + 1 : end
       }
       out.push({ type: 'quote', lines })

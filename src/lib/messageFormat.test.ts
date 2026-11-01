@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { parseFormatting, MAX_FORMAT_LENGTH, type FormatNode } from './messageFormat'
+import { messageLinks } from './messageLinks'
 
 const text = (src: string, nodes: FormatNode[]): string =>
   nodes.map((node) => node.type === 'text' ? src.slice(node.start, node.end) : node.type === 'code' || node.type === 'codeblock' ? `[${node.type}:${node.text}]`
     : node.type === 'quote' ? `[quote:${node.lines.map((line) => text(src, line)).join('|')}]` : `[${node.type}:${text(src, node.children)}]`).join('')
 
 const render = (src: string) => text(src, parseFormatting(src))
+const renderLinked = (src: string) => text(src, parseFormatting(src, messageLinks(src)))
 
 describe('parseFormatting', () => {
+  it('keeps markers inside links literal', () => {
+    expect(renderLinked('see https://example.com/a*b*c and https://x.org/~~y~~')).toBe('see https://example.com/a*b*c and https://x.org/~~y~~')
+    expect(renderLinked('*see https://example.com/a*')).toBe('[italic:see https://example.com/a]')
+  })
+  it('still formats around a link', () => {
+    expect(renderLinked('**https://example.com**')).toBe('[bold:https://example.com]')
+    expect(renderLinked('`https://example.com/*x*`')).toBe('[code:https://example.com/*x*]')
+  })
   it('parses bold, italic, strike, spoiler and code', () => {
     expect(render('a **b** *c* ~~d~~ ||e|| `f`')).toBe('a [bold:b] [italic:c] [strike:d] [spoiler:e] [code:f]')
   })

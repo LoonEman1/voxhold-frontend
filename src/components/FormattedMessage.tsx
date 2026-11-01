@@ -1,5 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react'
 import { parseFormatting, type FormatNode } from '../lib/messageFormat'
+import { messageLinks } from '../lib/messageLinks'
 import type { Mention } from '../lib/mentions'
 
 function Spoiler({ children }: { children: ReactNode }) {
@@ -41,5 +42,6 @@ export function FormattedMessage({ content, mentions, renderText }: {
       case 'quote': return <span key={index} className="message-quote">{node.lines.map((line, lineIndex) => <Fragment key={lineIndex}>{lineIndex > 0 && <br/>}{render(line)}</Fragment>)}</span>
     }
   })
-  return <>{render(parseFormatting(content))}</>
+  // Links keep their markers literal, so a URL is never split across nodes.
+  return <>{render(parseFormatting(content, messageLinks(content)))}</>
 }
