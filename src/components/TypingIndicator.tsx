@@ -21,7 +21,9 @@ export function TypingIndicator({ channelId, currentUserId, membersById }: { cha
       if (!detail || detail.channel_id !== channelId || detail.user_id === currentUserId) return
       setTyping((current) => {
         const next = new Map(current)
-        if (detail.expires_at > 0) next.set(detail.user_id, Math.min(detail.expires_at * 1000, Date.now() + 6000))
+        // The server's expires_at only marks a live event (0 = posted): its
+        // clock may differ from ours, so the 6 s lifetime is counted locally.
+        if (detail.expires_at > 0) next.set(detail.user_id, Date.now() + 6000)
         else next.delete(detail.user_id)
         return next
       })
