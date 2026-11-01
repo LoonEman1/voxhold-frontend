@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { BanManager } from './BanManager'
