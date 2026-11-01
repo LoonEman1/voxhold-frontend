@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { act, render, screen } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import type { ServerMember } from '../domain/types'
