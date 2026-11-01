@@ -19,7 +19,8 @@ describe('parseFormatting', () => {
     expect(render('a ~~b')).toBe('a ~~b')
   })
   it('honours escapes', () => {
-    expect(render('\*not italic\*')).toBe('*not italic*')
+    const slash = String.fromCharCode(92)
+    expect(render(`${slash}*not italic${slash}*`)).toBe('*not italic*')
   })
   it('does not format inside code', () => {
     expect(render('`**x**`')).toBe('[code:**x**]')

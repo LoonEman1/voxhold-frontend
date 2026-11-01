@@ -12,7 +12,8 @@ export type FormatNode =
 
 export const MAX_FORMAT_LENGTH = 5120
 const MAX_DEPTH = 4
-const ESCAPABLE = new Set(['*', '~', '|', '`', '\', '>'])
+const BACKSLASH = String.fromCharCode(92)
+const ESCAPABLE = new Set(['*', '~', '|', '`', BACKSLASH, '>'])
 
 function pushText(out: FormatNode[], start: number, end: number) {
   if (end <= start) return
@@ -23,7 +24,7 @@ function pushText(out: FormatNode[], start: number, end: number) {
 
 function findSingleStar(src: string, from: number, to: number): number {
   for (let j = from; j < to; j++) {
-    if (src[j] === '\') { j++; continue }
+    if (src[j] === BACKSLASH) { j++; continue }
     if (src[j] === '*' && src[j - 1] !== '*' && src[j + 1] !== '*') return j
   }
   return -1
@@ -36,7 +37,7 @@ function parseInline(src: string, from: number, to: number, depth: number): Form
   const flush = (upTo: number) => pushText(out, textStart, upTo)
   while (i < to) {
     const ch = src[i]
-    if (ch === '\' && i + 1 < to && ESCAPABLE.has(src[i + 1] as string)) {
+    if (ch === BACKSLASH && i + 1 < to && ESCAPABLE.has(src[i + 1] as string)) {
       flush(i); pushText(out, i + 1, i + 2); i += 2; textStart = i; continue
     }
     if (ch === '`') {
