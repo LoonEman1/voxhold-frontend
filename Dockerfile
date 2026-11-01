@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
-FROM node:24-alpine AS dependencies
+# The static bundle does not depend on the target CPU: install and build once
+# on the native build platform. Only the runtime stage is per-platform, and it
+# runs no commands, so multi-platform images need no QEMU emulation.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS dependencies
 WORKDIR /app
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci

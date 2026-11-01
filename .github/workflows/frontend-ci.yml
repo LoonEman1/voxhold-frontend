@@ -4,7 +4,10 @@ on:
   pull_request:
     branches: [main, dev]
   push:
-    branches: [main]
+    # dev does not require PR branches to be up to date, so its pushes run the
+    # tests to catch PRs that pass alone but break together. They never build
+    # or publish images.
+    branches: [main, dev]
     tags: ['v*.*.*']
   workflow_dispatch:
 
@@ -13,7 +16,10 @@ permissions:
 
 concurrency:
   group: frontend-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR and dev runs are cancelled: only the latest state matters.
+  # A main or tag run may be publishing images and a release, so it always
+  # runs to completion.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   IMAGE_NAME: ghcr.io/looneman1/voxhold-frontend
@@ -39,8 +45,48 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/release-plan.py
 
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Classify changed files
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+        # Documentation-only PRs skip tests, browser runs and image builds.
+        # Skipped required jobs report success, so these PRs still merge.
+        # Any doubt runs everything.
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo code=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! files="$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)" || [ -z "$files" ]; then
+            echo '::warning::Cannot list changed files; running every check.'
+            echo code=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" | grep -Evq '(\.md$|^docs/|^LICENSE$)'; then
+            echo code=true >> "$GITHUB_OUTPUT"
+          else
+            echo 'Documentation-only change: tests, browser runs and image builds are skipped.'
+            echo code=false >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Test
+    needs: changes
+    # Runs unless the change is documentation-only; a failed classification
+    # leaves the output empty and therefore runs the checks.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -68,9 +114,16 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Formerly a separate job; it needs only Node and Docker from this runner.
+      - name: Verify production upload size boundaries
+        timeout-minutes: 5
+        run: node scripts/test-upload-proxy.mjs
+
+  # Independent of the unit tests: runs in parallel to shorten PR feedback.
   client-performance:
     name: Client browser regressions
-    needs: test
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     container:
@@ -94,8 +147,8 @@ jobs:
 
   container:
     name: Build Docker image
-    if: github.event_name == 'pull_request'
-    needs: test
+    needs: changes
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -108,11 +161,13 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Validate AMD64 image
+      # Both release platforms: the build stage runs natively and the ARM64
+      # runtime stage only copies files, so no emulation is needed.
+      - name: Validate release platforms
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -121,11 +176,17 @@ jobs:
 
   browser-smoke:
     name: WebRTC browser smoke
+    needs: changes
     if: >-
+      !cancelled() &&
+      needs.changes.outputs.code != 'false' &&
       vars.VOXHOLD_E2E_BASE_URL != '' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    container:
+      # Browsers are preinstalled; keep in sync with client-performance.
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      options: --ipc=host
 
     env:
       VOXHOLD_E2E_BASE_URL: ${{ vars.VOXHOLD_E2E_BASE_URL }}
@@ -149,9 +210,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
       - name: Test server stream and ICE recovery
         run: npm run test:e2e:stream
 
@@ -164,23 +222,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  upload-proxy:
-    name: Upload proxy regression
-    needs: test
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-      - name: Verify production upload size boundaries
-        run: node scripts/test-upload-proxy.mjs
-
   publish:
     name: Publish Docker image
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && needs.release-plan.outputs.release == 'true'
-    needs: [release-plan, test, client-performance, upload-proxy]
+    needs: [release-plan, test, client-performance]
     runs-on: ubuntu-latest
 
     permissions:
@@ -190,9 +235,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
@@ -214,6 +256,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The static bundle is built once natively; each platform only gets its
+      # own nginx runtime layer, so QEMU is no longer needed.
       - name: Build and publish release image
         uses: docker/build-push-action@v7
         with:
