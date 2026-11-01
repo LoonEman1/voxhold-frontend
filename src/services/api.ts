@@ -159,6 +159,8 @@ export function createApi(transport: Transport) {
           method: 'PATCH',
           body: { role },
         }) as Promise<ServerMember>,
+      setMemberTimeout: (token: string, serverId: number, userId: number, until: number | null) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/members/${url(userId)}/timeout`, method: 'PUT', body: { until } }) as Promise<void>,
       banMember: (token: string, serverId: number, userId: number) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`,
