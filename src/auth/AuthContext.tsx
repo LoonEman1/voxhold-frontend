@@ -155,7 +155,15 @@ export function AuthProvider({
   )
   const logout = useCallback(async () => {
     const token = authRef.current?.session.token
+    const userId = authRef.current?.user.id
     persist(null)
+    if (token && userId !== undefined && typeof indexedDB !== 'undefined') {
+      // FEAT-13: the end-to-end encryption key of this device leaves with the
+      // session: forget it here and revoke it on the server.
+      await import('../services/e2ee/deviceKeys')
+        .then(({ IndexedDBStore, forgetDevice }) => forgetDevice(new IndexedDBStore(), { register: async () => undefined, revoke: (deviceId) => api.e2ee.revokeDevice(token, deviceId) }, userId))
+        .catch(() => undefined)
+    }
     if (token) {
       try {
         await api.auth.logout(token)

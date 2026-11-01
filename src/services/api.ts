@@ -1,4 +1,5 @@
 import type {
+  E2EEDevice,
   ServerBan,
   AccountSession,
   ApiErrorPayload,
@@ -366,6 +367,18 @@ export function createApi(transport: Transport) {
     webrtc: {
       config: (token: string, signal?: AbortSignal) =>
         authorized(token, { path: '/api/v1/webrtc/config', signal }) as Promise<WebRTCConfigPayload>,
+    },
+    e2ee: {
+      registerDevice: (token: string, deviceId: string, publicKey: string) =>
+        authorized(token, { path: `/api/v1/me/e2ee/devices/${url(deviceId)}`, method: 'PUT', body: { public_key: publicKey } }) as Promise<void>,
+      revokeDevice: (token: string, deviceId: string) =>
+        authorized(token, { path: `/api/v1/me/e2ee/devices/${url(deviceId)}`, method: 'DELETE' }) as Promise<void>,
+      devices: async (token: string, userId: number) =>
+        ((await authorized(token, { path: `/api/v1/users/${url(userId)}/e2ee/devices` })) as { devices?: E2EEDevice[] } | null)?.devices ?? [],
+      channelPolicy: async (token: string, serverId: number, channelId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/e2ee` })) as { required: boolean }).required,
+      setChannelPolicy: async (token: string, serverId: number, channelId: number, required: boolean) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/e2ee`, method: 'PUT', body: { required } })) as { required: boolean }).required,
     },
   }
 }

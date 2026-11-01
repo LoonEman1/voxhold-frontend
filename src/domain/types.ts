@@ -90,6 +90,8 @@ export interface Channel {
   created_by: EntityId
   created_at: number
   last_message_id?: EntityId
+  /** Voice channel that admits only end-to-end encrypting clients (FEAT-13). */
+  e2ee_required?: boolean
 }
 
 export type NotificationMode = 'all' | 'mentions' | 'none'
@@ -269,11 +271,30 @@ export interface VoiceParticipant {
   channel_id: EntityId
   self_mute: boolean
   self_deaf: boolean
+  /** Device whose key wraps this participant's voice sender key. */
+  e2ee_device_id?: string
 }
 
 export interface VoiceJoined {
   participant: VoiceParticipant
   participants: VoiceParticipant[]
+  e2ee_required?: boolean
+}
+
+/** A wrapped sender key or a key request relayed by the server (FEAT-13). */
+export interface E2EERelayEvent {
+  channel_id: EntityId
+  sender_user_id: EntityId
+  sender_device_id: string
+  sender_connection_id: string
+  payload?: string
+}
+
+export interface E2EEDevice {
+  device_id: string
+  /** Base64 of the 65-byte uncompressed P-256 point. */
+  public_key: string
+  created_at: number
 }
 
 export interface VoiceLeft {

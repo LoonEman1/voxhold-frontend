@@ -6,6 +6,7 @@ import type { StreamQualityStats } from '../services/stream'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
+import { E2EE_RECORDING_NOTICE, E2EE_STREAM_NOTICE, E2EE_VOICE_NOTICE } from '../services/e2ee/notices'
 import type { StreamPanel as LoadedStreamPanel } from './StreamPanel'
 import { lazy, Suspense, type ComponentProps } from 'react'
 const LazyStreamPanel = lazy(() => import('./StreamPanel').then((module) => ({ default: module.StreamPanel })))
@@ -18,6 +19,8 @@ interface VoicePanelProps {
   controls?: ReactNode
   chat?: ReactNode
   recordingLabel?: string
+  /** End-to-end encryption state of this channel (FEAT-13). */
+  encryption?: { active: boolean; changedKeyNames: string[] }
   channel: Channel
   activeChannel: Pick<Channel, 'id' | 'name'> | null
   participants: VoiceParticipant[]
@@ -67,7 +70,8 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel }: VoicePanelProps) {
+export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel, encryption }: VoicePanelProps) {
+  const encrypted = !!channel.e2ee_required
   const activeHere = activeChannel?.id === channel.id
   const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
@@ -81,7 +85,10 @@ export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, partici
 
   return (
     <section className="voice-stage-layout" data-voice-state={connectionStatus} data-voice-channel-id={channel.id}><div className="chat-panel voice-room voice-room--active">
-      <header className="voice-stage-status"><span><i className={connectionStatus === 'connected' ? 'connection-dot connection-dot--online' : 'connection-dot'}/>{activeHere ? statusText : channel.name}</span>{recordingLabel && <span className="recording-label"><i className="record-dot is-active"/>Записывает {recordingLabel}</span>}</header>
+      <header className="voice-stage-status"><span><i className={connectionStatus === 'connected' ? 'connection-dot connection-dot--online' : 'connection-dot'}/>{activeHere ? statusText : channel.name}</span>{encrypted && <span className="voice-e2ee-badge" title={E2EE_VOICE_NOTICE}><Icon name="lock" size={13}/>Сквозное шифрование</span>}{recordingLabel && <span className="recording-label" title={encrypted ? E2EE_RECORDING_NOTICE : undefined}><i className="record-dot is-active"/>Записывает {recordingLabel}{encrypted && <small> · {E2EE_RECORDING_NOTICE.toLowerCase()}</small>}</span>}</header>
+      {activeHere && encryption?.active && <p className="voice-e2ee-note"><Icon name="lock" size={13}/>{E2EE_VOICE_NOTICE}</p>}
+      {activeHere && encryption?.changedKeyNames.map((name) => <div key={name} className="voice-e2ee-warning" role="alert">Ключ устройства {name} изменился. Сверьте код безопасности в профиле участника</div>)}
+      {encrypted && (stream || streamMedia) && <p className="voice-e2ee-note voice-e2ee-note--muted">{E2EE_STREAM_NOTICE}</p>}
       {error && <div className="voice-error" role="alert">{error}</div>}
       {micUnavailable && onRetryMic && <button className="button button--ghost" onClick={onRetryMic}>Повторить подключение микрофона</button>}
       {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
