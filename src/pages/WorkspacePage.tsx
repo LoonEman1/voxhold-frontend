@@ -1,3 +1,4 @@
+import type { SlowmodeActions } from '../components/SlowmodeSettings'
 import { useUnreadTitle } from '../hooks/useUnreadTitle'
 import type { SecurityActions } from '../components/SecuritySettings'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
@@ -165,6 +166,14 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const profileGeneration = useRef(0)
   const personalOpenRef = useRef(false)
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null)
+  const slowmodeActions = useMemo<SlowmodeActions | undefined>(() => {
+    if (!token || !editingChannel) return undefined
+    const { server_id: serverId, id: channelId } = editingChannel
+    return {
+      load: () => api.channels.getSlowmode(token, serverId, channelId),
+      save: async (seconds) => { await api.channels.setSlowmode(token, serverId, channelId, seconds) },
+    }
+  }, [token, editingChannel, api.channels])
   const [viewedProfile, setViewedProfile] = useState<Profile | null>(null)
   const [viewedProfileRole, setViewedProfileRole] = useState<ServerRole>('member')
   const [viewedProfileLoading, setViewedProfileLoading] = useState(false)
@@ -2519,7 +2528,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       {notificationChannel && token && <Suspense fallback={null}><ChannelNotificationsDialog key={notificationChannel.id} open channel={notificationChannel} api={api} token={token} liveSettings={notificationSettings} onSaved={(value) => { notificationCenter.setSettings(value); setNotificationSettings(value) }} onClose={() => setNotificationChannel(null)} onPreviewSound={() => uiSounds.play('message_notification', voicePreferencesRef.current.uiSoundVolume || 50, voicePreferencesRef.current.outputDeviceId)}/></Suspense>}
       {forwardSource && token && <Suspense fallback={<ModalLoading title="Переслать сообщение" onClose={() => setForwardSource(null)}/>}><ForwardMessageDialog key={`${forwardSource.serverId}:${forwardSource.message.id}`} source={forwardSource} servers={servers} members={members} api={api} token={token} onClose={() => setForwardSource(null)} onForward={forwardMessage}/></Suspense>}
       <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
-      <ChannelSettingsDialog open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} accessPanel={dialog === 'channelSettings' && editingChannel && token ? <Suspense fallback={<p>Загружаем…</p>}>{editingChannel.kind === 'news' && <NewsChannelSettings key={`news-${editingChannel.id}`} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/>}<ChannelAccessSettings key={editingChannel.id} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/></Suspense> : null} onRename={renameChannel} onRemove={deleteChannel}/>
+      <ChannelSettingsDialog slowmode={slowmodeActions} open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} accessPanel={dialog === 'channelSettings' && editingChannel && token ? <Suspense fallback={<p>Загружаем…</p>}>{editingChannel.kind === 'news' && <NewsChannelSettings key={`news-${editingChannel.id}`} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/>}<ChannelAccessSettings key={editingChannel.id} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/></Suspense> : null} onRename={renameChannel} onRemove={deleteChannel}/>
       <InviteUserDialog onListLinks={listInviteLinks} onRevokeLink={revokeInviteLink} open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <ProfileDialog security={securityActions} onDeleteAccount={servers.some((server) => server.role === 'owner') ? undefined : async (password: string) => { if (!token) throw new Error('Сессия истекла'); await api.account.delete(token, password); expire() }} open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && !!avatarVersions.get(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>
       <MemberProfileDialog onMessage={viewedProfile && viewedProfile.user_id !== user?.id ? () => { window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: viewedProfile.user_id })); setDialog(null) } : undefined} online={onlineUserIds.has(viewedProfile?.user_id ?? 0)} open={dialog === 'userProfile'} onClose={() => setDialog(null)} profile={viewedProfile} role={viewedProfileRole} loading={viewedProfileLoading} error={viewedProfileError} canChangeRole={canChangeViewedRole} canBan={canBanViewedMember} onRoleChange={changeViewedMemberRole} onBan={banViewedMember}/>

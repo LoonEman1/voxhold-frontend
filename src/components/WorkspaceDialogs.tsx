@@ -12,6 +12,7 @@ import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
+import { SlowmodeSettings, type SlowmodeActions } from './SlowmodeSettings'
 import { BanManager } from './BanManager'
 import { SecuritySettings, type SecurityActions } from './SecuritySettings'
 import { useTheme } from '../theme/ThemeContext'
@@ -180,7 +181,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
   )
 }
 
-export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemove, accessPanel }: AsyncDialogProps & { accessPanel?: ReactNode; channel: Channel | null; onRename(name: string): Promise<void>; onRemove(): Promise<void> }) {
+export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemove, accessPanel, slowmode }: AsyncDialogProps & { accessPanel?: ReactNode; slowmode?: SlowmodeActions; channel: Channel | null; onRename(name: string): Promise<void>; onRemove(): Promise<void> }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -201,6 +202,7 @@ export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemo
         <label><span>Название</span><div className="input-with-prefix"><Icon name={channel?.kind === 'news' ? 'news' : channel?.kind === 'voice' ? 'volume' : 'hash'} size={16}/><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required /></div></label>
         <button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button>
       </form>
+      {slowmode && channel && channel.kind === 'text' && <SlowmodeSettings actions={slowmode} channelId={channel.id}/>}
       {accessPanel}
       <div className="danger-zone"><div><h3>Удалить канал</h3><p>Канал и его история исчезнут для всех участников. Это действие нельзя отменить.</p></div>{confirming ? <div className="danger-confirm"><span>Точно удалить «{channel?.name}»?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить канал</button>}</div>
       {error && <div className="form-error dialog-standalone-error" role="alert">{error}</div>}

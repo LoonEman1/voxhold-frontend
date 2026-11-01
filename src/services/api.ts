@@ -204,6 +204,10 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      getSlowmode: async (token: string, serverId: number, channelId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/slowmode` })) as { seconds: number }).seconds,
+      setSlowmode: (token: string, serverId: number, channelId: number, seconds: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/slowmode`, method: 'PUT', body: { seconds } }) as Promise<unknown>,
       unreadCounts: (token: string, serverId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/notification-counts`, signal }) as Promise<Array<{ channel_id: number; unread_count: number }>>,
       news: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
