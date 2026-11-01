@@ -1,3 +1,4 @@
+import { useUnreadTitle } from '../hooks/useUnreadTitle'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useServerMembers } from '../hooks/useServerMembers'
@@ -104,6 +105,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
+  const unreadTotal = useMemo(() => channels.reduce((sum, channel) => sum + (channel.unread_count ?? 0), 0), [channels])
+  useUnreadTitle(unreadTotal, 0)
   const [notificationChannel, setNotificationChannel] = useState<Channel | null>(null)
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null)
