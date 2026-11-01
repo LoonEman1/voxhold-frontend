@@ -29,7 +29,7 @@ export function createKeyDirectory(fetchDevices: (userId: number) => Promise<E2E
       if (trust === 'changed') onKeyChanged(userId)
       return new Map(list.map((device) => [device.device_id, importDevicePublicKey(base64Decode(device.public_key))]))
     })
-    devices.catch(() => users.delete(userId))
+    devices.catch(() => { if (users.get(userId)?.devices === devices) users.delete(userId) })
     users.set(userId, { at: Date.now(), devices })
     return devices
   }

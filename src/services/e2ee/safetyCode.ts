@@ -2,6 +2,15 @@ import type { E2EEStore } from './deviceKeys'
 
 export interface PartyKeys { userId: number; publicKeys: string[] }
 
+export interface SafetyCodeResult {
+  code: string
+  /** Device keys in the code: an unknown extra device is a warning sign. */
+  myDevices: number
+  theirDevices: number
+  /** Their keys differ from the ones this browser saw before (calls share the record). */
+  keyChanged: boolean
+}
+
 /**
  * Security code of two users (FEAT-13): SHA-256 over the sorted pairs
  * (user id, sorted base64 device keys), stretched to 60 bytes with a counter

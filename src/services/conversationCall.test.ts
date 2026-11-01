@@ -28,7 +28,7 @@ it('keeps a newer membership event when the initial HTTP snapshot arrives late',
   complete({ conversation_id: 7, revision: 1, members: [mine] })
   await starting
   expect(state).toHaveBeenCalledTimes(1)
-  expect(state).toHaveBeenLastCalledWith(latest)
+  expect(state).toHaveBeenLastCalledWith(latest, false)
   expect(close).not.toHaveBeenCalled()
   call.close()
   expect(close).toHaveBeenCalledOnce()

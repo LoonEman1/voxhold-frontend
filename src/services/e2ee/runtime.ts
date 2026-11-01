@@ -3,9 +3,10 @@
  * plumbing, IndexedDB and the worker glue out of the main WorkspacePage chunk.
  */
 import type { VoxholdApi } from '../api'
-import { IndexedDBStore, ensureDevice } from './deviceKeys'
+import { IndexedDBStore, ensureDevice, type E2EEStore } from './deviceKeys'
+import { base64Decode, base64Encode } from './keyWrap'
 import { e2eeTransformMode } from './mediaTransform'
-import { safetyCode } from './safetyCode'
+import { rememberPeerKeys, safetyCode, type SafetyCodeResult } from './safetyCode'
 import { E2EE_RECORDING_NOTICE } from './notices'
 import type { SenderKeyTransport } from './senderKeys'
 import { CallE2EE, createKeyDirectory } from './voiceE2EE'
@@ -40,11 +41,25 @@ export async function openCallE2EE(options: OpenOptions) {
   return { e2ee, deviceId: device.deviceId }
 }
 
-/** Security code of two users from their registered device keys. */
-export async function userSafetyCode(api: VoxholdApi, token: string, me: number, other: number) {
-  const [mine, theirs] = await Promise.all([api.e2ee.devices(token, me), api.e2ee.devices(token, other)])
-  if (!mine.length || !theirs.length) throw new Error('Код появится, когда вы оба подключитесь к каналу со сквозным шифрованием')
-  return safetyCode({ userId: me, publicKeys: mine.map((device) => device.public_key) }, { userId: other, publicKeys: theirs.map((device) => device.public_key) })
+/**
+ * Security code of two users from their registered device keys. It only
+ * proves something if it covers the keys this browser really uses: our own
+ * list must contain this device (else the server could show both sides the
+ * same substituted keys), and the peer's list goes into the same
+ * trust-on-first-use record as calls, so a list served only to this dialog,
+ * or only to calls, raises the key-change warning.
+ */
+export async function userSafetyCode(api: VoxholdApi, token: string, me: number, other: number, keys: E2EEStore = (store ??= new IndexedDBStore())): Promise<SafetyCodeResult> {
+  const [mine, theirs, local] = await Promise.all([api.e2ee.devices(token, me), api.e2ee.devices(token, other), keys.getDevice(me)])
+  if (!local) throw new Error('Код можно проверить на устройстве, которое уже подключалось к звонку со сквозным шифрованием')
+  if (!theirs.length) throw new Error('Код появится, когда собеседник подключится к звонку со сквозным шифрованием')
+  const own = base64Encode(local.publicKey)
+  if (!mine.some((device) => base64Encode(base64Decode(device.public_key)) === own)) {
+    throw new Error('Ключа этого устройства нет в списке на сервере. Подключитесь к звонку со сквозным шифрованием и проверьте код снова; если ошибка повторится, сервер мог подменить ключи')
+  }
+  const trust = await rememberPeerKeys(keys, other, Object.fromEntries(theirs.map((device) => [device.device_id, device.public_key])))
+  const code = await safetyCode({ userId: me, publicKeys: mine.map((device) => device.public_key) }, { userId: other, publicKeys: theirs.map((device) => device.public_key) })
+  return { code, myDevices: mine.length, theirDevices: theirs.length, keyChanged: trust === 'changed' }
 }
 
 const RECORDING_NOTICE_KEY = 'voxhold:e2ee-recording-notice'

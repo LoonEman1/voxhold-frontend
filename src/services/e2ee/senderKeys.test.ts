@@ -37,14 +37,19 @@ describe('key wrapping', () => {
     const key = crypto.getRandomValues(new Uint8Array(32))
     const context = { room: 'voice:5', senderDevice: `1:${alice.deviceId}`, recipientDevice: `2:${bob.deviceId}` }
     const alicePublic = await importDevicePublicKey(alice.publicKey)
-    const payload = await wrapSenderKey(alice.privateKey, await importDevicePublicKey(bob.publicKey), context, 6, key)
+    const payload = await wrapSenderKey(alice.privateKey, await importDevicePublicKey(bob.publicKey), context, 6, 1_000, key)
     const unwrapped = await unwrapSenderKey(bob.privateKey, alicePublic, context, payload)
     expect(unwrapped.keyId).toBe(6)
+    expect(unwrapped.gen).toBe(1_000)
     expect(Array.from(unwrapped.key)).toEqual(Array.from(key))
     await expect(unwrapSenderKey(eve.privateKey, alicePublic, context, payload)).rejects.toThrow()
     await expect(unwrapSenderKey(bob.privateKey, alicePublic, { ...context, room: 'voice:6' }, payload)).rejects.toThrow()
     const tampered = JSON.parse(new TextDecoder().decode(base64Decode(payload)))
     tampered.key_id = 5
+    await expect(unwrapSenderKey(bob.privateKey, alicePublic, context, btoa(JSON.stringify(tampered)))).rejects.toThrow()
+    // The generation is authenticated: a relay cannot pass an old key for a newer one.
+    tampered.key_id = 6
+    tampered.gen = 2_000
     await expect(unwrapSenderKey(bob.privateKey, alicePublic, context, btoa(JSON.stringify(tampered)))).rejects.toThrow()
   })
 
@@ -57,7 +62,7 @@ describe('key wrapping', () => {
 })
 
 describe('device registration', () => {
-  it('registers once, replaces a refused device and forgets it on logout', async () => {
+  it('registers before every call, replaces a refused device and forgets it on logout', async () => {
     const store = new MemoryStore()
     const registered: string[] = []
     const revoked: string[] = []
@@ -71,8 +76,10 @@ describe('device registration', () => {
     const device = await ensureDevice(store, registry, 9)
     expect(device.deviceId).not.toBe(stale)
     expect(registered).toEqual([device.deviceId])
+    // Registering again is how the server learns the device is in use (and how
+    // an evicted device finds out it must be replaced).
     expect((await ensureDevice(store, registry, 9)).deviceId).toBe(device.deviceId)
-    expect(registered).toHaveLength(1)
+    expect(registered).toEqual([device.deviceId, device.deviceId])
     await forgetDevice(store, registry, 9)
     expect(await store.getDevice(9)).toBeUndefined()
     expect(revoked).toEqual([device.deviceId])
@@ -162,6 +169,42 @@ describe('sender key session', () => {
     sessions.forEach((session) => session.close())
   })
 
+  it('installs only newer keys of a sender, and its current key again after it left', async () => {
+    useClock()
+    const [alice, bob] = await Promise.all([createDevice(1), createDevice(2)])
+    const keys = new Map([[alice.deviceId, await importDevicePublicKey(alice.publicKey)], [bob.deviceId, await importDevicePublicKey(bob.publicKey)]])
+    const directory = { publicKey: async (target: RoomMember) => keys.get(target.deviceId)! }
+    const payloads: string[] = []
+    const sender = new SenderKeySession({ room: 'voice:1', self: alice, sink: new RecordingSink(), directory, transport: { sendKey: (_to, payload) => payloads.push(payload), requestKey: () => undefined } })
+    const sink = new RecordingSink()
+    const receiver = new SenderKeySession({ room: 'voice:1', self: bob, sink, directory, transport: { sendKey: () => undefined, requestKey: () => undefined } })
+    const settle = async () => { for (let round = 0; round < 40; round++) { await realTurn(); await vi.advanceTimersByTimeAsync(0) } }
+    sender.start()
+    sender.setMembers([member(bob)])
+    receiver.setMembers([member(alice)])
+    await vi.advanceTimersByTimeAsync(2_000)
+    await settle()
+    sender.forceRotation()
+    await vi.advanceTimersByTimeAsync(2_000)
+    await settle()
+    const [older, newer] = payloads as [string, string]
+    expect(payloads).toHaveLength(2)
+
+    await receiver.receiveKey(member(alice), newer)
+    await receiver.receiveKey(member(alice), older) // rollback by the relay
+    await receiver.receiveKey(member(alice), newer) // replay: would reset the replay window
+    expect(sink.received.map((entry) => entry.keyId)).toEqual([2])
+
+    // Alice left and came back: her keys were dropped, so the current one is needed again.
+    receiver.setMembers([])
+    receiver.setMembers([member(alice)])
+    await receiver.receiveKey(member(alice), older)
+    await receiver.receiveKey(member(alice), newer)
+    expect(sink.received.map((entry) => entry.keyId)).toEqual([2, 2])
+    sender.close()
+    receiver.close()
+  })
+
   it('resends its key when a member asks', async () => {
     useClock()
     const { devices, sinks, sessions, settle } = await room(2)
@@ -218,6 +261,22 @@ describe('frame processor', () => {
     await receiver.command({ type: 'receiveKey', senderId: '7:dev', keyId: 2, key })
     const plain = await receiver.process(options, (await sender.process({ role: 'send', kind: 'audio' }, frame))!)
     expect(Array.from(plain!)).toEqual(Array.from(frame))
+    sender.close()
+    receiver.close()
+  })
+
+  it('applies commands in order although key derivation is asynchronous', async () => {
+    const sender = createFrameProcessor(() => undefined, () => 0)
+    const receiver = createFrameProcessor(() => undefined, () => 0)
+    const key = crypto.getRandomValues(new Uint8Array(32))
+    await sender.command({ type: 'sendKey', keyId: 1, key })
+    const sealed = (await sender.process({ role: 'send', kind: 'audio' }, Uint8Array.of(0x78, 1, 2, 3)))!
+    void receiver.command({ type: 'mapReceiver', receiverId: 'mid-1', senderId: '7:dev' })
+    void receiver.command({ type: 'receiveKey', senderId: '7:dev', keyId: 1, key })
+    // Sent last, so it must also apply last: no key of the departed sender stays.
+    await receiver.command({ type: 'removeSender', senderId: '7:dev' })
+    await new Promise((resolve) => setTimeout(resolve, 50)) // let any late key derivation land
+    expect(await receiver.process({ role: 'recv', kind: 'audio', receiverId: 'mid-1' }, sealed)).toBeNull()
     sender.close()
     receiver.close()
   })

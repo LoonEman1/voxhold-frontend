@@ -83,9 +83,11 @@ export function isDeviceConflict(error: unknown) {
 }
 
 /**
- * Returns this browser's registered device for the user, creating and
- * registering it on first use. A device the server refuses (revoked or
- * conflicting) is replaced by a fresh one once.
+ * Returns this browser's device for the user, creating it on first use, and
+ * registers it again every time: the PUT is idempotent and tells the server
+ * the device is in use, and the server may have revoked it meanwhile (a user
+ * over the device limit loses the least recently used one). A device the
+ * server refuses (revoked or conflicting) is replaced by a fresh one once.
  */
 export async function ensureDevice(store: E2EEStore, registry: DeviceRegistry, userId: number): Promise<LocalDevice> {
   let device = await store.getDevice(userId)
@@ -94,11 +96,12 @@ export async function ensureDevice(store: E2EEStore, registry: DeviceRegistry, u
       device = await createDevice(userId)
       await store.putDevice(device)
     }
-    if (device.registered) return device
     try {
       await registry.register(device.deviceId, base64Encode(device.publicKey))
-      device = { ...device, registered: true }
-      await store.putDevice(device)
+      if (!device.registered) {
+        device = { ...device, registered: true }
+        await store.putDevice(device)
+      }
       return device
     } catch (error) {
       if (!isDeviceConflict(error) || attempt > 0) throw error

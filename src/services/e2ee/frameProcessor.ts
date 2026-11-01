@@ -53,7 +53,7 @@ export function createFrameProcessor(post: (event: WorkerEvent) => void, now: ()
     health.set(senderId, entry)
   }
 
-  async function command(message: WorkerCommand) {
+  async function apply(message: WorkerCommand) {
     switch (message.type) {
       case 'sendKey':
         encryptor.setKey(await deriveFrameKey(message.keyId, message.key))
@@ -80,6 +80,15 @@ export function createFrameProcessor(post: (event: WorkerEvent) => void, now: ()
         else receivers.delete(message.receiverId)
         break
     }
+  }
+
+  // Key derivation is asynchronous: run commands in order, or an older key
+  // could land after a newer one (and a removal before a late install).
+  let queue: Promise<void> = Promise.resolve()
+  function command(message: WorkerCommand) {
+    const run = queue.then(() => apply(message))
+    queue = run.catch(() => undefined)
+    return run
   }
 
   /** Returns the transformed frame, or null to drop it. */
