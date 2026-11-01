@@ -3,9 +3,18 @@ import { messageLinks } from '../lib/messageLinks'
 import { parseMentions, mentionsMe, type Mention, type MentionDirectory } from '../lib/mentions'
 import type { ServerRole } from '../domain/types'
 
-export function MessageMentions({ content, mentions, currentUserId, currentRole, onOpenProfile, canOpenProfile, links: linkify = true }: {
+interface MessageMentionsProps {
   content: string; mentions: Mention[]; currentUserId: number; currentRole?: ServerRole; onOpenProfile?: (id: number) => void; canOpenProfile?: (id: number) => boolean; links?: boolean
-}) {
+}
+
+/** Message body with Markdown-like formatting; previews (links=false) stay plain. */
+export function MessageMentions({ format, ...props }: MessageMentionsProps & { format?: boolean }) {
+  const formatted = format ?? props.links !== false
+  if (!formatted) return <PlainMessage {...props}/>
+  return <FormattedMessage content={props.content} mentions={props.mentions} renderText={(segment, local) => <PlainMessage {...props} content={segment} mentions={local}/>}/>
+}
+
+function PlainMessage({ content, mentions, currentUserId, currentRole, onOpenProfile, canOpenProfile, links: linkify = true }: MessageMentionsProps) {
   let offset = 0
   const links = linkify ? messageLinks(content) : []
   const visibleMentions = mentions.filter((mention) => !links.some((link) => mention.start < link.end && mention.end > link.start))
