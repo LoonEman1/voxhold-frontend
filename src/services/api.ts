@@ -1,4 +1,5 @@
 import type {
+  AccountSession,
   ApiErrorPayload,
   ChannelRecording,
   RecordingStorage,
@@ -131,8 +132,15 @@ export function createApi(transport: Transport) {
         authorized(token, { path: '/api/v1/auth/logout', method: 'POST' }) as Promise<void>,
     },
     account: {
-      delete: (token: string) =>
-        authorized(token, { path: '/api/v1/account', method: 'DELETE' }) as Promise<void>,
+      delete: (token: string, password: string) =>
+        authorized(token, { path: '/api/v1/account', method: 'DELETE', body: { password } }) as Promise<void>,
+      changePassword: (token: string, current: string, next: string, confirm: string) =>
+        authorized(token, { path: '/api/v1/me/password', method: 'PUT', body: { current_password: current, new_password: next, new_password_confirm: confirm } }) as Promise<void>,
+      sessions: async (token: string) => ((await authorized(token, { path: '/api/v1/me/sessions' })) as { sessions: AccountSession[] }).sessions,
+      revokeSession: (token: string, id: number) =>
+        authorized(token, { path: `/api/v1/me/sessions/${url(id)}`, method: 'DELETE' }) as Promise<void>,
+      revokeOtherSessions: (token: string) =>
+        authorized(token, { path: '/api/v1/me/sessions', method: 'DELETE' }) as Promise<void>,
     },
     profile: {
       // The version makes each URL immutable, so the HTTP cache needs no revalidation.
