@@ -10,6 +10,8 @@ export interface WebRTCConfigState {
 export type WebRTCConfigFetcher = () => Promise<WebRTCConfigPayload>
 
 const DEFAULT_RETRY_DELAYS_MS = [500, 1500, 4000]
+// Time-limited TURN credentials are refetched when less than this remains.
+const REFRESH_BEFORE_EXPIRY_MS = 10 * 60 * 1000
 
 /**
  * Strict mapper from the backend payload to RTCConfiguration. Username and
@@ -66,6 +68,7 @@ export function createWebRTCConfigService(options: WebRTCConfigServiceOptions) {
   const retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms)))
   let cache: RTCConfiguration | null = null
+  let cacheExpiresAtMs: number | null = null
 
   return {
     /**
@@ -75,11 +78,15 @@ export function createWebRTCConfigService(options: WebRTCConfigServiceOptions) {
      * values.
      */
     async load(): Promise<WebRTCConfigState> {
-      if (cache) return { configuration: cloneRTCConfiguration(cache), degraded: false }
+      if (cache && (cacheExpiresAtMs === null || cacheExpiresAtMs - Date.now() > REFRESH_BEFORE_EXPIRY_MS)) {
+        return { configuration: cloneRTCConfiguration(cache), degraded: false }
+      }
       for (let attempt = 0; ; attempt += 1) {
         try {
           const payload = await options.fetcher()
           cache = parseWebRTCConfig(payload)
+          const expiresAt = (payload as { credential_expires_at?: unknown }).credential_expires_at
+          cacheExpiresAtMs = typeof expiresAt === 'number' && Number.isFinite(expiresAt) ? expiresAt * 1000 : null
           clientDiagnostics.record('webrtc', 'webrtc_config_loaded', 'info', {
             ice_server_count: cache.iceServers?.length ?? 0,
           })
@@ -98,6 +105,7 @@ export function createWebRTCConfigService(options: WebRTCConfigServiceOptions) {
     /** Forces the next load() to fetch fresh values, e.g. before media recovery. */
     invalidate() {
       cache = null
+      cacheExpiresAtMs = null
     },
   }
 }

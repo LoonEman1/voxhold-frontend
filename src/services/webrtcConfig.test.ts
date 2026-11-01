@@ -118,3 +118,19 @@ describe('createWebRTCConfigService', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('time-limited TURN credentials', () => {
+  it('refetches when the cached credentials are about to expire', async () => {
+    const soon = Math.floor(Date.now() / 1000) + 60
+    const later = Math.floor(Date.now() / 1000) + 3600
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ ...fullPayload, credential_expires_at: soon })
+      .mockResolvedValueOnce({ ...fullPayload, credential_expires_at: later })
+    const service = createWebRTCConfigService({ fetcher, sleep: async () => {} })
+    await service.load()
+    await service.load()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    await service.load()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+})
