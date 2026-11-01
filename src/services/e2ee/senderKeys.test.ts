@@ -30,6 +30,14 @@ afterEach(() => { vi.useRealTimers() })
 // Timers are fake, but WebCrypto finishes on the thread pool: keep setImmediate real.
 const useClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
 const realTurn = () => new Promise<void>((resolve) => (globalThis as unknown as { setImmediate: (callback: () => void) => void }).setImmediate(resolve))
+// A fixed number of turns is not enough on a loaded CI runner: after the usual
+// 40, keep turning until the expected state is reached (at most 10 s, real time).
+async function turnUntil(check: () => boolean, between: () => Promise<unknown> = async () => undefined) {
+  const deadline = performance.now() + 10_000
+  for (let round = 0; round < 40 || (!check() && performance.now() < deadline); round++) {
+    await realTurn(); await between(); await vi.advanceTimersByTimeAsync(0)
+  }
+}
 
 describe('key wrapping', () => {
   it('lets only the intended device unwrap a sender key', async () => {
@@ -105,7 +113,7 @@ describe('sender key session', () => {
         },
       }))
     })
-    const settle = async () => { for (let round = 0; round < 40; round++) { await realTurn(); await Promise.all(deliveries.splice(0)); await vi.advanceTimersByTimeAsync(0) } }
+    const settle = (check: () => boolean = () => true) => turnUntil(check, () => Promise.all(deliveries.splice(0)))
     return { devices, sinks, sessions, settle }
   }
 
@@ -121,7 +129,7 @@ describe('sender key session', () => {
     sessions[1]!.setMembers([member(alice)])
     // Rotations are at least 2 s apart; the first key was just created.
     await vi.advanceTimersByTimeAsync(2_000)
-    await settle()
+    await settle(() => fromAlice(sinks[1]!).length >= 1)
     expect(fromAlice(sinks[1]!).map((entry) => entry.keyId)).toEqual([1])
     expect(sinks[0]!.sendKeys).toEqual([0])
     await vi.advanceTimersByTimeAsync(1_000)
@@ -131,14 +139,14 @@ describe('sender key session', () => {
     sessions[0]!.setMembers([member(bob), member(carol)])
     sessions[2]!.setMembers([member(alice), member(bob)])
     await vi.advanceTimersByTimeAsync(2_000)
-    await settle()
+    await settle(() => fromAlice(sinks[2]!).length >= 1)
     expect(fromAlice(sinks[2]!).map((entry) => entry.keyId)).toEqual([2])
 
     // Bob leaves: Alice forgets his keys and he never sees her next key.
     const bobKnows = fromAlice(sinks[1]!).length
     sessions[0]!.setMembers([member(carol)])
     await vi.advanceTimersByTimeAsync(3_000)
-    await settle()
+    await settle(() => fromAlice(sinks[2]!).length >= 2)
     expect(sinks[0]!.removed).toContain(senderId(member(bob)))
     expect(fromAlice(sinks[1]!)).toHaveLength(bobKnows)
     expect(fromAlice(sinks[2]!).map((entry) => entry.keyId)).toEqual([2, 3])
@@ -162,7 +170,7 @@ describe('sender key session', () => {
       await vi.advanceTimersByTimeAsync(90)
     }
     await vi.advanceTimersByTimeAsync(2_000)
-    await settle()
+    await settle(() => sent.length >= 10)
     expect(sent).toHaveLength(10)
     expect(new Set(sent).size).toBe(10)
     alice.close()
@@ -178,15 +186,14 @@ describe('sender key session', () => {
     const sender = new SenderKeySession({ room: 'voice:1', self: alice, sink: new RecordingSink(), directory, transport: { sendKey: (_to, payload) => payloads.push(payload), requestKey: () => undefined } })
     const sink = new RecordingSink()
     const receiver = new SenderKeySession({ room: 'voice:1', self: bob, sink, directory, transport: { sendKey: () => undefined, requestKey: () => undefined } })
-    const settle = async () => { for (let round = 0; round < 40; round++) { await realTurn(); await vi.advanceTimersByTimeAsync(0) } }
     sender.start()
     sender.setMembers([member(bob)])
     receiver.setMembers([member(alice)])
     await vi.advanceTimersByTimeAsync(2_000)
-    await settle()
+    await turnUntil(() => payloads.length >= 1)
     sender.forceRotation()
     await vi.advanceTimersByTimeAsync(2_000)
-    await settle()
+    await turnUntil(() => payloads.length >= 2)
     const [older, newer] = payloads as [string, string]
     expect(payloads).toHaveLength(2)
 
@@ -215,7 +222,7 @@ describe('sender key session', () => {
     await settle()
     const before = sinks[1]!.received.length
     sessions[1]!.requestKey(member(devices[0]!))
-    await settle()
+    await settle(() => sinks[1]!.received.length > before)
     expect(sinks[1]!.received.length).toBe(before + 1)
     sessions.forEach((session) => session.close())
   })
