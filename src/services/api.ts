@@ -1,4 +1,5 @@
 import type {
+  ServerBan,
   ApiErrorPayload,
   ChannelRecording,
   RecordingStorage,
@@ -159,6 +160,10 @@ export function createApi(transport: Transport) {
           method: 'PATCH',
           body: { role },
         }) as Promise<ServerMember>,
+      listBans: async (token: string, serverId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans` })) as { bans: ServerBan[] }).bans,
+      unbanMember: (token: string, serverId: number, userId: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`, method: 'DELETE' }) as Promise<void>,
       banMember: (token: string, serverId: number, userId: number) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`,

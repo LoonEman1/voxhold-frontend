@@ -12,6 +12,7 @@ import type { AvatarCrop } from '../lib/avatarCrop'
 import { CountryFlag, CountrySelect } from './CountrySelect'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
+import { BanManager } from './BanManager'
 import { useTheme } from '../theme/ThemeContext'
 
 interface AsyncDialogProps {
@@ -232,7 +233,7 @@ export function ServerSettingsDialog({
   storageApi, storageToken,
 }: ServerSettingsDialogProps) {
   const community = useCommunity()
-  const [tab, setTab] = useState<'general' | 'roles' | 'storage'>('general')
+  const [tab, setTab] = useState<'general' | 'roles' | 'storage' | 'bans'>('general')
   useEffect(() => { if (open) setTab('general') }, [open])
   const [name, setName] = useState('')
   const [corsValue, setCorsValue] = useState('')
@@ -287,9 +288,10 @@ export function ServerSettingsDialog({
   }
   return (
     <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
-      {owner && storageApi && <nav className="server-settings-tabs" aria-label="Раздел настроек сервера">{([['general', 'settings', 'Основное'], ['roles', 'people', 'Роли и права'], ['storage', 'inbox', 'Хранилище']] as const).map(([value, icon, label]) => <button key={value} aria-pressed={tab === value} onClick={() => setTab(value)}><Icon name={icon} size={17}/>{label}</button>)}</nav>}
+      {owner && storageApi && <nav className="server-settings-tabs" aria-label="Раздел настроек сервера">{([['general', 'settings', 'Основное'], ['roles', 'people', 'Роли и права'], ['storage', 'inbox', 'Хранилище'], ['bans', 'lock', 'Баны']] as const).map(([value, icon, label]) => <button key={value} aria-pressed={tab === value} onClick={() => setTab(value)}><Icon name={icon} size={17}/>{label}</button>)}</nav>}
       {tab === 'roles' && open && owner && storageApi && storageToken && server && <RoleManager api={storageApi} token={storageToken} serverId={server.id} members={community?.members ?? []}/>}
       {tab === 'storage' && open && owner && storageApi && storageToken && <StorageManager api={storageApi} token={storageToken}/>}
+      {tab === 'bans' && open && owner && storageApi && storageToken && server && <BanManager api={storageApi} token={storageToken} serverId={server.id}/>}
       {tab === 'general' && <>
       {owner && <form className="dialog-form settings-section" onSubmit={rename}><div><h3>Название</h3><p>Его увидят все участники пространства.</p></div><label><span>Название сервера</span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required /></label><button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button></form>}
       {owner && <form className="dialog-form settings-section" onSubmit={saveCorsOrigins}><div><h3>Доступ внешних клиентов</h3><p>Разрешите браузерным клиентам на других доменах обращаться к API и WebSocket этого инстанса.</p></div><label><span>Разрешённые origin</span><textarea rows={5} value={corsValue} onChange={(event) => setCorsValue(event.target.value)} disabled={corsOriginsLoading || corsPending} placeholder={corsOriginsLoading ? 'Загрузка…' : 'https://client.example.com\nhttp://localhost:5173'} spellCheck={false}/></label><small className="field-hint">По одному точному origin на строку: схема, домен и необязательный порт. Без пути и wildcard.</small><button className="button button--secondary align-self-end" disabled={corsOriginsLoading || corsPending}>{corsPending ? <span className="spinner"/> : 'Сохранить CORS'}</button></form>}

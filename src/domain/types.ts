@@ -475,3 +475,11 @@ export interface ClientDiagnosticsPayload {
   retention_seconds: number
   events: StoredClientDiagnosticEvent[]
 }
+
+export interface ServerBan {
+  user_id: number
+  username: string
+  banned_by: number
+  reason: string
+  created_at: number
+}
