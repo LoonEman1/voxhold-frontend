@@ -14,9 +14,11 @@ export function useUnreadTitle(count: number, mentions: number) {
   useEffect(() => {
     document.title = unreadTitle(count, mentions)
     const badge = mentions > 0 ? mentions : count
+    // The badge promise rejects outside installed apps (e.g. NotAllowedError);
+    // left unhandled it would be reported as a client error on every change.
     try {
-      if (badge > 0) void navigator.setAppBadge?.(badge)
-      else void navigator.clearAppBadge?.()
+      const update = badge > 0 ? navigator.setAppBadge?.(badge) : navigator.clearAppBadge?.()
+      void update?.catch(() => undefined)
     } catch { /* badge API is optional */ }
   }, [count, mentions])
   useEffect(() => () => { document.title = BASE_TITLE }, [])

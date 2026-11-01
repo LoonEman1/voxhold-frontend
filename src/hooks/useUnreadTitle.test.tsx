@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderHook } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { unreadTitle, useUnreadTitle } from './useUnreadTitle'
 
 it('formats the title for mentions, plain unread and nothing', () => {
@@ -17,4 +17,17 @@ it('updates document.title and restores it on unmount', () => {
   expect(document.title).toBe('(1) Voxhold')
   unmount()
   expect(document.title).toBe('Voxhold')
+})
+
+it('handles a rejected app badge update', () => {
+  const handled = vi.fn()
+  const setAppBadge = vi.fn(() => ({ catch: handled }))
+  Object.defineProperty(navigator, 'setAppBadge', { configurable: true, value: setAppBadge })
+  try {
+    renderHook(() => useUnreadTitle(3, 0))
+    expect(setAppBadge).toHaveBeenCalledWith(3)
+    expect(handled).toHaveBeenCalledTimes(1)
+  } finally {
+    Reflect.deleteProperty(navigator, 'setAppBadge')
+  }
 })
