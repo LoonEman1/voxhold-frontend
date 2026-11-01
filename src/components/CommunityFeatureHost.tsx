@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import type { VoxholdApi } from '../services/api'
 import type { CallState, Conversation, DirectMessage, FeatureSource } from '../domain/community'
 import { UniversalForward, featuresChanged } from './CommunityFeatures'
-import { ConversationCallDock } from './ConversationCallDock'
+// Loaded right after mount: the call runtime (WebRTC, E2EE) stays out of the
+// WorkspacePage chunk.
+const ConversationCallDock = lazy(() => import('./ConversationCallDock').then((module) => ({ default: module.ConversationCallDock })))
 import { uiSounds } from '../services/uiSounds'
 import { loadVoicePreferences } from '../services/voiceSettings'
 
@@ -49,5 +51,5 @@ export function CommunityFeatureHost({ api, token, userId, conversations, active
     window.addEventListener('voxhold:forward', open); window.addEventListener('voxhold:favorite', favorite); window.addEventListener('voxhold:feature-event', event)
     return () => { alive = false; if (timer) clearTimeout(timer); desktop.forEach((n) => n.close()); window.removeEventListener('voxhold:forward', open); window.removeEventListener('voxhold:favorite', favorite); window.removeEventListener('voxhold:feature-event', event) }
   }, [api, token, userId])
-  return <>{source && <UniversalForward key={`${source.kind}:${source.id}`} api={api} token={token} source={source} onClose={() => setSource(null)}/>}<ConversationCallDock api={api} token={token} userId={userId}/>{status && <div className="feature-status" role="status"><span>{status.text}</span>{status.conversationId && <button onClick={() => { window.dispatchEvent(new CustomEvent('voxhold:open-conversation', { detail: status.conversationId })); setStatus(null) }}>Открыть</button>}<button aria-label="Закрыть уведомление" onClick={() => setStatus(null)}>×</button></div>}</>
+  return <>{source && <UniversalForward key={`${source.kind}:${source.id}`} api={api} token={token} source={source} onClose={() => setSource(null)}/>}<Suspense fallback={null}><ConversationCallDock api={api} token={token} userId={userId}/></Suspense>{status && <div className="feature-status" role="status"><span>{status.text}</span>{status.conversationId && <button onClick={() => { window.dispatchEvent(new CustomEvent('voxhold:open-conversation', { detail: status.conversationId })); setStatus(null) }}>Открыть</button>}<button aria-label="Закрыть уведомление" onClick={() => setStatus(null)}>×</button></div>}</>
 }

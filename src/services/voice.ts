@@ -8,6 +8,7 @@ import { cloneRTCConfiguration } from './webrtcConfig'
 import type { BrowserVoiceInput } from './voiceInput'
 import { readPeerStats } from './peerStats'
 import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
+import type { E2EEMediaTransform } from './e2ee/mediaTransform'
 
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
@@ -27,6 +28,15 @@ interface VoiceMediaOptions {
   onRemoteLevels?: (levels: VoiceRemoteLevel[]) => void
   /** Browser blocked audible playback; the UI should offer an explicit action. */
   onPlaybackBlocked?: () => void
+  /**
+   * End-to-end encryption (FEAT-13): every audio sender and receiver goes
+   * through the worker, and the mid -> connection owner map tells it whose
+   * key decrypts each receiver.
+   */
+  e2ee?: {
+    media: E2EEMediaTransform
+    onReceiverOwners: (owners: ReadonlyMap<string, string>) => void
+  }
 }
 
 interface VoiceRemoteOutput {
@@ -193,9 +203,8 @@ export class BrowserVoiceSession {
 
     this.options.input.setState(!selfMute)
 
-    const peer = new RTCPeerConnection(
-      this.options.iceConfiguration ? cloneRTCConfiguration(this.options.iceConfiguration) : {},
-    )
+    const baseConfiguration = this.options.iceConfiguration ? cloneRTCConfiguration(this.options.iceConfiguration) : {}
+    const peer = new RTCPeerConnection(this.options.e2ee ? this.options.e2ee.media.peerConfiguration(baseConfiguration) : baseConfiguration)
     this.peer = peer
     const inputSettings = track.getSettings?.() ?? {}
     clientDiagnostics.record('media', 'voice_input_ready', 'info', {
@@ -206,6 +215,8 @@ export class BrowserVoiceSession {
       auto_gain_control: inputSettings.autoGainControl ?? null,
     })
     this.inputSender = peer.addTrack(track, stream)
+    // Before negotiation: no clear frame may leave once encryption is on.
+    this.options.e2ee?.media.attachSender(this.inputSender, 'audio')
     await this.applySenderBitrate(this.preferences.bitrateKbps).catch(() => {
       // Keep voice available in WebViews that do not expose encoding controls.
     })
@@ -221,6 +232,7 @@ export class BrowserVoiceSession {
 
     peer.ontrack = ({ track: remoteTrack, transceiver }) => {
       if (this.closed || remoteTrack.kind !== 'audio') return
+      if (this.options.e2ee && transceiver) this.options.e2ee.media.attachReceiver(transceiver.receiver, 'audio', transceiver.mid ?? remoteTrack.id)
       if (transceiver) this.remoteTransceivers.set(remoteTrack.id, transceiver)
       this.refreshRemoteOwners()
       if (this.remoteOutputs.has(remoteTrack.id)) return
@@ -336,6 +348,7 @@ export class BrowserVoiceSession {
         track_id: trackId, mid: transceiver.mid, mapped: !!owner,
       })
     })
+    this.options.e2ee?.onReceiverOwners(this.midOwners)
   }
 
   private attachRemoteAnalyser(trackId: string, media: MediaStream) {
@@ -726,6 +739,7 @@ export function voiceCloseMessage(reason: string): string {
   if (reason === 'initial WebRTC answer timed out') return 'Не удалось согласовать подключение вовремя. Попробуйте подключиться снова.'
   if (reason === 'initial WebRTC connection timed out') return 'Соединение не установлено вовремя. Проверьте сеть и подключитесь снова.'
   if (reason === 'channel access was revoked') return 'Доступ к голосовому каналу был отозван'
+  if (reason === 'voice channel encryption changed') return 'В канале изменили режим сквозного шифрования — подключитесь снова'
   if (reason === 'voice session moved to another connection') {
     return 'Голосовое подключение перенесено в другую вкладку или устройство'
   }

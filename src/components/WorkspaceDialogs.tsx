@@ -13,6 +13,8 @@ import { CountryFlag, CountrySelect } from './CountrySelect'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 import { SlowmodeSettings, type SlowmodeActions } from './SlowmodeSettings'
+import { E2EESettings, type E2EEPolicyActions } from './E2EESettings'
+import { SafetyCode } from './SafetyCode'
 import { BanManager } from './BanManager'
 import { SecuritySettings, type SecurityActions } from './SecuritySettings'
 import { useTheme } from '../theme/ThemeContext'
@@ -139,7 +141,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout }: AsyncDialogProps & { onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
+export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout, safetyCode }: AsyncDialogProps & { safetyCode?: () => Promise<string>; onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
   const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
@@ -169,6 +171,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
           <div><dt>Страна проживания</dt><dd>{country ? <><CountryFlag code={country.code}/> {country.name}</> : 'Не указана'}</dd></div>
         </dl>
         <section className="profile-about"><span>ОБО МНЕ</span><p>{profile.about || 'Пользователь пока ничего о себе не рассказал.'}</p></section>
+        {safetyCode && <SafetyCode compute={safetyCode} userId={profile.user_id}/>}
         {(canChangeRole || canBan) && <section className="member-management">
           <div><span>УПРАВЛЕНИЕ УЧАСТНИКОМ</span><p>Изменения сразу увидят все участники сервера.</p></div>
           <CustomRoleBadges userId={profile.user_id}/>{onMessage && <button className="button button--primary" onClick={onMessage}>Написать</button>}
@@ -182,7 +185,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
   )
 }
 
-export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemove, accessPanel, slowmode }: AsyncDialogProps & { accessPanel?: ReactNode; slowmode?: SlowmodeActions; channel: Channel | null; onRename(name: string): Promise<void>; onRemove(): Promise<void> }) {
+export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemove, accessPanel, slowmode, encryption }: AsyncDialogProps & { accessPanel?: ReactNode; slowmode?: SlowmodeActions; encryption?: E2EEPolicyActions; channel: Channel | null; onRename(name: string): Promise<void>; onRemove(): Promise<void> }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -204,6 +207,7 @@ export function ChannelSettingsDialog({ open, onClose, channel, onRename, onRemo
         <button className="button button--secondary align-self-end" disabled={pending}>Сохранить</button>
       </form>
       {slowmode && channel && channel.kind === 'text' && <SlowmodeSettings actions={slowmode} channelId={channel.id}/>}
+      {encryption && channel && channel.kind === 'voice' && <E2EESettings actions={encryption} channelId={channel.id}/>}
       {accessPanel}
       <div className="danger-zone"><div><h3>Удалить канал</h3><p>Канал и его история исчезнут для всех участников. Это действие нельзя отменить.</p></div>{confirming ? <div className="danger-confirm"><span>Точно удалить «{channel?.name}»?</span><button className="button button--danger button--small" onClick={() => void remove()} disabled={pending}>{pending ? <span className="spinner"/> : 'Удалить'}</button><button className="button button--ghost button--small" onClick={() => setConfirming(false)}>Отмена</button></div> : <button className="button button--danger-outline" onClick={() => setConfirming(true)}>Удалить канал</button>}</div>
       {error && <div className="form-error dialog-standalone-error" role="alert">{error}</div>}
