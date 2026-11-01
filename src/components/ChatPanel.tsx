@@ -18,6 +18,7 @@ import { Avatar } from './Avatar'
 import { MessageAvatar, MessageHeader } from './MessageIdentity'
 import { mentionDirectory, parseMentions, mentionsMe } from '../lib/mentions'
 import { MessageMentions } from './MessageMentions'
+import { TypingIndicator } from './TypingIndicator'
 import { MentionComposer } from './MentionComposer'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
@@ -498,6 +499,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
 
       {menuMessage && messageMenu && <MessageContextMenu key={`menu:${menuMessage.id}`} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canModerate} canPin={canModerate && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      <TypingIndicator channelId={channel.id} currentUserId={currentUserId} membersById={membersById}/>
       <ChatComposer canMentionRoles={ownRole === 'owner' || ownRole === 'admin'} draftScope={threadRootId} key={`composer:${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
         upload={attachmentUpload} composerFocus={composerFocus} setReplyTarget={setReplyTarget} onSend={onSend}
         onFocus={() => setComposerFocus((value) => value + 1)} readOnlyLabel={readOnlyLabel}/>

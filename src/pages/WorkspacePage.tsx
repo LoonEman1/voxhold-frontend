@@ -1276,6 +1276,20 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     else realtimeRef.current?.unsubscribe()
   }, [selectedServerId, selectedChannelId, chatVisible])
 
+  // Tell other members that we are typing: at most once every 3 seconds.
+  useEffect(() => {
+    if (!selectedServerId || !selectedChannelId || !chatVisible) return
+    let lastSent = 0
+    const onComposing = () => {
+      const now = Date.now()
+      if (now - lastSent < 3000) return
+      lastSent = now
+      realtimeRef.current?.sendTyping(selectedServerId, selectedChannelId)
+    }
+    window.addEventListener('voxhold:composing', onComposing)
+    return () => window.removeEventListener('voxhold:composing', onComposing)
+  }, [selectedServerId, selectedChannelId, chatVisible])
+
   const selectChannel = (id: number) => {
     openCommunityChannels()
     if (id === selectedChannelId) {
