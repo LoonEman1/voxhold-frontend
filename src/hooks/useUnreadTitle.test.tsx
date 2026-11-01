@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderHook } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { unreadTitle, useUnreadTitle } from './useUnreadTitle'
