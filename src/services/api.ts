@@ -164,10 +164,11 @@ export function createApi(transport: Transport) {
         ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans` })) as { bans: ServerBan[] }).bans,
       unbanMember: (token: string, serverId: number, userId: number) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`, method: 'DELETE' }) as Promise<void>,
-      banMember: (token: string, serverId: number, userId: number) =>
+      banMember: (token: string, serverId: number, userId: number, reason?: string) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`,
           method: 'POST',
+          ...(reason ? { body: { reason } } : {}),
         }) as Promise<void>,
     },
     recordings: {

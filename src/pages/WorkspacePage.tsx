@@ -2149,9 +2149,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     notify(`Роль ${updated.username} обновлена`, 'success')
   }
 
-  const banViewedMember = async () => {
+  const banViewedMember = async (reason?: string) => {
     if (!token || !selectedServerId || !viewedProfile) return
-    await api.servers.banMember(token, selectedServerId, viewedProfile.user_id)
+    await api.servers.banMember(token, selectedServerId, viewedProfile.user_id, reason)
     setMembers((current) => current.filter((member) => member.user_id !== viewedProfile.user_id))
     setDialog(null)
     notify(`${viewedProfile.username} забанен на инстансе`, 'success')

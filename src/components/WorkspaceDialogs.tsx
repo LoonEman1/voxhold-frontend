@@ -134,13 +134,14 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   )
 }
 
-export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(): Promise<void> }) {
+export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan }: AsyncDialogProps & { onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
   const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
   const [manageError, setManageError] = useState('')
   const [confirmKick, setConfirmKick] = useState(false)
-  useEffect(() => { if (open) { setPending(false); setManageError(''); setConfirmKick(false) } }, [open, profile?.user_id])
+  const [banReason, setBanReason] = useState('')
+  useEffect(() => { if (open) { setPending(false); setManageError(''); setConfirmKick(false); setBanReason('') } }, [open, profile?.user_id])
   const changeRole = async (nextRole: Exclude<ServerRole, 'owner'>) => {
     if (nextRole === role || pending) return
     setPending(true); setManageError('')
@@ -149,7 +150,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
   const ban = async () => {
     if (pending) return
     setPending(true); setManageError('')
-    try { await onBan() } catch (caught) { setManageError(humanError(caught)); setPending(false) }
+    try { await onBan(banReason.trim() || undefined) } catch (caught) { setManageError(humanError(caught)); setPending(false) }
   }
   return (
     <Modal open={open} onClose={onClose} title="Профиль участника" eyebrow="ВИЗИТНАЯ КАРТОЧКА" size="medium">
@@ -167,7 +168,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
           <div><span>УПРАВЛЕНИЕ УЧАСТНИКОМ</span><p>Изменения сразу увидят все участники сервера.</p></div>
           <CustomRoleBadges userId={profile.user_id}/>{onMessage && <button className="button button--primary" onClick={onMessage}>Написать</button>}
           {canChangeRole && <div className="member-role-control"><span>Роль</span><div><button className={role === 'member' ? 'is-active' : ''} onClick={() => void changeRole('member')} disabled={pending}>Участник</button><button className={role === 'admin' ? 'is-active' : ''} onClick={() => void changeRole('admin')} disabled={pending}>Администратор</button></div></div>}
-          {canBan && <div className="member-kick-control">{confirmKick ? <><span>Забанить аккаунт {profile.username} на всём инстансе?</span><button className="button button--danger button--small" onClick={() => void ban()} disabled={pending}>{pending ? <span className="spinner"/> : 'Забанить'}</button><button className="button button--ghost button--small" onClick={() => setConfirmKick(false)} disabled={pending}>Отмена</button></> : <button className="button button--danger-outline button--small" onClick={() => setConfirmKick(true)}>Забанить аккаунт</button>}</div>}
+          {canBan && <div className="member-kick-control">{confirmKick ? <><span>Забанить аккаунт {profile.username} на всём инстансе?</span><input aria-label="Причина бана" placeholder="Причина (необязательно)" maxLength={500} value={banReason} onChange={(event) => setBanReason(event.target.value)}/><button className="button button--danger button--small" onClick={() => void ban()} disabled={pending}>{pending ? <span className="spinner"/> : 'Забанить'}</button><button className="button button--ghost button--small" onClick={() => setConfirmKick(false)} disabled={pending}>Отмена</button></> : <button className="button button--danger-outline button--small" onClick={() => setConfirmKick(true)}>Забанить аккаунт</button>}</div>}
           {manageError && <div className="form-error" role="alert">{manageError}</div>}
         </section>}
       </div>}
