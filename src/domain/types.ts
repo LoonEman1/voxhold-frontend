@@ -478,6 +478,14 @@ export interface ClientDiagnosticsPayload {
   events: StoredClientDiagnosticEvent[]
 }
 
+export interface ServerBan {
+  user_id: number
+  username: string
+  banned_by: number
+  reason: string
+  created_at: number
+}
+
 export interface AccountSession {
   id: number
   created_at: number
