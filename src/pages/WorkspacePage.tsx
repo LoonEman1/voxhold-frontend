@@ -104,7 +104,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       revokeSession: (id) => api.account.revokeSession(need(), id),
       revokeOthers: () => api.account.revokeOtherSessions(need()),
     }
-  }, [token])
+  }, [token, api.account])
   const notify = useToast()
   const workspaceLayout = useWorkspaceLayout()
   const [instance, setInstance] = useState<InstanceMetadata | null>(null)
