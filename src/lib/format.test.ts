@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { colorFor, formatDuration, initials, viewerLabel } from './format'
+import { colorFor, formatDuration, humanError, initials, viewerLabel } from './format'
 
 describe('display helpers', () => {
+  it('translates slowmode rejections with the remaining wait', () => {
+    expect(humanError(new Error('slowmode: wait 25 seconds before sending another message'))).toBe('Медленный режим: следующее сообщение можно отправить через 25 с')
+  })
+
   it('creates stable short initials', () => {
     expect(initials('niko')).toBe('NI')
     expect(initials('')).toBe('VX')
