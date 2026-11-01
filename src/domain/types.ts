@@ -454,6 +454,8 @@ export interface WebRTCIceServerDTO {
 export interface WebRTCConfigPayload {
   ice_servers: WebRTCIceServerDTO[]
   ice_transport_policy: string
+  /** Unix seconds; present only for time-limited TURN credentials. */
+  credential_expires_at?: number
 }
 
 export interface StoredClientDiagnosticEvent {
