@@ -55,7 +55,7 @@ export class ConversationCall {
       this.heartbeat = setInterval(() => { void this.refresh() }, 12_000)
     } catch (e) { this.close(); void this.leaveRemote(); throw e }
   }
-  /** Optional: a browser or profile without support simply calls in clear. */
+  /** Unsupported browsers use legacy calls; preparation failures fail closed. */
   private async prepareEncryption() {
     const mode = e2eeTransformMode()
     if (!mode || typeof indexedDB === 'undefined') return
@@ -78,9 +78,11 @@ export class ConversationCall {
         },
       })
       this.e2eeDeviceId = device.deviceId
-    } catch {
+    } catch (error) {
+      this.e2ee?.close()
       this.e2ee = null
       this.e2eeDeviceId = ''
+      throw error
     }
   }
   private deviceField() { return this.e2eeDeviceId ? { e2ee_device_id: this.e2eeDeviceId } : {} }

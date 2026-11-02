@@ -3,7 +3,7 @@
  * the sender key, the receive keys per (sender, key id), which receiver
  * belongs to which sender, key retirement and the "missing key" signal.
  */
-import { FrameDecryptor, FrameEncryptor, deriveFrameKey, type DropReason } from './frameCipher'
+import { FrameDecryptor, FrameEncryptor, deriveFrameKey, type DropReason, type FrameKey } from './frameCipher'
 
 export interface TransformOptions { role: 'send' | 'recv'; kind: 'audio' | 'video'; receiverId?: string }
 
@@ -35,7 +35,8 @@ export function createFrameProcessor(post: (event: WorkerEvent) => void, now: ()
   const decryptor = new FrameDecryptor()
   const receivers = new Map<string, string>()
   const health = new Map<string, SenderHealth>()
-  const latestKeyId = new Map<string, number>()
+  const latestKeys = new Map<string, FrameKey>()
+  const retirements = new Map<string, ReturnType<typeof setTimeout>>()
   const emptyDrops = () => ({ malformed: 0, unknown_key: 0, replay: 0, auth: 0, no_key: 0, unmapped: 0 })
   let stats = { encrypted: 0, decrypted: 0, dropped: emptyDrops(), micros: 0, timed: 0 }
   let exhaustedReported = false
@@ -65,18 +66,30 @@ export function createFrameProcessor(post: (event: WorkerEvent) => void, now: ()
         break
       case 'receiveKey': {
         const derived = await deriveFrameKey(message.keyId, message.key)
-        decryptor.setKey(message.senderId, derived)
-        latestKeyId.set(message.senderId, message.keyId)
-        // Older keys of this sender stay for frames in flight, then go.
-        for (let keyId = 0; keyId < 8; keyId++) {
-          if (keyId === message.keyId) continue
-          setTimeout(() => { if (latestKeyId.get(message.senderId) !== keyId) decryptor.removeKey(message.senderId, keyId) }, KEY_RETIRE_MS)
+        const slot = `${message.senderId}#${message.keyId}`
+        clearTimeout(retirements.get(slot))
+        retirements.delete(slot)
+        const previous = latestKeys.get(message.senderId)
+        if (previous && previous.keyId !== message.keyId) {
+          const previousSlot = `${message.senderId}#${previous.keyId}`
+          clearTimeout(retirements.get(previousSlot))
+          // Retire the actual superseded key. Timers created for empty slots
+          // can otherwise delete a different generation when a slot is reused.
+          retirements.set(previousSlot, setTimeout(() => {
+            decryptor.removeKey(message.senderId, previous.keyId, previous.key)
+            retirements.delete(previousSlot)
+          }, KEY_RETIRE_MS))
         }
+        decryptor.setKey(message.senderId, derived)
+        latestKeys.set(message.senderId, derived)
         break
       }
       case 'removeSender':
         decryptor.removeSender(message.senderId)
-        latestKeyId.delete(message.senderId)
+        latestKeys.delete(message.senderId)
+        for (const [slot, timer] of retirements) {
+          if (slot.startsWith(`${message.senderId}#`)) { clearTimeout(timer); retirements.delete(slot) }
+        }
         health.delete(message.senderId)
         break
       case 'mapReceiver':
@@ -126,5 +139,9 @@ export function createFrameProcessor(post: (event: WorkerEvent) => void, now: ()
     return result
   }
 
-  return { command, process, close: () => clearInterval(statsTimer) }
+  return { command, process, close: () => {
+    clearInterval(statsTimer)
+    for (const timer of retirements.values()) clearTimeout(timer)
+    retirements.clear()
+  } }
 }
