@@ -1,0 +1,9 @@
+.saved-note{padding:8px 12px;margin-top:8px;border-left:2px solid var(--lime);white-space:pre-wrap}.direct-chat__tools{display:flex;gap:12px;flex-wrap:wrap;padding:8px 18px;border-bottom:1px solid var(--line);flex:none}.direct-chat__tools button{font-size: var(--font-xs)}.direct-chat__tools input{max-width:100%;min-width:120px}.direct-chat__message-menu{margin-left:auto}.direct-chat .message__actions{display:flex}
+
+.direct-chat .message__actions{opacity:1;pointer-events:auto;transform:none;top:4px;right:7px}.direct-chat .message{padding-right:76px}.saved-note button{padding:7px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface-3);color:var(--text);cursor:pointer}
+
+.personal-content .direct-chat .poll-card label{display:flex;align-items:center;flex-wrap:wrap}
+.personal-content .direct-chat .poll-card input[type=radio],.personal-content .direct-chat .poll-card input[type=checkbox]{width:16px;height:16px;min-width:16px;min-height:16px;flex:0 0 16px;margin:0;padding:0;box-shadow:none;accent-color:var(--lime);cursor:pointer}
+.personal-content .direct-chat .saved-note button{font-size: var(--font-xs)}.direct-chat__tools>button{padding:7px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface-3);color:var(--text);cursor:pointer}.direct-chat__tools label{min-width:0;max-width:100%;font-size: var(--font-xs);color:var(--muted)}.direct-chat__tools label input{margin-top:5px}
+.saved-note--editing { display: grid; gap: 16px; }
+.saved-note--editing textarea { width: 100%; min-width: 0; min-height: 94px; resize: vertical; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: inherit; font: inherit; }

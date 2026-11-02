@@ -17,8 +17,6 @@ import { WorkspaceDialogBoundary } from '../components/WorkspaceDialogBoundary'
 import { WorkspaceContentBoundary } from '../components/WorkspaceContentBoundary'
 import { MemberCard } from '../components/LazyWorkspaceDialogs'
 import { CommunityProvider, CommunityNavigation, CommunitySidebar, CommunityContent, openCommunityChannels } from '../components/Community'
-import { NewsComments } from '../components/NewsComments'
-import { NewsChannelSettings } from '../components/NewsChannelSettings'
 import { ContextMenu, type ContextMenuItem, type ContextMenuState } from '../components/ContextMenu'
 import { Icon } from '../components/Icon'
 import { ModalLoading } from '../components/ModalLoading'
@@ -55,13 +53,15 @@ import { clearThumbnails } from '../lib/thumbnailCache'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
+import { ChannelActivityBatch } from '../services/channelActivity'
 import type { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, StreamQualityStats } from '../services/stream'
 import { captureScreen, capturedAudioIncludesOwnPlayback } from '../services/screenCapture'
 import { streamErrorMessage } from '../services/streamErrors'
 import type { StreamAudioGain } from '../services/streamAudioGain'
 import type { StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
-import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
+import type { BrowserVoiceSession } from '../services/voice'
+import { enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage, voiceSupported } from '../services/voiceEnvironment'
 import type { CallE2EE } from '../services/e2ee/voiceE2EE'
 import type { BrowserVoiceInput } from '../services/voiceInput'
 import { RetryBudget, SignallingRecoveryCoordinator } from '../services/mediaRecovery'
@@ -78,6 +78,9 @@ const ChannelAccessSettings = lazy(() => import('../components/ChannelAccessSett
 const loadRecordingsDialog = () => import('../components/RecordingsDialog').then((module) => ({ default: module.RecordingsDialog }))
 const RecordingsDialog = lazy(loadRecordingsDialog)
 const StreamSettingsDialog = lazy(() => import('../components/StreamSettingsDialog').then((module) => ({ default: module.StreamSettingsDialog })))
+const LazyNewsComments = lazy(() => import('../components/NewsComments').then((module) => ({ default: module.NewsComments })))
+function NewsComments(props: ComponentProps<typeof LazyNewsComments>) { return <Suspense fallback={<p role="status">Загружаем обсуждение…</p>}><LazyNewsComments {...props}/></Suspense> }
+const NewsChannelSettings = lazy(() => import('../components/NewsChannelSettings').then((module) => ({ default: module.NewsChannelSettings })))
 
 type Dialog = 'server' | 'channel' | 'channelSettings' | 'invite' | 'profile' | 'userProfile' | 'settings' | 'voiceSettings' | 'streamSettings' | 'logout' | null
 type MessagePanel = 'search' | 'pins' | null
@@ -118,8 +121,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
-  const unreadTotal = useMemo(() => channels.reduce((sum, channel) => sum + (channel.unread_count ?? 0), 0), [channels])
-  useUnreadTitle(unreadTotal, 0)
+  const notificationTotal = useMemo(() => channels.reduce((sum, channel) => sum + (channel.unread_count ?? 0), 0), [channels])
   const [notificationChannel, setNotificationChannel] = useState<Channel | null>(null)
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null)
@@ -136,6 +138,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [focusedMessageId, setFocusedMessageId] = useState<number | null>(null)
   const [onlineByServer, setOnlineByServer] = useState<Record<number, number[]>>({})
   const [channelReads, setChannelReads] = useState<Record<number, Record<number, ChannelRead>>>({})
+  const hasUnreadChannels = channels.some((channel) => channel.kind !== 'voice' && channelHasUnreadMessages(channel, channelReads[channel.id]?.[user?.id ?? 0]))
+  useUnreadTitle(hasUnreadChannels ? 1 : 0, notificationTotal)
   const [voiceParticipants, setVoiceParticipants] = useState<Record<string, VoiceParticipant>>({})
   const [voiceSession, setVoiceSession] = useState<ActiveVoiceSession | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceConnectionStatus>('idle')
@@ -214,7 +218,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => notificationCenter.start(), [notificationCenter])
   const channelRefreshRef = useRef<(serverId: number) => void>(() => {})
   const channelRequestsRef = useRef(new Map<number, number>())
-  const counterRefreshRef = useRef<(serverId: number) => void>(() => {})
+  const counterRefreshRef = useRef<(serverId: number, delay?: number) => void>(() => {})
   const counterTimersRef = useRef(new Map<number, number>())
   const counterRequestsRef = useRef(new Map<number, AbortController>())
   useEffect(() => () => {
@@ -775,13 +779,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const presenceStateRef = useRef({ onlineByServer, lastSeenByUser, viewedProfile })
   presenceStateRef.current = { onlineByServer, lastSeenByUser, viewedProfile }
 
-  counterRefreshRef.current = (serverId: number) => {
+  counterRefreshRef.current = (serverId: number, delay = 80) => {
     if (!token || serverId !== activeServerRef.current) return
+    // A read invalidates an older response. Activity can accept that response
+    // and reconcile once more, instead of repeatedly aborting a slow request.
+    if (delay < 1_000) counterRequestsRef.current.get(serverId)?.abort()
     const pending = counterTimersRef.current.get(serverId)
     if (pending) return
     // Bound network work during bursts and keep older responses from restoring
     // a badge that was already cleared on another tab.
-    counterRequestsRef.current.get(serverId)?.abort()
     counterTimersRef.current.set(serverId, window.setTimeout(() => {
       counterTimersRef.current.delete(serverId)
       const request = new AbortController(); counterRequestsRef.current.set(serverId, request)
@@ -794,8 +800,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           const next = current.map((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0) ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel)
           channelsRef.current = next; return next
         })
-      }).catch(() => undefined)
-    }, 80))
+      }).catch(() => undefined).finally(() => { if (counterRequestsRef.current.get(serverId) === request) counterRequestsRef.current.delete(serverId) })
+    }, delay))
   }
 
   useEffect(() => {
@@ -921,6 +927,28 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   useEffect(() => {
     if (!token) return
+    const userId = user?.id ?? 0
+    const activity = new ChannelActivityBatch(userId, (updates) => {
+      const active = updates.filter((update) => update.serverId === activeServerRef.current)
+      if (!active.length) return
+      const latest = new Map(active.map((update) => [update.channelId, update.messageId]))
+      setChannels((current) => {
+        let changed = false
+        const next = current.map((channel) => {
+          const messageId = latest.get(channel.id)
+          if (!messageId || (channel.last_message_id ?? 0) >= messageId) return channel
+          changed = true
+          return { ...channel, last_message_id: messageId }
+        })
+        if (!changed) return current
+        channelsRef.current = next
+        return next
+      })
+      for (const update of active) {
+        if (userId && update.ownMessageId) applyChannelRead({ server_id: update.serverId, channel_id: update.channelId, user_id: userId, last_read_message_id: update.ownMessageId, updated_at: Math.floor(Date.now() / 1000) })
+      }
+      counterRefreshRef.current(active[0]!.serverId, 1_000)
+    })
     const client = new RealtimeClient({
       token,
       baseUrl: realtimeBaseUrl,
@@ -975,10 +1003,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onChannelActivity: (event) => {
         if (event.server_id !== activeServerRef.current) return
-        recordLastMessage(event.channel_id, event.message_id)
-        // Your own message (e.g. from another device) never makes a channel unread.
-        const me = user?.id
-        if (me !== undefined && event.author_user_id === me) applyChannelRead({ server_id: event.server_id, channel_id: event.channel_id, user_id: me, last_read_message_id: event.message_id, updated_at: Math.floor(Date.now() / 1000) })
+        activity.add(event)
       },
       onMessageReactions: (event) => {
         historyStore.reactions(event)
@@ -1228,7 +1253,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           return
         }
         const replaced = event.reason === 'voice session moved to another connection'
-        const rejoin = !replaced && !!voiceSessionRef.current && voiceRejoinBudgetRef.current.take()
+        const revoked = event.reason === 'voice e2ee device was revoked' || event.reason === 'voice permission was revoked' || event.reason === 'channel access was revoked'
+        const rejoin = !replaced && !revoked && !!voiceSessionRef.current && voiceRejoinBudgetRef.current.take()
         clientDiagnostics.record('webrtc', 'voice_closed_by_server', 'warn', {
           reason: event.reason,
           action: rejoin ? 'rejoin' : 'leave',
@@ -1358,6 +1384,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     client.connect()
     return () => {
       const replacing = workspaceActive.current
+      activity.close()
       client.close()
       realtimeRef.current = null
       const phase = recoveryRef.current?.phase
@@ -1403,7 +1430,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setVoiceError('Сначала дождитесь подключения к realtime-серверу')
       return
     }
-    if (!BrowserVoiceSession.supported()) {
+    if (!voiceSupported()) {
       setVoiceError('Голосовые каналы требуют современный браузер и защищённое HTTPS-соединение')
       return
     }
@@ -1439,8 +1466,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     let encryption: Awaited<ReturnType<typeof prepareVoiceE2EE>> | null = null
     let input: BrowserVoiceInput | null
     let iceConfiguration: RTCConfiguration
+    let voiceRuntime: typeof import('../services/voice')
     try {
-      [iceConfiguration, input, encryption] = await Promise.all([ensureWebRTCConfig(), ensureVoiceInput(), encryptionPromise])
+      [iceConfiguration, input, encryption, voiceRuntime] = await Promise.all([ensureWebRTCConfig(), ensureVoiceInput(), encryptionPromise, import('../services/voice')])
     } catch (error) {
       preparation?.abort()
       if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
@@ -1459,7 +1487,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setVoiceError(voiceErrorMessage(error))
       closeVoiceLocally()
     }
-    const media = new BrowserVoiceSession({
+    const media = new voiceRuntime.BrowserVoiceSession({
       input,
       iceConfiguration,
       onAnswer: (sdp) => trackVoiceRequest(realtimeRef.current?.answerVoice(sdp) ?? null, 'media'),
@@ -1905,7 +1933,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setVoiceStatus('signaling')
 
     try {
-      const iceConfiguration = await ensureWebRTCConfig()
+      const [iceConfiguration, { BrowserVoiceSession }] = await Promise.all([ensureWebRTCConfig(), import('../services/voice')])
       if (recoveryRef.current !== coordinator || coordinator.generation !== generation) return
       const encryption = channelsRef.current.find((item) => item.id === pending.channelId)?.e2ee_required ? await prepareVoiceE2EE(pending.channelId) : null
       if (recoveryRef.current !== coordinator || coordinator.generation !== generation) { encryption?.e2ee.close(); return }

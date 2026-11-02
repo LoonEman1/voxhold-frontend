@@ -1,6 +1,8 @@
 import type { SVGProps } from 'react'
 
 export type IconName =
+  | 'audit'
+  | 'clock'
   | 'warning'
   | 'news'
   | 'record'
@@ -47,6 +49,8 @@ export type IconName =
   | 'pip'
 
 const paths: Record<IconName, React.ReactNode> = {
+  audit: <><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/></>,
+  clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
   warning: <><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3v.1"/></>,
   news: <><path d="M3 9v6h4l10 5V4L7 9H3Z"/><path d="m7 15 2 6h3l-2-5M20 8v8"/></>,
   record: <><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/></>,

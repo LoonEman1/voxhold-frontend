@@ -1,5 +1,10 @@
 # Fast encrypted voice entry / Быстрый вход в E2EE
 
+Follow-up review: [2.6.0 / 2.6.1 findings and bundle measurements](performance-2.6-review.md).
+The fast-entry protocol below remains frontend-compatible. The follow-up adds
+optional backend-advertised `e2ee.keys` batching to carry keys and ACKs without
+exhausting the WebSocket event burst; it does not change their encrypted format.
+
 This change is frontend-only. It needs neither a backend/deploy release nor a
 database migration. It does not change the audio frame format or v2 wrapped
 sender-key format. No version is released by the feature branch.
