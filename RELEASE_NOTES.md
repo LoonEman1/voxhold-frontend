@@ -1,3 +1,17 @@
+# Voxhold Frontend 2.6.1
+
+Патч от 2 ноября 2026 года. Устранён шум вместо голоса при включённом E2EE:
+расшифровщик подключается до первого SDP-согласования, а идентификатор приёмника
+сохраняется при назначении mid и смене участника. При отсутствии или неверном
+ключе аудиокадры отбрасываются без воспроизведения шифротекста.
+
+Fixes encrypted voice playback after an initially receive-only SFU m-line starts
+sending. Receivers attach before negotiation and keep stable worker identities
+across SDP changes. Real browser tests verify a decoded 440 Hz tone and silence
+with missing or incorrect keys for both script transforms and insertable streams.
+Compatible with backend 2.6.0 and schema 000040; no backend or deploy upgrade is
+required for this frontend-only patch.
+
 # Voxhold Frontend 2.6.0
 
 Релиз от 2 ноября 2026 года. Нужен backend **2.6.0** (миграции 000034–000040).

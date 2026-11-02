@@ -30,7 +30,7 @@ interface VoiceMediaOptions {
   onPlaybackBlocked?: () => void
   /**
    * End-to-end encryption (FEAT-13): every audio sender and receiver goes
-   * through the worker, and the mid -> connection owner map tells it whose
+   * through the worker, and the receiver -> connection owner map tells it whose
    * key decrypts each receiver.
    */
   e2ee?: {
@@ -138,6 +138,8 @@ export class BrowserVoiceSession {
   private readonly midOwners = new Map<string, string>()
   private readonly trackOwners = new Map<string, string>()
   private readonly remoteTransceivers = new Map<string, RTCRtpTransceiver>()
+  private readonly receiverIds = new WeakMap<RTCRtpReceiver, string>()
+  private nextReceiverId = 0
   private levelsSampling = false
   private analysis: { context: AudioContext; sink: GainNode } | null = null
   private readonly remoteAnalysers = new Map<string, VoiceRemoteAnalyser>()
@@ -217,6 +219,10 @@ export class BrowserVoiceSession {
     this.inputSender = peer.addTrack(track, stream)
     // Before negotiation: no clear frame may leave once encryption is on.
     this.options.e2ee?.media.attachSender(this.inputSender, 'audio')
+    // addTrack also creates a receiver. Attach before the first negotiation:
+    // Chromium can otherwise keep that receiver on its untransformed path
+    // when an initially recvonly SFU m-line later starts sending audio.
+    this.refreshRemoteOwners()
     await this.applySenderBitrate(this.preferences.bitrateKbps).catch(() => {
       // Keep voice available in WebViews that do not expose encoding controls.
     })
@@ -232,7 +238,6 @@ export class BrowserVoiceSession {
 
     peer.ontrack = ({ track: remoteTrack, transceiver }) => {
       if (this.closed || remoteTrack.kind !== 'audio') return
-      if (this.options.e2ee && transceiver) this.options.e2ee.media.attachReceiver(transceiver.receiver, 'audio', transceiver.mid ?? remoteTrack.id)
       if (transceiver) this.remoteTransceivers.set(remoteTrack.id, transceiver)
       this.refreshRemoteOwners()
       if (this.remoteOutputs.has(remoteTrack.id)) return
@@ -334,11 +339,23 @@ export class BrowserVoiceSession {
   // starts sending or is reused. Refresh ownership after EVERY accepted offer,
   // even when the browser does not deliver another track event.
   private refreshRemoteOwners() {
+    const receiverOwners = new Map<string, string>()
     this.peer?.getTransceivers?.().forEach((transceiver) => {
       this.remoteTransceivers.set(transceiver.receiver.track.id, transceiver)
     })
     this.remoteTransceivers.forEach((transceiver, trackId) => {
       const owner = transceiver.mid !== null ? this.midOwners.get(transceiver.mid) : undefined
+      if (this.options.e2ee && transceiver.receiver.track.kind === 'audio') {
+        // mid may be null during ontrack, and track labels may be supplied by
+        // a later offer. The native receiver keeps the same worker identity.
+        let receiverId = this.receiverIds.get(transceiver.receiver)
+        if (!receiverId) {
+          receiverId = `voice-receiver-${++this.nextReceiverId}`
+          this.receiverIds.set(transceiver.receiver, receiverId)
+        }
+        this.options.e2ee.media.attachReceiver(transceiver.receiver, 'audio', receiverId)
+        if (owner) receiverOwners.set(receiverId, owner)
+      }
       const previous = this.trackOwners.get(trackId)
       if (owner) this.trackOwners.set(trackId, owner)
       else this.trackOwners.delete(trackId)
@@ -348,7 +365,7 @@ export class BrowserVoiceSession {
         track_id: trackId, mid: transceiver.mid, mapped: !!owner,
       })
     })
-    this.options.e2ee?.onReceiverOwners(this.midOwners)
+    this.options.e2ee?.onReceiverOwners(receiverOwners)
   }
 
   private attachRemoteAnalyser(trackId: string, media: MediaStream) {

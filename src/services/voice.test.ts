@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BrowserVoiceSession, voiceCloseMessage } from './voice'
 import { BrowserVoiceInput } from './voiceInput'
 import { DEFAULT_VOICE_PREFERENCES } from './voiceSettings'
+import type { E2EEMediaTransform } from './e2ee/mediaTransform'
 
 class FakeTrack extends EventTarget {
   readonly id = crypto.randomUUID()
@@ -235,6 +236,37 @@ describe('BrowserVoiceSession', () => {
       await vi.advanceTimersByTimeAsync(200)
       expect(levels).toHaveBeenLastCalledWith([])
     } finally { session.close(); input.close(); vi.useRealTimers() }
+  })
+
+  it('protects the preallocated receiver before negotiation and keeps its key mapping when mid and owner change', async () => {
+    const remoteTrack = new FakeTrack()
+    const transceiver = { mid: null as string | null, receiver: { track: remoteTrack } }
+    class EncryptedPeer extends FakePeerConnection {
+      getTransceivers = () => [transceiver]
+    }
+    vi.stubGlobal('RTCPeerConnection', EncryptedPeer)
+    const attachReceiver = vi.fn(), onReceiverOwners = vi.fn()
+    const media = { peerConfiguration: (base: RTCConfiguration) => base, attachSender: vi.fn(), attachReceiver } as unknown as E2EEMediaTransform
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const session = new BrowserVoiceSession({ input, e2ee: { media, onReceiverOwners }, onAnswer: vi.fn(), onICECandidate: vi.fn(), onConnectionStateChange: vi.fn(), onError: vi.fn() })
+    try {
+      await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+      const peer = FakePeerConnection.latest!
+      expect(attachReceiver).toHaveBeenCalledWith(transceiver.receiver, 'audio', expect.any(String))
+      expect(peer.setRemoteDescription).not.toHaveBeenCalled()
+      const receiverId = attachReceiver.mock.calls[0]![2] as string
+      peer.ontrack?.({ track: remoteTrack, transceiver } as unknown as RTCTrackEvent)
+      transceiver.mid = '0'
+      const offer = (owner: string) => `v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=msid:voice audio-${owner}\r\n`
+      await session.acceptOffer(offer('alice'))
+      expect(onReceiverOwners).toHaveBeenLastCalledWith(new Map([[receiverId, 'alice']]))
+      await session.acceptOffer(offer('bob'))
+      expect(onReceiverOwners).toHaveBeenLastCalledWith(new Map([[receiverId, 'bob']]))
+      expect(new Set(attachReceiver.mock.calls.map((call) => call[2]))).toEqual(new Set([receiverId]))
+      await session.acceptOffer('v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=recvonly\r\n')
+      expect(onReceiverOwners).toHaveBeenLastCalledWith(new Map())
+    } finally { session.close(); input.close() }
   })
 
   it('pauses remote level polling while hidden, resumes it, and removes the listener on close', async () => {
