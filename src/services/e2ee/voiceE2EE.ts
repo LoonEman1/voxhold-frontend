@@ -1,7 +1,8 @@
 /**
  * Glue for one end-to-end encrypted call (FEAT-13): the sender-key session,
  * the media worker and the mapping "receiver -> sender device" that the
- * worker needs to pick the right key for every incoming audio track.
+ * worker needs to pick the right key for every incoming audio track. Receiver
+ * IDs stay stable across SDP negotiations; they are not m-line IDs.
  */
 import type { E2EEDevice, EntityId } from '../../domain/types'
 import { clientDiagnostics } from '../../platform/clientDiagnostics'
