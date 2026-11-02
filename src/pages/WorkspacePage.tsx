@@ -790,6 +790,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     // a badge that was already cleared on another tab.
     counterTimersRef.current.set(serverId, window.setTimeout(() => {
       counterTimersRef.current.delete(serverId)
+      // Do not overlap slow activity refreshes: otherwise an older request can
+      // outlive the controller tracked by a later read and restore its badge.
+      if (counterRequestsRef.current.get(serverId)?.signal.aborted === false) {
+        counterRefreshRef.current(serverId, 1_000)
+        return
+      }
       const request = new AbortController(); counterRequestsRef.current.set(serverId, request)
       void api.channels.unreadCounts(token, serverId, request.signal).then((counts) => {
         if (request.signal.aborted || activeServerRef.current !== serverId) return

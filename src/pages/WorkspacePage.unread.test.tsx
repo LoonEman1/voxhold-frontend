@@ -48,7 +48,7 @@ beforeEach(() => {
   localStorage.clear()
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 it('updates the tab notification count for activity in an unsubscribed channel', async () => {
   render(<WorkspacePage api={api}/>)
@@ -63,6 +63,28 @@ it('shows a plain unread indicator before notification counts arrive', async () 
   await screen.findByRole('button', { name: 'random' })
   act(() => emit('onChannelActivity', { server_id: 1, channel_id: 2, message_id: 50, author_user_id: 2 }))
   await waitFor(() => expect(document.title).toBe('• Voxhold'))
+})
+
+it('keeps one slow counter request in flight and ignores its result after a read', async () => {
+  render(<WorkspacePage api={api}/>)
+  await screen.findByRole('button', { name: 'random' })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)) })
+  const pending: Array<{ signal?: AbortSignal; resolve: (counts: Array<{ channel_id: number; unread_count: number }>) => void }> = []
+  const counts = vi.spyOn(api.channels, 'unreadCounts').mockImplementation((_token, _serverId, signal) => new Promise((resolve) => pending.push({ signal, resolve })))
+  vi.useFakeTimers()
+  for (let id = 1; id <= 12; id++) {
+    act(() => emit('onChannelActivity', { server_id: 1, channel_id: 2, message_id: id, author_user_id: 2 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+  }
+  expect(counts).toHaveBeenCalledTimes(1)
+  expect(pending[0]!.signal?.aborted).toBe(false)
+  act(() => emit('onChannelRead', { server_id: 1, channel_id: 2, user_id: 1, last_read_message_id: 12, updated_at: 1 }))
+  expect(pending[0]!.signal?.aborted).toBe(true)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+  expect(counts).toHaveBeenCalledTimes(2)
+  await act(async () => { pending[1]!.resolve([]) })
+  await act(async () => { pending[0]!.resolve([{ channel_id: 2, unread_count: 99 }]) })
+  expect(document.title).toBe('Voxhold')
 })
 
 it('commits one Workspace update for a burst of 200 activity events', async () => {
