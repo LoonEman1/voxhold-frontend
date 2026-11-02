@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDevice, ensureDevice, forgetDevice, type E2EEStore, type LocalDevice, type SeenKeys } from './deviceKeys'
-import { base64Decode, importDevicePublicKey, unwrapSenderKey, wrapSenderKey } from './keyWrap'
+import { base64Decode, importDevicePublicKey, readKeyAcknowledgement, unwrapSenderKey, wrapSenderKey } from './keyWrap'
 import { rememberPeerKeys, safetyCode } from './safetyCode'
 import { SenderKeySession, senderId, type RoomMember, type SenderKeySink } from './senderKeys'
 import { createFrameProcessor, type WorkerEvent } from './frameProcessor'
@@ -70,6 +70,19 @@ describe('key wrapping', () => {
 })
 
 describe('device registration', () => {
+  it('does not register or persist a device if the join was canceled during the store read', async () => {
+    const store = new MemoryStore(), controller = new AbortController()
+    let complete!: (device: LocalDevice | undefined) => void
+    vi.spyOn(store, 'getDevice').mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+    const registry = { register: vi.fn(async () => undefined), revoke: vi.fn(async () => undefined) }
+    const joining = ensureDevice(store, registry, 9, undefined, controller.signal)
+    controller.abort()
+    complete(undefined)
+    await expect(joining).rejects.toMatchObject({ name: 'AbortError' })
+    expect(registry.register).not.toHaveBeenCalled()
+    expect(store.devices.size).toBe(0)
+  })
+
   it('registers before every call, replaces a refused device and forgets it on logout', async () => {
     const store = new MemoryStore()
     const registered: string[] = []
@@ -101,6 +114,7 @@ describe('sender key session', () => {
     const sinks = devices.map(() => new RecordingSink())
     const sessions: SenderKeySession[] = []
     const deliveries: Array<Promise<void>> = []
+    const sent: Array<{ from: number; payload: string }> = []
     devices.forEach((device, index) => {
       sessions.push(new SenderKeySession({
         room: 'voice:1',
@@ -108,16 +122,16 @@ describe('sender key session', () => {
         sink: sinks[index]!,
         directory: { publicKey: async (target) => publicKeys.get(senderId(target))! },
         transport: {
-          sendKey: (to, payload) => { const target = devices.findIndex((d) => d.deviceId === to.deviceId); deliveries.push(sessions[target]!.receiveKey(member(device), payload)) },
+          sendKey: (to, payload) => { sent.push({ from: index, payload }); const target = devices.findIndex((d) => d.deviceId === to.deviceId); deliveries.push(sessions[target]!.receiveKey(member(device), payload)) },
           requestKey: (to) => { const target = devices.findIndex((d) => d.deviceId === to.deviceId); sessions[target]!.resendTo(member(device)) },
         },
       }))
     })
     const settle = (check: () => boolean = () => true) => turnUntil(check, () => Promise.all(deliveries.splice(0)))
-    return { devices, sinks, sessions, settle }
+    return { devices, sinks, sessions, settle, sent }
   }
 
-  it('distributes a new key on every membership change and activates it after 1 s', async () => {
+  it('distributes the first key immediately and activates later keys as soon as peers ACK', async () => {
     useClock()
     const { devices, sinks, sessions, settle } = await room(3)
     const [alice, bob, carol] = devices as [LocalDevice, LocalDevice, LocalDevice]
@@ -127,29 +141,30 @@ describe('sender key session', () => {
     const fromAlice = (sink: RecordingSink) => sink.received.filter((entry) => entry.senderId === senderId(member(alice)))
     sessions[0]!.setMembers([member(bob)])
     sessions[1]!.setMembers([member(alice)])
-    // Rotations are at least 2 s apart; the first key was just created.
-    await vi.advanceTimersByTimeAsync(2_000)
     await settle(() => fromAlice(sinks[1]!).length >= 1)
-    expect(fromAlice(sinks[1]!).map((entry) => entry.keyId)).toEqual([1])
+    expect(fromAlice(sinks[1]!).map((entry) => entry.keyId)).toEqual([0])
+    // Bootstrap distribution must never reinstall/reset this already active key.
     expect(sinks[0]!.sendKeys).toEqual([0])
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(sinks[0]!.sendKeys).toEqual([0, 1])
 
     // Carol joins: Alice rotates and Carol gets only the new key.
     sessions[0]!.setMembers([member(bob), member(carol)])
+    sessions[1]!.setMembers([member(alice), member(carol)])
     sessions[2]!.setMembers([member(alice), member(bob)])
     await vi.advanceTimersByTimeAsync(2_000)
-    await settle(() => fromAlice(sinks[2]!).length >= 1)
-    expect(fromAlice(sinks[2]!).map((entry) => entry.keyId)).toEqual([2])
+    await settle(() => sinks[0]!.sendKeys.length === 2)
+    expect(fromAlice(sinks[2]!).map((entry) => entry.keyId)).toEqual([1])
+    expect(sinks[0]!.sendKeys).toEqual([0, 1])
 
     // Bob leaves: Alice forgets his keys and he never sees her next key.
     const bobKnows = fromAlice(sinks[1]!).length
     sessions[0]!.setMembers([member(carol)])
-    await vi.advanceTimersByTimeAsync(3_000)
+    sessions[2]!.setMembers([member(alice)])
+    sessions[1]!.setMembers([])
+    await vi.advanceTimersByTimeAsync(2_000)
     await settle(() => fromAlice(sinks[2]!).length >= 2)
     expect(sinks[0]!.removed).toContain(senderId(member(bob)))
     expect(fromAlice(sinks[1]!)).toHaveLength(bobKnows)
-    expect(fromAlice(sinks[2]!).map((entry) => entry.keyId)).toEqual([2, 3])
+    expect(fromAlice(sinks[2]!).map((entry) => entry.keyId)).toEqual([1, 2])
     sessions.forEach((session) => session.close())
   })
 
@@ -163,6 +178,7 @@ describe('sender key session', () => {
       transport: { sendKey: (to) => sent.push(to.deviceId), requestKey: () => undefined },
     })
     alice.start()
+    alice.setMembers([]) // Already in a room alone: a newcomer needs a new key.
     await settle()
     const others = devices.slice(1).map(member)
     for (let count = 1; count <= 10; count++) {
@@ -200,30 +216,36 @@ describe('sender key session', () => {
     await receiver.receiveKey(member(alice), newer)
     await receiver.receiveKey(member(alice), older) // rollback by the relay
     await receiver.receiveKey(member(alice), newer) // replay: would reset the replay window
-    expect(sink.received.map((entry) => entry.keyId)).toEqual([2])
+    expect(sink.received.map((entry) => entry.keyId)).toEqual([1])
 
     // Alice left and came back: her keys were dropped, so the current one is needed again.
     receiver.setMembers([])
     receiver.setMembers([member(alice)])
     await receiver.receiveKey(member(alice), older)
     await receiver.receiveKey(member(alice), newer)
-    expect(sink.received.map((entry) => entry.keyId)).toEqual([2, 2])
+    expect(sink.received.map((entry) => entry.keyId)).toEqual([1, 1])
     sender.close()
     receiver.close()
   })
 
-  it('resends its key when a member asks', async () => {
+  it('resends its key without reinstalling it or resetting the replay window', async () => {
     useClock()
-    const { devices, sinks, sessions, settle } = await room(2)
+    const { devices, sinks, sessions, settle, sent } = await room(2)
     sessions[0]!.start()
     sessions[0]!.setMembers([member(devices[1]!)])
     sessions[1]!.setMembers([member(devices[0]!)])
     await vi.advanceTimersByTimeAsync(1_000)
-    await settle()
-    const before = sinks[1]!.received.length
+    const acknowledgements = () => sent.filter((item) => item.from === 1 && readKeyAcknowledgement(item.payload)).length
+    // WebCrypto uses the real thread pool despite the fake clock. Wait for
+    // installation/ACK, not an arbitrary number of event-loop turns.
+    await settle(() => sinks[1]!.received.length === 1 && acknowledgements() === 1)
+    const before = sent.filter((item) => item.from === 0 && !readKeyAcknowledgement(item.payload)).length
+    const installed = sinks[1]!.received.length
+    expect(installed).toBe(1)
     sessions[1]!.requestKey(member(devices[0]!))
-    await settle(() => sinks[1]!.received.length > before)
-    expect(sinks[1]!.received.length).toBe(before + 1)
+    await settle(() => sent.filter((item) => item.from === 0 && !readKeyAcknowledgement(item.payload)).length > before && acknowledgements() === 2)
+    expect(acknowledgements()).toBe(2)
+    expect(sinks[1]!.received.length).toBe(installed)
     sessions.forEach((session) => session.close())
   })
 })
@@ -249,7 +271,7 @@ describe('security code and key trust', () => {
 })
 
 describe('frame processor', () => {
-  it('decrypts mapped senders and asks for a missing key after 2 s', async () => {
+  it('requests a missing key immediately and rate-limits retries', async () => {
     let clock = 0
     const events: WorkerEvent[] = []
     const sender = createFrameProcessor(() => undefined, () => clock)
@@ -262,9 +284,14 @@ describe('frame processor', () => {
     expect(await receiver.process(options, sealed)).toBeNull() // not mapped yet
     await receiver.command({ type: 'mapReceiver', receiverId: 'mid-1', senderId: '7:dev' })
     expect(await receiver.process(options, sealed)).toBeNull()
+    expect(events.filter((event) => event.type === 'missingKey')).toHaveLength(1)
+    clock = 1_000
+    expect(await receiver.process(options, sealed)).toBeNull()
+    expect(events.filter((event) => event.type === 'missingKey')).toHaveLength(1)
     clock = 2_500
     expect(await receiver.process(options, (await sender.process({ role: 'send', kind: 'audio' }, frame))!)).toBeNull()
     expect(events).toContainEqual({ type: 'missingKey', senderId: '7:dev' })
+    expect(events.filter((event) => event.type === 'missingKey')).toHaveLength(2)
     await receiver.command({ type: 'receiveKey', senderId: '7:dev', keyId: 2, key })
     const plain = await receiver.process(options, (await sender.process({ role: 'send', kind: 'audio' }, frame))!)
     expect(Array.from(plain!)).toEqual(Array.from(frame))

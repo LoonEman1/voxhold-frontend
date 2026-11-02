@@ -39,3 +39,25 @@ for (const mode of ['script', 'streams'] as const) {
     })
   }
 }
+
+for (const mode of ['script', 'streams'] as const) {
+  for (const exchange of ['bootstrap', 'late'] as const) {
+    test(`hears real key exchange promptly for ${exchange} entry using ${mode}`, async ({ page }) => {
+      const result = await page.evaluate(async ({ selected, entry }) => {
+        return (window as unknown as { e2eeAudioProbe: AudioProbe }).e2eeAudioProbe.runSession(selected, 'valid', entry)
+      }, { selected: mode, entry: exchange })
+      console.log(JSON.stringify({ mode, exchange, firstDecryptedMs: result.firstDecryptedMs, firstAudibleMs: result.firstAudibleMs }))
+      expect(result.errors).toEqual([])
+      expect(result.keyMessages).toBeGreaterThan(1)
+      expect(result.firstDecryptedMs).not.toBeNull()
+      expect(result.firstAudibleMs).not.toBeNull()
+      // Includes the real worker and WebCrypto, two 25 ms relay hops and
+      // browser jitter/playout. The old 2–3 s key timers cannot pass this.
+      expect(result.firstDecryptedMs!).toBeGreaterThanOrEqual(0)
+      expect(result.firstDecryptedMs!).toBeLessThan(800)
+      expect(result.firstAudibleMs!).toBeLessThan(1_000)
+      expect(result.rms).toBeGreaterThan(0.05)
+      expect(result.toneRatio).toBeGreaterThan(0.95)
+    })
+  }
+}

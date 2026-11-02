@@ -48,7 +48,9 @@ Voxhold **2.4.0** требует миграции **000031** и соответс
 ## Отложенная отправка
 
 Под полем ввода в каналах, ЛС, группах и избранном есть «Отложить сообщение».
-В левой панели находится список с изменением времени/текста и отменой.
+Кнопка «Отложенные» в конкретном чате открывает его сообщения с изменением
+времени/текста и отменой отправки. Глобальной кнопки больше нет. Список ограничен
+текущим чатом, включая работу со старым сервером, который игнорирует новые фильтры.
 
 - `GET/POST /api/v1/me/scheduled-messages`.
 - `PUT/DELETE /api/v1/me/scheduled-messages/{ID}`.
@@ -109,6 +111,11 @@ POST. Задания сохраняются в SQLite и отправляютс�
 или удалять. Имена действовавших пользователей сохраняются независимо от их
 текущего участия в сообществе.
 
+В интерфейсе автор выбирается по имени: это тот, кто выполнил действие, а не тот,
+кого заблокировали или изменили. Запись показывает цель, время и понятные параметры
+изменения. Нажатие на имя автора оставляет только его действия. «Сбросить фильтры»
+возвращает весь журнал. Вводить ID вручную не нужно.
+
 ## Звонки в ЛС и группах
 
 Кнопка «Позвонить / присоединиться» открывает звонок с микрофоном, отключением
@@ -160,8 +167,9 @@ Voxhold **2.4.0** requires migration **000031** and the matching frontend. Back 
 SQLite database and attachment directory together; deploy the backend before
 the client. The migration's downgrade removes the new feature data.
 
-- The left personal rail contains private Favorites with notes and Unicode
-  search, scheduled messages, server events and the administrator audit log.
+- The left personal rail contains direct/group conversations, private Favorites
+  with notes and Unicode search, server events and the administrator audit log.
+  Scheduled messages are opened from their destination chat.
 - Messages can be forwarded between channels, direct/group conversations and
   Favorites. Attachments are copied independently and count toward storage quotas.
   Forwarding preserves attribution without exporting private source identifiers.
