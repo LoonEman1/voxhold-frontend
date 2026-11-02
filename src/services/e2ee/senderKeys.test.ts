@@ -235,11 +235,16 @@ describe('sender key session', () => {
     sessions[0]!.setMembers([member(devices[1]!)])
     sessions[1]!.setMembers([member(devices[0]!)])
     await vi.advanceTimersByTimeAsync(1_000)
-    await settle()
+    const acknowledgements = () => sent.filter((item) => item.from === 1 && readKeyAcknowledgement(item.payload)).length
+    // WebCrypto uses the real thread pool despite the fake clock. Wait for
+    // installation/ACK, not an arbitrary number of event-loop turns.
+    await settle(() => sinks[1]!.received.length === 1 && acknowledgements() === 1)
     const before = sent.filter((item) => item.from === 0 && !readKeyAcknowledgement(item.payload)).length
     const installed = sinks[1]!.received.length
+    expect(installed).toBe(1)
     sessions[1]!.requestKey(member(devices[0]!))
-    await settle(() => sent.filter((item) => item.from === 0 && !readKeyAcknowledgement(item.payload)).length > before)
+    await settle(() => sent.filter((item) => item.from === 0 && !readKeyAcknowledgement(item.payload)).length > before && acknowledgements() === 2)
+    expect(acknowledgements()).toBe(2)
     expect(sinks[1]!.received.length).toBe(installed)
     sessions.forEach((session) => session.close())
   })
