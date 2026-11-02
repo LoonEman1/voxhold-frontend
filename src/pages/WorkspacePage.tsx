@@ -17,8 +17,6 @@ import { WorkspaceDialogBoundary } from '../components/WorkspaceDialogBoundary'
 import { WorkspaceContentBoundary } from '../components/WorkspaceContentBoundary'
 import { MemberCard } from '../components/LazyWorkspaceDialogs'
 import { CommunityProvider, CommunityNavigation, CommunitySidebar, CommunityContent, openCommunityChannels } from '../components/Community'
-import { NewsComments } from '../components/NewsComments'
-import { NewsChannelSettings } from '../components/NewsChannelSettings'
 import { ContextMenu, type ContextMenuItem, type ContextMenuState } from '../components/ContextMenu'
 import { Icon } from '../components/Icon'
 import { ModalLoading } from '../components/ModalLoading'
@@ -55,13 +53,15 @@ import { clearThumbnails } from '../lib/thumbnailCache'
 import { humanError } from '../lib/format'
 import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
+import { ChannelActivityBatch } from '../services/channelActivity'
 import type { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, StreamQualityStats } from '../services/stream'
 import { captureScreen, capturedAudioIncludesOwnPlayback } from '../services/screenCapture'
 import { streamErrorMessage } from '../services/streamErrors'
 import type { StreamAudioGain } from '../services/streamAudioGain'
 import type { StreamPublishPipeline } from '../services/hdrPipeline'
 import { loadStreamPreferences, saveStreamPreferences, type StreamPreferences } from '../services/streamSettings'
-import { BrowserVoiceSession, enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage } from '../services/voice'
+import type { BrowserVoiceSession } from '../services/voice'
+import { enumerateVoiceDevices, voiceCloseMessage, voiceErrorMessage, voiceSupported } from '../services/voiceEnvironment'
 import type { CallE2EE } from '../services/e2ee/voiceE2EE'
 import type { BrowserVoiceInput } from '../services/voiceInput'
 import { RetryBudget, SignallingRecoveryCoordinator } from '../services/mediaRecovery'
@@ -78,6 +78,9 @@ const ChannelAccessSettings = lazy(() => import('../components/ChannelAccessSett
 const loadRecordingsDialog = () => import('../components/RecordingsDialog').then((module) => ({ default: module.RecordingsDialog }))
 const RecordingsDialog = lazy(loadRecordingsDialog)
 const StreamSettingsDialog = lazy(() => import('../components/StreamSettingsDialog').then((module) => ({ default: module.StreamSettingsDialog })))
+const LazyNewsComments = lazy(() => import('../components/NewsComments').then((module) => ({ default: module.NewsComments })))
+function NewsComments(props: ComponentProps<typeof LazyNewsComments>) { return <Suspense fallback={<p role="status">Загружаем обсуждение…</p>}><LazyNewsComments {...props}/></Suspense> }
+const NewsChannelSettings = lazy(() => import('../components/NewsChannelSettings').then((module) => ({ default: module.NewsChannelSettings })))
 
 type Dialog = 'server' | 'channel' | 'channelSettings' | 'invite' | 'profile' | 'userProfile' | 'settings' | 'voiceSettings' | 'streamSettings' | 'logout' | null
 type MessagePanel = 'search' | 'pins' | null
@@ -118,8 +121,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [servers, setServers] = useState<Server[]>([])
   const [selectedServerId, setSelectedServerId] = useState<number | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
-  const unreadTotal = useMemo(() => channels.reduce((sum, channel) => sum + (channel.unread_count ?? 0), 0), [channels])
-  useUnreadTitle(unreadTotal, 0)
+  const notificationTotal = useMemo(() => channels.reduce((sum, channel) => sum + (channel.unread_count ?? 0), 0), [channels])
   const [notificationChannel, setNotificationChannel] = useState<Channel | null>(null)
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null)
@@ -136,6 +138,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const [focusedMessageId, setFocusedMessageId] = useState<number | null>(null)
   const [onlineByServer, setOnlineByServer] = useState<Record<number, number[]>>({})
   const [channelReads, setChannelReads] = useState<Record<number, Record<number, ChannelRead>>>({})
+  const hasUnreadChannels = channels.some((channel) => channel.kind !== 'voice' && channelHasUnreadMessages(channel, channelReads[channel.id]?.[user?.id ?? 0]))
+  useUnreadTitle(hasUnreadChannels ? 1 : 0, notificationTotal)
   const [voiceParticipants, setVoiceParticipants] = useState<Record<string, VoiceParticipant>>({})
   const [voiceSession, setVoiceSession] = useState<ActiveVoiceSession | null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceConnectionStatus>('idle')
@@ -203,6 +207,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const voiceMediaRef = useRef<BrowserVoiceSession | null>(null)
   // FEAT-13: key session and media worker of an end-to-end encrypted channel.
   const voiceE2EERef = useRef<CallE2EE | null>(null)
+  const voiceE2EERuntimeRef = useRef<typeof import('../services/e2ee/runtime') | null>(null)
+  const voicePreparationRef = useRef<AbortController | null>(null)
   const [voiceEncryption, setVoiceEncryption] = useState<{ active: boolean; changedKeys: number[] }>({ active: false, changedKeys: [] })
   const voiceSessionRef = useRef<ActiveVoiceSession | null>(voiceSession)
   const recording = useCallRecordings({ api, token, scope: `${realtimeBaseUrl || window.location.origin}:${user?.id ?? 0}`, serverId: selectedServerId, voice: voiceSession, voiceMedia: voiceMediaRef, stream: streamMedia, notify, mediaVersion: voiceStatus })
@@ -212,7 +218,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => notificationCenter.start(), [notificationCenter])
   const channelRefreshRef = useRef<(serverId: number) => void>(() => {})
   const channelRequestsRef = useRef(new Map<number, number>())
-  const counterRefreshRef = useRef<(serverId: number) => void>(() => {})
+  const counterRefreshRef = useRef<(serverId: number, delay?: number) => void>(() => {})
   const counterTimersRef = useRef(new Map<number, number>())
   const counterRequestsRef = useRef(new Map<number, AbortController>())
   useEffect(() => () => {
@@ -603,6 +609,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
     const media = voiceMediaRef.current
     voiceMediaRef.current = null
+    voicePreparationRef.current?.abort()
+    voicePreparationRef.current = null
     media?.close()
     voiceE2EERef.current?.close()
     voiceE2EERef.current = null
@@ -637,14 +645,18 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * this device's registered key, the worker and the sender-key session.
    * Throws a user-facing error when the browser cannot encrypt.
    */
-  const prepareVoiceE2EE = useCallback(async (channelId: number) => {
-    if (!token || !user) throw new Error('Сессия истекла. Войдите снова')
-    const runtime = await import('../services/e2ee/runtime')
+  const prepareVoiceE2EE = useCallback(async (channelId: number, startedAt = performance.now()) => {
+    const controller = new AbortController()
+    voicePreparationRef.current?.abort()
+    voicePreparationRef.current = controller
+    const runtime = voiceE2EERuntimeRef.current ?? await import('../services/e2ee/runtime')
     return runtime.openCallE2EE({
       api,
-      token,
-      userId: user.id,
+      token: token ?? '',
+      userId: user?.id ?? 0,
       room: `voice:${channelId}`,
+      startedAt,
+      signal: controller.signal,
       transport: {
         sendKey: (to, payload) => { realtimeRef.current?.sendE2EEKey(channelId, to.userId, to.deviceId, payload) },
         requestKey: (to) => { realtimeRef.current?.requestE2EEKey(channelId, to.userId, to.deviceId) },
@@ -652,16 +664,30 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onKeyChanged: (userId) => {
         setVoiceEncryption((current) => current.changedKeys.includes(userId) ? current : { ...current, changedKeys: [...current.changedKeys, userId] })
       },
-      onError: (error) => clientDiagnostics.record('webrtc', 'e2ee_key_error', 'warn', { error_name: error instanceof Error ? error.name : typeof error }),
     })
   }, [api, token, user])
+
+  useEffect(() => {
+    const userId = user?.id, channelId = selectedChannel?.id
+    if (!token || !userId || !channelId || selectedChannel?.kind !== 'voice' || !selectedChannel.e2ee_required || voiceSession?.channelId === channelId) return
+    let canceled = false
+    let release: (() => void) | undefined
+    void import('../services/e2ee/runtime').then((runtime) => {
+      if (canceled) return
+      voiceE2EERuntimeRef.current = runtime
+      release = runtime.prewarmVoiceChannel({ api, token, userId, channelId }, voiceParticipantsRef.current)
+    }).catch(() => undefined)
+    return () => { canceled = true; release?.() }
+  }, [api, token, user?.id, selectedChannel?.id, selectedChannel?.kind, selectedChannel?.e2ee_required, voiceSession?.channelId])
 
   useEffect(() => () => closeVoiceLocally(), [closeVoiceLocally])
 
   // Room membership drives sender-key rotation and receiver -> sender mapping.
   useEffect(() => {
     const e2ee = voiceE2EERef.current
-    if (!e2ee || !voiceSession) return
+    // The relay accepts key messages only after voice.joined confirmed us.
+    // A pending local session must not consume the first-distribution path.
+    if (!e2ee || !voiceSession?.connectionId) return
     e2ee.setParticipants(Object.values(voiceParticipants)
       .filter((participant) => participant.server_id === voiceSession.serverId && participant.channel_id === voiceSession.channelId)
       .map((participant) => ({ connectionId: participant.connection_id, userId: participant.user_id, deviceId: participant.e2ee_device_id })))
@@ -753,15 +779,23 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const presenceStateRef = useRef({ onlineByServer, lastSeenByUser, viewedProfile })
   presenceStateRef.current = { onlineByServer, lastSeenByUser, viewedProfile }
 
-  counterRefreshRef.current = (serverId: number) => {
+  counterRefreshRef.current = (serverId: number, delay = 80) => {
     if (!token || serverId !== activeServerRef.current) return
+    // A read invalidates an older response. Activity can accept that response
+    // and reconcile once more, instead of repeatedly aborting a slow request.
+    if (delay < 1_000) counterRequestsRef.current.get(serverId)?.abort()
     const pending = counterTimersRef.current.get(serverId)
     if (pending) return
     // Bound network work during bursts and keep older responses from restoring
     // a badge that was already cleared on another tab.
-    counterRequestsRef.current.get(serverId)?.abort()
     counterTimersRef.current.set(serverId, window.setTimeout(() => {
       counterTimersRef.current.delete(serverId)
+      // Do not overlap slow activity refreshes: otherwise an older request can
+      // outlive the controller tracked by a later read and restore its badge.
+      if (counterRequestsRef.current.get(serverId)?.signal.aborted === false) {
+        counterRefreshRef.current(serverId, 1_000)
+        return
+      }
       const request = new AbortController(); counterRequestsRef.current.set(serverId, request)
       void api.channels.unreadCounts(token, serverId, request.signal).then((counts) => {
         if (request.signal.aborted || activeServerRef.current !== serverId) return
@@ -772,8 +806,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           const next = current.map((channel) => channel.server_id === serverId && (channel.unread_count ?? 0) !== (values.get(channel.id) ?? 0) ? { ...channel, unread_count: values.get(channel.id) ?? 0 } : channel)
           channelsRef.current = next; return next
         })
-      }).catch(() => undefined)
-    }, 80))
+      }).catch(() => undefined).finally(() => { if (counterRequestsRef.current.get(serverId) === request) counterRequestsRef.current.delete(serverId) })
+    }, delay))
   }
 
   useEffect(() => {
@@ -899,6 +933,28 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   useEffect(() => {
     if (!token) return
+    const userId = user?.id ?? 0
+    const activity = new ChannelActivityBatch(userId, (updates) => {
+      const active = updates.filter((update) => update.serverId === activeServerRef.current)
+      if (!active.length) return
+      const latest = new Map(active.map((update) => [update.channelId, update.messageId]))
+      setChannels((current) => {
+        let changed = false
+        const next = current.map((channel) => {
+          const messageId = latest.get(channel.id)
+          if (!messageId || (channel.last_message_id ?? 0) >= messageId) return channel
+          changed = true
+          return { ...channel, last_message_id: messageId }
+        })
+        if (!changed) return current
+        channelsRef.current = next
+        return next
+      })
+      for (const update of active) {
+        if (userId && update.ownMessageId) applyChannelRead({ server_id: update.serverId, channel_id: update.channelId, user_id: userId, last_read_message_id: update.ownMessageId, updated_at: Math.floor(Date.now() / 1000) })
+      }
+      counterRefreshRef.current(active[0]!.serverId, 1_000)
+    })
     const client = new RealtimeClient({
       token,
       baseUrl: realtimeBaseUrl,
@@ -953,10 +1009,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       },
       onChannelActivity: (event) => {
         if (event.server_id !== activeServerRef.current) return
-        recordLastMessage(event.channel_id, event.message_id)
-        // Your own message (e.g. from another device) never makes a channel unread.
-        const me = user?.id
-        if (me !== undefined && event.author_user_id === me) applyChannelRead({ server_id: event.server_id, channel_id: event.channel_id, user_id: me, last_read_message_id: event.message_id, updated_at: Math.floor(Date.now() / 1000) })
+        activity.add(event)
       },
       onMessageReactions: (event) => {
         historyStore.reactions(event)
@@ -1206,7 +1259,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           return
         }
         const replaced = event.reason === 'voice session moved to another connection'
-        const rejoin = !replaced && !!voiceSessionRef.current && voiceRejoinBudgetRef.current.take()
+        const revoked = event.reason === 'voice e2ee device was revoked' || event.reason === 'voice permission was revoked' || event.reason === 'channel access was revoked'
+        const rejoin = !replaced && !revoked && !!voiceSessionRef.current && voiceRejoinBudgetRef.current.take()
         clientDiagnostics.record('webrtc', 'voice_closed_by_server', 'warn', {
           reason: event.reason,
           action: rejoin ? 'rejoin' : 'leave',
@@ -1336,6 +1390,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     client.connect()
     return () => {
       const replacing = workspaceActive.current
+      activity.close()
       client.close()
       realtimeRef.current = null
       const phase = recoveryRef.current?.phase
@@ -1381,7 +1436,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setVoiceError('Сначала дождитесь подключения к realtime-серверу')
       return
     }
-    if (!BrowserVoiceSession.supported()) {
+    if (!voiceSupported()) {
       setVoiceError('Голосовые каналы требуют современный браузер и защищённое HTTPS-соединение')
       return
     }
@@ -1409,26 +1464,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceSessionRef.current = pending
     setVoiceSession(pending)
 
-    // Media start waits for the runtime ICE configuration (or a fixed
-    // host-only fallback) before any peer is created.
-    const iceConfiguration = await ensureWebRTCConfig()
-    if (voiceSessionRef.current !== pending) return
-
-    const input = await ensureVoiceInput()
-    if (!input) return
-    if (voiceSessionRef.current !== pending) return
-
+    // Start key preparation, capture and ICE lookup together. A warmed module
+    // consumes its worker synchronously before React releases the warm lease.
+    const startedAt = performance.now()
+    const encryptionPromise = channel.e2ee_required ? prepareVoiceE2EE(channel.id, startedAt) : Promise.resolve(null)
+    const preparation = voicePreparationRef.current
     let encryption: Awaited<ReturnType<typeof prepareVoiceE2EE>> | null = null
-    if (channel.e2ee_required) {
-      try {
-        encryption = await prepareVoiceE2EE(channel.id)
-      } catch (error) {
-        if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
-        return
-      }
-      if (voiceSessionRef.current !== pending) { encryption.e2ee.close(); return }
-      voiceE2EERef.current = encryption.e2ee
+    let input: BrowserVoiceInput | null
+    let iceConfiguration: RTCConfiguration
+    let voiceRuntime: typeof import('../services/voice')
+    try {
+      [iceConfiguration, input, encryption, voiceRuntime] = await Promise.all([ensureWebRTCConfig(), ensureVoiceInput(), encryptionPromise, import('../services/voice')])
+    } catch (error) {
+      preparation?.abort()
+      if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
+      return
     }
+    if (!input || voiceSessionRef.current !== pending) { encryption?.e2ee.close(); return }
+    if (encryption) voiceE2EERef.current = encryption.e2ee
     const e2ee = encryption?.e2ee
 
     // Function declaration (not arrow) so it can close over `media`
@@ -1440,7 +1493,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setVoiceError(voiceErrorMessage(error))
       closeVoiceLocally()
     }
-    const media = new BrowserVoiceSession({
+    const media = new voiceRuntime.BrowserVoiceSession({
       input,
       iceConfiguration,
       onAnswer: (sdp) => trackVoiceRequest(realtimeRef.current?.answerVoice(sdp) ?? null, 'media'),
@@ -1886,7 +1939,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setVoiceStatus('signaling')
 
     try {
-      const iceConfiguration = await ensureWebRTCConfig()
+      const [iceConfiguration, { BrowserVoiceSession }] = await Promise.all([ensureWebRTCConfig(), import('../services/voice')])
       if (recoveryRef.current !== coordinator || coordinator.generation !== generation) return
       const encryption = channelsRef.current.find((item) => item.id === pending.channelId)?.e2ee_required ? await prepareVoiceE2EE(pending.channelId) : null
       if (recoveryRef.current !== coordinator || coordinator.generation !== generation) { encryption?.e2ee.close(); return }

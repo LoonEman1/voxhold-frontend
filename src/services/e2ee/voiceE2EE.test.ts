@@ -12,7 +12,8 @@ const session = vi.hoisted(() => ({ members: [] as unknown[][], requested: [] as
 
 vi.mock('./mediaTransform', () => ({
   E2EEMediaTransform: class {
-    constructor(_mode: string, onEvent: (event: WorkerEvent) => void) { media.emit = onEvent }
+    constructor() {}
+    setHandlers(onEvent: (event: WorkerEvent) => void) { media.emit = onEvent }
     mapReceiver(receiverId: string, sender: string | null) { media.mapped.push([receiverId, sender]) }
     setSendKey() {}
     addReceiveKey() {}

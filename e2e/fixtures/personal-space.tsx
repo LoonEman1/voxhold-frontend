@@ -5,7 +5,7 @@ import { MemberCard } from '../../src/components/MemberCard'
 import { Avatar } from '../../src/components/Avatar'
 import { Icon } from '../../src/components/Icon'
 import { createApi } from '../../src/services/api'
-import type { Conversation, CustomRole, DirectMessage, Privacy } from '../../src/domain/community'
+import type { Conversation, CustomRole, DirectMessage, Privacy, ScheduledMessage, AuditEntry } from '../../src/domain/community'
 import type { Profile, ServerMember } from '../../src/domain/types'
 import '../../src/styles/global.css'
 
@@ -14,6 +14,15 @@ let roles: CustomRole[] = [{ id: 1, name: 'Друзья', color: '#63d8e6', perm
 const conversations: Conversation[] = [{ id: 7, name: '', direct: true, unread_count: 2, members: members.slice(0, 2) }, { id: 8, name: 'Планы на выходные', direct: false, unread_count: 1, members }]
 const now = Math.floor(Date.now() / 1000)
 const messages: DirectMessage[] = [{ id: 1, conversation_id: 7, author: members[1]!, content: 'Привет! Как насчёт собраться в субботу?', client_message_id: 'one', created_at: now - 420 }, { id: 2, conversation_id: 7, author: members[0]!, content: 'Я за! Давай ближе к вечеру, часов в семь.', client_message_id: 'two', created_at: now - 300 }, { id: 3, conversation_id: 7, author: members[1]!, content: 'Отлично, договорились. Позовём ещё Мишу?', client_message_id: 'three', created_at: now - 100 }]
+let scheduled: ScheduledMessage[] = [
+  { id: 1, destination: { kind: 'conversation', id: 7 }, payload: { content: 'Встречаемся в семь.' }, send_at: now + 3600, status: 'pending', error: '' },
+  { id: 2, destination: { kind: 'conversation', id: 8 }, payload: { content: 'Сообщение для другой беседы' }, send_at: now + 7200, status: 'pending', error: '' },
+]
+const audit: AuditEntry[] = [
+  { id: 3, actor_user_id: 1, actor_name: 'Александр', action: 'member.banned', target_type: 'user', target_id: 5, target_name: 'Спам-аккаунт', details: { reason: 'Повторные рекламные сообщения' }, created_at: now - 600 },
+  { id: 2, actor_user_id: 2, actor_name: 'Лера', action: 'channel.created', target_type: 'channel', target_id: 2, target_name: 'планы-на-выходные', details: null, created_at: now - 3600 },
+  { id: 1, actor_user_id: 1, actor_name: 'Александр', action: 'member.timeout', target_type: 'user', target_id: 3, target_name: 'Миша', details: { until: null }, created_at: now - 7200 },
+]
 let privacy: Privacy = { mode: 'shared', blocked_user_ids: [] }
 const api = createApi({ request: async <T,>({ path, method, body }: { path: string; method?: string; body?: unknown }) => {
   let data: unknown = { ok: true }
@@ -27,6 +36,16 @@ const api = createApi({ request: async <T,>({ path, method, body }: { path: stri
     if (method === 'POST') { const value = { ...body as { content: string; client_message_id: string }, id: messages.length + 1, conversation_id: id, author: members[0]!, created_at: now }; messages.push(value); data = value }
     else data = { messages: messages.filter((m) => m.conversation_id === id), has_more: false }
   } else if (path.endsWith('/members/2/roles') && method === 'PUT') { const ids = (body as { role_ids: number[] }).role_ids; roles = roles.map((r) => ({ ...r, user_ids: ids.includes(r.id) ? [2] : [] })) }
+  else if (path.split('?')[0]!.endsWith('/scheduled-messages')) data = scheduled
+  else if (/\/scheduled-messages\/\d+$/.test(path)) {
+    const id = Number(path.split('/').at(-1))
+    if (method === 'DELETE') scheduled = scheduled.map((item) => item.id === id ? { ...item, status: 'cancelled' } : item)
+    else if (method === 'PUT') scheduled = scheduled.map((item) => item.id === id ? { ...item, ...body as Partial<ScheduledMessage> } : item)
+  }
+  else if (path.split('?')[0]!.endsWith('/audit')) {
+    const query = new URLSearchParams(path.split('?')[1])
+    data = { items: audit.filter((item) => (!query.get('actor_id') || item.actor_user_id === Number(query.get('actor_id'))) && (!query.get('action') || item.action === query.get('action'))), has_more: false }
+  }
   else if (path.endsWith('/roles')) { if (method === 'POST') { const value = { ...body as CustomRole, id: roles.length + 1, user_ids: [] }; roles.push(value); data = value } else data = roles }
   return { status: 200, data: structuredClone(data) as T }
 } })

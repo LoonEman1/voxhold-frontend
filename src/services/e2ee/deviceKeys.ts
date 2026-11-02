@@ -89,21 +89,31 @@ export function isDeviceConflict(error: unknown) {
  * over the device limit loses the least recently used one). A device the
  * server refuses (revoked or conflicting) is replaced by a fresh one once.
  */
-export async function ensureDevice(store: E2EEStore, registry: DeviceRegistry, userId: number): Promise<LocalDevice> {
+export async function ensureDevice(store: E2EEStore, registry: DeviceRegistry, userId: number, prepared?: LocalDevice, signal?: AbortSignal): Promise<LocalDevice> {
+  signal?.throwIfAborted()
   let device = await store.getDevice(userId)
+  signal?.throwIfAborted()
+  if (!device && prepared?.userId === userId) { device = prepared; await store.putDevice(device) }
   for (let attempt = 0; attempt < 2; attempt++) {
+    signal?.throwIfAborted()
     if (!device) {
       device = await createDevice(userId)
+      signal?.throwIfAborted()
       await store.putDevice(device)
     }
     try {
+      signal?.throwIfAborted()
       await registry.register(device.deviceId, base64Encode(device.publicKey))
+      // A canceled join/logout may already have removed this identity. Its
+      // late registration response must not recreate the local private key.
+      signal?.throwIfAborted()
       if (!device.registered) {
         device = { ...device, registered: true }
         await store.putDevice(device)
       }
       return device
     } catch (error) {
+      signal?.throwIfAborted()
       if (!isDeviceConflict(error) || attempt > 0) throw error
       await store.deleteDevice(userId)
       device = undefined

@@ -498,7 +498,7 @@ test('background desktop notifications require explicit permission and use reada
 test('personal space keeps channel mentions unread and a notification returns to that channel', async ({ page }) => {
   const fixture = await openTextNotifications(page)
   await page.getByRole('button', { name: 'Личная панель' }).click()
-  await page.getByRole('button', { name: 'Личные сообщения', exact: true }).click()
+  await page.locator('.personal-rail').getByRole('button', { name: 'Новый разговор', exact: true }).click()
   await expect(page.locator('.personal-content')).toBeVisible()
   fixture.emit('notification.message', fixture.notification(810, 2))
   await expect(page.locator('.message-notification')).toHaveCount(1)

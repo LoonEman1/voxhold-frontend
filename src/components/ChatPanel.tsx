@@ -1,7 +1,7 @@
 import { MessageLinkPreviews } from './LazyMessageLinks'
 import { useDraft } from '../hooks/useDraft'
 import { CustomRoleBadges, useCommunity } from './Community'
-import { ComposerTools, PollCard, saveFavorite } from './CommunityFeatures'
+import { ComposerTools, PollCard, saveFavorite } from './LazyCommunityFeatures'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'

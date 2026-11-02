@@ -19,18 +19,20 @@ function setup(request?: (path: string, method?: string, body?: unknown) => unkn
   } })
   return render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner={owner} members={members} onMessage={() => undefined} onNavigate={() => undefined}><CommunityNavigation/><CommunitySidebar><div>Каналы сервера</div></CommunitySidebar><CommunityContent><div>Сообщения канала</div></CommunityContent>{children}</CommunityProvider>)
 }
-it('separates existing direct dialogs and groups, and opens chat in the workspace without a modal', async () => {
+it('lists direct dialogs and groups together without separate navigation sections', async () => {
   setup()
   fireEvent.click(screen.getByRole('button', { name: 'Личная панель' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Личные сообщения' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Диалог: Лера' }))
   const direct = await screen.findByRole('button', { name: /Лера.*Личный диалог/ })
-  expect(screen.queryByRole('button', { name: /Выходные.*участников/ })).toBeNull()
+  expect(screen.getByRole('button', { name: /Выходные.*участников/ })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Беседы' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Диалоги' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Отложенные' })).toBeNull()
   fireEvent.click(direct)
   expect(await screen.findByLabelText('Сообщение в беседу')).toBeTruthy()
   expect(screen.queryByRole('dialog')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Беседы' }))
-  expect(await screen.findByRole('button', { name: /Выходные.*участников/ })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: /Лера.*Личный диалог/ })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /Выходные.*участников/ }))
+  expect(await screen.findByRole('heading', { name: 'Выходные' })).toBeTruthy()
 })
 it('does not reopen a direct chat when its request finishes after navigating away', async () => {
   let resolve!: (value: unknown) => void
@@ -57,13 +59,13 @@ it('keeps privacy in its own page and removes an unblocked user immediately', as
 })
 it('retains selected recipients and the form when conversation creation fails', async () => {
   setup((path, method) => { if (path.split('?')[0]!.endsWith('/conversations') && method === 'POST') throw new Error('Участник запретил сообщения') })
-  fireEvent.click(screen.getByRole('button', { name: 'Личная панель' })); fireEvent.click(screen.getByRole('button', { name: 'Личные сообщения' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Новый диалог' }))
-  fireEvent.click(screen.getByRole('radio', { name: 'Лера' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Открыть диалог' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Личная панель' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Новый разговор' }))
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Лера' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Начать диалог' }))
   await screen.findByRole('alert')
-  expect((screen.getByRole('radio', { name: 'Лера' }) as HTMLInputElement).checked).toBe(true)
-  expect(screen.getByRole('button', { name: 'Открыть диалог' })).toBeTruthy()
+  expect((screen.getByRole('checkbox', { name: 'Лера' }) as HTMLInputElement).checked).toBe(true)
+  expect(screen.getByRole('button', { name: 'Начать диалог' })).toBeTruthy()
 })
 it('preserves other assigned roles when adding a role from the member card', async () => {
   const roles: CustomRole[] = [{ id: 1, name: 'Друзья', color: '#e7ff5b', permissions: 15, user_ids: [2] }, { id: 2, name: 'Редакция', color: '#a993ff', permissions: 31, user_ids: [] }]
