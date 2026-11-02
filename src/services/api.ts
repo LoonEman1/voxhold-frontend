@@ -1,4 +1,7 @@
 import type {
+  E2EEDevice,
+  ServerBan,
+  AccountSession,
   ApiErrorPayload,
   ChannelRecording,
   RecordingStorage,
@@ -131,8 +134,18 @@ export function createApi(transport: Transport) {
         authorized(token, { path: '/api/v1/auth/logout', method: 'POST' }) as Promise<void>,
     },
     account: {
-      delete: (token: string) =>
-        authorized(token, { path: '/api/v1/account', method: 'DELETE' }) as Promise<void>,
+      delete: (token: string, password: string) =>
+        authorized(token, { path: '/api/v1/account', method: 'DELETE', body: { password } }) as Promise<void>,
+      changePassword: (token: string, current: string, next: string, confirm: string) =>
+        authorized(token, { path: '/api/v1/me/password', method: 'PUT', body: { current_password: current, new_password: next, new_password_confirm: confirm } }) as Promise<void>,
+      sessions: async (token: string) => {
+        const payload = (await authorized(token, { path: '/api/v1/me/sessions' })) as { sessions?: AccountSession[] } | null
+        return Array.isArray(payload?.sessions) ? payload.sessions : []
+      },
+      revokeSession: (token: string, id: number) =>
+        authorized(token, { path: `/api/v1/me/sessions/${url(id)}`, method: 'DELETE' }) as Promise<void>,
+      revokeOtherSessions: (token: string) =>
+        authorized(token, { path: '/api/v1/me/sessions', method: 'DELETE' }) as Promise<void>,
     },
     profile: {
       // The version makes each URL immutable, so the HTTP cache needs no revalidation.
@@ -159,10 +172,17 @@ export function createApi(transport: Transport) {
           method: 'PATCH',
           body: { role },
         }) as Promise<ServerMember>,
-      banMember: (token: string, serverId: number, userId: number) =>
+      setMemberTimeout: (token: string, serverId: number, userId: number, until: number | null) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/members/${url(userId)}/timeout`, method: 'PUT', body: { until } }) as Promise<void>,
+      listBans: async (token: string, serverId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans` })) as { bans: ServerBan[] }).bans,
+      unbanMember: (token: string, serverId: number, userId: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`, method: 'DELETE' }) as Promise<void>,
+      banMember: (token: string, serverId: number, userId: number, reason?: string) =>
         authorized(token, {
           path: `/api/v1/servers/${url(serverId)}/bans/${url(userId)}`,
           method: 'POST',
+          ...(reason ? { body: { reason } } : {}),
         }) as Promise<void>,
     },
     recordings: {
@@ -187,6 +207,10 @@ export function createApi(transport: Transport) {
       },
     },
     channels: {
+      getSlowmode: async (token: string, serverId: number, channelId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/slowmode` })) as { seconds: number }).seconds,
+      setSlowmode: (token: string, serverId: number, channelId: number, seconds: number) =>
+        authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/slowmode`, method: 'PUT', body: { seconds } }) as Promise<unknown>,
       unreadCounts: (token: string, serverId: number, signal?: AbortSignal) =>
         authorized(token, { path: `/api/v1/servers/${url(serverId)}/notification-counts`, signal }) as Promise<Array<{ channel_id: number; unread_count: number }>>,
       news: (token: string, serverId: number, channelId: number, signal?: AbortSignal) =>
@@ -343,6 +367,18 @@ export function createApi(transport: Transport) {
     webrtc: {
       config: (token: string, signal?: AbortSignal) =>
         authorized(token, { path: '/api/v1/webrtc/config', signal }) as Promise<WebRTCConfigPayload>,
+    },
+    e2ee: {
+      registerDevice: (token: string, deviceId: string, publicKey: string) =>
+        authorized(token, { path: `/api/v1/me/e2ee/devices/${url(deviceId)}`, method: 'PUT', body: { public_key: publicKey } }) as Promise<void>,
+      revokeDevice: (token: string, deviceId: string) =>
+        authorized(token, { path: `/api/v1/me/e2ee/devices/${url(deviceId)}`, method: 'DELETE' }) as Promise<void>,
+      devices: async (token: string, userId: number) =>
+        ((await authorized(token, { path: `/api/v1/users/${url(userId)}/e2ee/devices` })) as { devices?: E2EEDevice[] } | null)?.devices ?? [],
+      channelPolicy: async (token: string, serverId: number, channelId: number) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/e2ee` })) as { required: boolean }).required,
+      setChannelPolicy: async (token: string, serverId: number, channelId: number, required: boolean) =>
+        ((await authorized(token, { path: `/api/v1/servers/${url(serverId)}/channels/${url(channelId)}/e2ee`, method: 'PUT', body: { required } })) as { required: boolean }).required,
     },
   }
 }

@@ -54,6 +54,8 @@ export function colorFor(value: string): string {
 
 export function humanError(error: unknown): string {
   if (!(error instanceof Error)) return 'Что-то пошло не так'
+  const slowmode = /^slowmode: wait (\d+) seconds?/i.exec(error.message)
+  if (slowmode) return `Медленный режим: следующее сообщение можно отправить через ${slowmode[1]} с`
   const translations: Record<string, string> = {
     'invalid username or password': 'Неверное имя пользователя или пароль',
     'username is required': 'Введите имя пользователя',

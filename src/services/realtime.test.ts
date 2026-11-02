@@ -337,6 +337,48 @@ describe('RealtimeClient', () => {
 
     client.close()
   })
+
+  it('routes channel activity and voice key relays, and sends the device with voice.join', () => {
+    const onChannelActivity = vi.fn()
+    const onE2EEKey = vi.fn()
+    const onE2EEKeyRequest = vi.fn()
+    const client = new RealtimeClient({
+      token: 'secret',
+      onMessage: vi.fn(),
+      onStateChange: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onChannelActivity,
+      onE2EEKey,
+      onE2EEKeyRequest,
+    })
+    client.connect()
+    const socket = FakeWebSocket.latest
+    socket?.open()
+    socket?.serverEvent('ready', { user_id: 1, protocol_version: 6 })
+
+    const activity = { server_id: 3, channel_id: 7, message_id: 41, author_user_id: 2 }
+    socket?.serverEvent('channel.activity', activity)
+    const relay = { channel_id: 8, sender_user_id: 2, sender_device_id: 'b'.repeat(32), sender_connection_id: 'c2', payload: 'AQID' }
+    socket?.serverEvent('e2ee.key', relay)
+    socket?.serverEvent('e2ee.key_request', { ...relay, payload: undefined })
+    expect(onChannelActivity).toHaveBeenCalledWith(activity)
+    expect(onE2EEKey).toHaveBeenCalledWith(relay)
+    expect(onE2EEKeyRequest).toHaveBeenCalledWith(expect.objectContaining({ sender_device_id: 'b'.repeat(32) }))
+
+    const sentBefore = socket?.sent.length ?? 0
+    client.joinVoice(3, 8, false, false, 'a'.repeat(32))
+    client.joinVoice(3, 9, true, false)
+    client.sendE2EEKey(8, 2, 'b'.repeat(32), 'AQID')
+    client.requestE2EEKey(8, 2, 'b'.repeat(32))
+    const sent = socket?.sent.slice(sentBefore).map((payload) => { const { type, data } = JSON.parse(payload); return { type, data } }) ?? []
+    expect(sent).toEqual([
+      { type: 'voice.join', data: { server_id: 3, channel_id: 8, self_mute: false, self_deaf: false, e2ee_device_id: 'a'.repeat(32) } },
+      { type: 'voice.join', data: { server_id: 3, channel_id: 9, self_mute: true, self_deaf: false } },
+      { type: 'e2ee.key', data: { channel_id: 8, recipient_user_id: 2, recipient_device_id: 'b'.repeat(32), payload: 'AQID' } },
+      { type: 'e2ee.key_request', data: { channel_id: 8, recipient_user_id: 2, recipient_device_id: 'b'.repeat(32) } },
+    ])
+    client.close()
+  })
 })
 
 describe('RealtimeClient reconnection policy', () => {

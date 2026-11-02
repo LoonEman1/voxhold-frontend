@@ -18,6 +18,7 @@ import { Avatar } from './Avatar'
 import { MessageAvatar, MessageHeader } from './MessageIdentity'
 import { mentionDirectory, parseMentions, mentionsMe } from '../lib/mentions'
 import { MessageMentions } from './MessageMentions'
+import { TypingIndicator } from './TypingIndicator'
 import { MentionComposer } from './MentionComposer'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
@@ -498,7 +499,8 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
       {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
 
       {menuMessage && messageMenu && <MessageContextMenu key={`menu:${menuMessage.id}`} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canModerate} canPin={canModerate && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
-      <ChatComposer draftScope={threadRootId} key={`composer:${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
+      <TypingIndicator channelId={channel.id} currentUserId={currentUserId} membersById={membersById}/>
+      <ChatComposer canMentionRoles={ownRole === 'owner' || ownRole === 'admin'} draftScope={threadRootId} key={`composer:${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
         upload={attachmentUpload} composerFocus={composerFocus} setReplyTarget={setReplyTarget} onSend={onSend}
         onFocus={() => setComposerFocus((value) => value + 1)} readOnlyLabel={readOnlyLabel}/>
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
@@ -548,7 +550,7 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
                   {message.forward && <ForwardAttribution message={message}/>}
                   {message.reply && <MessageQuote reference={message.reply} membersById={membersById} onOpen={canOpenMessage ? actions.onOpenMessage : undefined}/>}
                   {editing ? <div className="message-editor">
-                    <MentionComposer draft={editDraft} onChange={actions.setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void actions.saveEdit(message.id, content) }} sending={pending} channelName={channel.name} membersById={membersById} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => actions.setEditingId(null)}/>
+                    <MentionComposer canMentionRoles={ownRole === 'owner' || ownRole === 'admin'} draft={editDraft} onChange={actions.setEditDraft} onSubmit={(event, content) => { event?.preventDefault(); void actions.saveEdit(message.id, content) }} sending={pending} channelName={channel.name} membersById={membersById} error="" submitLabel="Сохранить" inputLabel="Редактирование сообщения" submitOnEnter={false} onCancel={() => actions.setEditingId(null)}/>
                     <small className="message-editor__hint">Ctrl + Enter — сохранить · Esc — отмена</small>
                   </div> : <p><MessageMentions content={message.content} mentions={mentions} currentUserId={message.forward ? 0 : currentUserId} currentRole={message.forward ? undefined : ownRole} canOpenProfile={(id) => membersById.has(id)} onOpenProfile={(id) => { const member = membersById.get(id); if (member) actions.onOpenProfile(id, member.username, member.role) }}/>{message.edited_at && <span className="message__edited"> (изменено)</span>}</p>}
                   <MessageLinkPreviews content={message.content}/><MessageAttachments channelId={channel.id} attachments={message.attachments}/>{message.poll && featureContext && <PollCard initial={message.poll} api={featureContext.api} token={featureContext.token}/>}
@@ -571,8 +573,8 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
   </>
 })
 
-function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel }: {
-  draftScope?: number; channel: Channel; canCompose: boolean; reply: MessageReply | null; membersById: ReadonlyMap<number, ServerMember>
+function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel, canMentionRoles }: {
+  draftScope?: number; canMentionRoles: boolean; channel: Channel; canCompose: boolean; reply: MessageReply | null; membersById: ReadonlyMap<number, ServerMember>
   upload: ReturnType<typeof useAttachmentUpload>; composerFocus: number; onFocus: () => void; readOnlyLabel?: string
   setReplyTarget: (value: MessageReply | null | ((current: MessageReply | null) => MessageReply | null)) => void
   onSend: ChatPanelProps['onSend']
@@ -600,6 +602,6 @@ function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upl
       {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, membersById)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); onFocus() }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
       {upload.control}
       {canCompose && featureContext && <ComposerTools api={featureContext.api} token={featureContext.token} destination={{kind:'channel',id:channel.id,server_id:channel.server_id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={() => setDraft((current) => current === draft ? '' : current)}/>}
-      {canCompose ? <MentionComposer hasAttachments={upload.hasItems} focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} membersById={membersById} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
+      {canCompose ? <MentionComposer canMentionRoles={canMentionRoles} hasAttachments={upload.hasItems} focusKey={composerFocus} submitDisabled={!!reply?.deleted} draft={draft} onChange={setDraft} onSubmit={(event, content) => void submit(event, content)} sending={sending} channelName={channel.name} membersById={membersById} error={sendError}/> : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
   </>
 }

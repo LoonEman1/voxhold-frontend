@@ -17,6 +17,6 @@ export interface Poll { id: number; question: string; multiple: boolean; anonymo
 export interface ScheduledMessage { id: number; destination: FeatureDestination; payload: { content: string; attachment_ids?: string[]; poll?: PollInput }; send_at: number; status: 'pending' | 'sent' | 'failed' | 'cancelled'; error: string }
 export interface ServerEvent { id: number; server_id: number; creator_user_id: number; title: string; description: string; starts_at: number; timezone: string; cancelled: boolean; revision: number; going: number; maybe: number; response: '' | 'going' | 'maybe' }
 export interface AuditEntry { id: number; actor_user_id: number | null; actor_name: string; action: string; target_type: string; target_id: number; target_name: string; details: Record<string, unknown> | null; created_at: number }
-export interface CallMember extends Person { session_id: string }
+export interface CallMember extends Person { session_id: string; /** Registered device the member encrypts voice with (FEAT-13). */ e2ee_device_id?: string }
 export interface CallState { revision: number; conversation_id: number; members: CallMember[] }
-export interface CallSignal { conversation_id: number; from_user_id: number; session_id: string; target_session_id: string; description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit; media?: {screen:boolean;revision:number} }
+export interface CallSignal { conversation_id: number; from_user_id: number; session_id: string; target_session_id: string; description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit; media?: {screen:boolean;revision:number}; e2ee?: { payload?: string; request?: boolean } }

@@ -38,10 +38,13 @@ import type {
   VoiceSnapshot,
   VoiceWebRTCClosed,
   VoiceWebRTCOffer,
+  E2EERelayEvent,
 } from '../domain/types'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 type ConnectionState = 'connecting' | 'online' | 'offline'
+
+export interface ChannelActivity { server_id: number; channel_id: number; message_id: number; author_user_id: number }
 
 interface RealtimeEvent<T = unknown> {
   request_id?: string
@@ -75,6 +78,10 @@ interface RealtimeOptions {
   onServerDeleted?: (event: ServerDeletedEvent) => void
   onInvitationReceived?: (event: InvitationReceivedEvent) => void
   onChannelsChanged?: (event: { server_id: number }) => void
+  /** A readable channel got a new top-level message (no subscription needed). */
+  onChannelActivity?: (event: ChannelActivity) => void
+  onE2EEKey?: (event: E2EERelayEvent) => void
+  onE2EEKeyRequest?: (event: E2EERelayEvent) => void
   onChannelCreated?: (channel: Channel) => void
   onChannelUpdated?: (channel: Channel) => void
   onChannelDeleted?: (event: ChannelDeletedEvent) => void
@@ -186,13 +193,27 @@ export class RealtimeClient {
     if (!sent) this.awaitingUnsubscribe = false
   }
 
-  joinVoice(serverId: number, channelId: number, selfMute: boolean, selfDeaf: boolean) {
+  sendTyping(serverId: number, channelId: number) {
+    return this.send('typing.start', { server_id: serverId, channel_id: channelId })
+  }
+
+  joinVoice(serverId: number, channelId: number, selfMute: boolean, selfDeaf: boolean, e2eeDeviceId?: string) {
     return this.send('voice.join', {
       server_id: serverId,
       channel_id: channelId,
       self_mute: selfMute,
       self_deaf: selfDeaf,
+      ...(e2eeDeviceId ? { e2ee_device_id: e2eeDeviceId } : {}),
     })
+  }
+
+  /** Sends a wrapped voice sender key to one device in the channel (FEAT-13). */
+  sendE2EEKey(channelId: number, recipientUserId: number, recipientDeviceId: string, payload: string) {
+    return this.send('e2ee.key', { channel_id: channelId, recipient_user_id: recipientUserId, recipient_device_id: recipientDeviceId, payload })
+  }
+
+  requestE2EEKey(channelId: number, recipientUserId: number, recipientDeviceId: string) {
+    return this.send('e2ee.key_request', { channel_id: channelId, recipient_user_id: recipientUserId, recipient_device_id: recipientDeviceId })
   }
 
   updateVoiceState(selfMute: boolean, selfDeaf: boolean) {
@@ -392,7 +413,17 @@ export class RealtimeClient {
           window.dispatchEvent(new CustomEvent('voxhold:notification', { detail: payload.data }))
         } else if (payload.type === 'notification.settings_updated' && payload.data) {
           this.options.onNotificationSettings?.(payload.data as NotificationSettings)
+        } else if (payload.type === 'e2ee.key' && payload.data) {
+          this.options.onE2EEKey?.(payload.data as E2EERelayEvent)
+        } else if (payload.type === 'e2ee.key_request' && payload.data) {
+          this.options.onE2EEKeyRequest?.(payload.data as E2EERelayEvent)
+        } else if (payload.type === 'channel.activity' && payload.data) {
+          this.options.onChannelActivity?.(payload.data as ChannelActivity)
+        } else if (payload.type === 'typing' && payload.data) {
+          window.dispatchEvent(new CustomEvent('voxhold:typing', { detail: payload.data }))
         } else if (payload.type === 'message.created' && payload.data) {
+          const posted = payload.data as Message
+          window.dispatchEvent(new CustomEvent('voxhold:typing', { detail: { channel_id: posted.channel_id, user_id: posted.author?.user_id, expires_at: 0 } }))
           this.options.onMessage(payload.data as Message)
         } else if (payload.type === 'message.reactions_changed' && payload.data) {
           this.options.onMessageReactions?.(payload.data as MessageReactions)
