@@ -2,7 +2,6 @@ import { expect, test } from '@playwright/test'
 
 test('scheduled messages stay inside their chat and can be cancelled', async ({ page }, info) => {
   await page.goto('/e2e/fixtures/personal-space.html')
-  await page.getByRole('button', { name: 'Личная панель', exact: true }).click()
   await page.getByRole('button', { name: 'Диалог: Лера', exact: true }).click()
   await page.getByRole('button', { name: 'Отложенные сообщения этого чата', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Отложенные сообщения', exact: true })
@@ -15,7 +14,6 @@ test('scheduled messages stay inside their chat and can be cancelled', async ({ 
 
 test('audit filters use names and show readable reasons without numeric IDs', async ({ page }, info) => {
   await page.goto('/e2e/fixtures/personal-space.html')
-  await page.getByRole('button', { name: 'Личная панель', exact: true }).click()
   await page.getByRole('button', { name: 'Журнал администрации', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'История изменений', exact: true })).toBeVisible()
   await expect(page.getByRole('spinbutton')).toHaveCount(0)
@@ -31,17 +29,17 @@ test('audit filters use names and show readable reasons without numeric IDs', as
   await page.screenshot({ animations: 'disabled', path: info.outputPath('audit-journal-mobile.png') })
 })
 
-test('edge rail, full-size dialogs, groups and privacy work without chat popups', async ({ page }, info) => {
+test('persistent navigation, full-size dialogs, groups and privacy work without chat popups', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message))
   await page.goto('/e2e/fixtures/personal-space.html')
   await expect(page.locator('.server-header')).toBeVisible()
   await expect(page.locator('.community-navigation')).toHaveCount(0)
-  await page.mouse.move(48, 380)
   await expect(page.getByRole('navigation', { name: 'Личное пространство', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Диалог: Лера', exact: true }).click()
   await page.locator('.personal-conversation').filter({ hasText: 'Лера' }).click()
   await expect(page.getByText('Отлично, договорились. Позовём ещё Мишу?', { exact: true })).toBeVisible()
   // Message actions must work before any optional poll/schedule form loads.
+  await page.locator('.direct-chat article.message').first().hover()
   await page.locator('.direct-chat article.message').first().getByRole('button', { name: 'Действия с сообщением' }).click()
   await expect(page.getByRole('menu')).toBeVisible()
   await page.keyboard.press('Escape')
@@ -53,7 +51,7 @@ test('edge rail, full-size dialogs, groups and privacy work without chat popups'
   await page.getByLabel('Сообщение в беседу').fill('Конечно, сейчас напишу ему!')
   await page.getByLabel('Сообщение в беседу').press('Enter')
   await expect(page.getByText('Конечно, сейчас напишу ему!', { exact: true })).toBeVisible()
-  await page.mouse.move(48, 380); await expect(page.getByRole('button', { name: 'Личная панель' })).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('navigation', { name: 'Личное пространство', exact: true })).toBeVisible()
   await page.screenshot({ animations: 'disabled', path: info.outputPath('personal-dialogs-desktop.png') })
   await page.mouse.move(600, 400)
   await expect(page.getByRole('navigation', { name: 'Разделы личного пространства' }).getByRole('button', { name: /^(Беседы|Диалоги|Отложенные)$/ })).toHaveCount(0)
@@ -65,7 +63,7 @@ test('edge rail, full-size dialogs, groups and privacy work without chat popups'
   await page.getByLabel('Название беседы').fill('Настолки')
   await page.getByRole('button', { name: 'Создать беседу', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Настолки' })).toBeVisible()
-  await page.getByRole('button', { name: 'Личные настройки', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Личное пространство', exact: true }).getByRole('button', { name: 'Личные настройки', exact: true }).click()
   await page.getByRole('radio', { name: /^Никто/ }).check()
   await expect(page.getByRole('radio', { name: /^Никто/ })).toBeChecked()
   await page.screenshot({ animations: 'disabled', path: info.outputPath('personal-privacy-desktop.png') })
@@ -93,11 +91,10 @@ test('member card assigns and creates roles and opens the full profile from its 
 })
 
 test('touch navigation and conversation list fit a narrow viewport', async ({ browser }, info) => {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  const context = await browser.newContext({ baseURL: info.project.use.baseURL, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   const page = await context.newPage()
-  await page.goto('http://127.0.0.1:4190/e2e/fixtures/personal-space.html')
-  await page.getByRole('button', { name: 'Личная панель', exact: true }).tap()
-  await page.getByRole('button', { name: 'Диалог: Лера', exact: true }).tap()
+  await page.goto('/e2e/fixtures/personal-space.html')
+  await page.getByRole('navigation', { name: 'Личное пространство', exact: true }).getByRole('button', { name: 'Сообщения', exact: true }).tap()
   await page.getByRole('button', { name: 'Список разговоров' }).tap()
   await page.locator('.personal-conversation').filter({ hasText: 'Лера' }).tap()
   await expect(page.getByLabel('Сообщение в беседу')).toBeVisible()
@@ -109,13 +106,15 @@ test('touch navigation and conversation list fit a narrow viewport', async ({ br
   await context.close()
 })
 
-test('rail is accessible from the keyboard and closes with Escape', async ({ page }) => {
+test('navigation stays visible after keyboard use and Escape', async ({ page }) => {
   await page.goto('/e2e/fixtures/personal-space.html')
-  const handle = page.getByRole('button', { name: 'Личная панель', exact: true })
-  await handle.focus(); await handle.press('Enter')
-  await expect(handle).toHaveAttribute('aria-expanded', 'true')
-  await handle.press('Tab')
-  await expect(page.getByRole('button', { name: 'К каналам', exact: true })).toBeFocused()
+  const navigation = page.getByRole('navigation', { name: 'Личное пространство', exact: true })
+  await navigation.getByRole('button', { name: 'К каналам', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(navigation.getByRole('button', { name: 'Входящие', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('heading', { name: 'Входящие', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
-  await expect(handle).toHaveAttribute('aria-expanded', 'false'); await expect(handle).toBeFocused()
+  await expect(navigation).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'Входящие', exact: true })).toHaveAttribute('aria-pressed', 'true')
 })

@@ -11,6 +11,7 @@ it('requires the exact username, retains errors and permits cancellation', async
   const remove = vi.fn().mockRejectedValueOnce(new Error('Удаление недоступно')).mockResolvedValue(undefined)
   const close = vi.fn()
   render(<ThemeProvider><ProfileDialog open onClose={close} profile={profile} onSubmit={async () => undefined} onDeleteAccount={remove}/></ThemeProvider>)
+  fireEvent.click(screen.getByRole('tab', { name: 'Безопасность' }))
   fireEvent.click(screen.getByRole('button', { name: 'Удалить аккаунт' }))
   const input = screen.getByRole('textbox', { name: 'Имя пользователя для удаления аккаунта' })
   const confirm = screen.getByRole('button', { name: 'Удалить аккаунт навсегда' }) as HTMLButtonElement
@@ -41,6 +42,7 @@ it('does not offer deletion when the owner cannot delete their account', () => {
 it('switches the theme from the profile appearance section', () => {
   document.documentElement.dataset.theme = 'dark'
   render(<ThemeProvider><ProfileDialog open onClose={vi.fn()} profile={profile} onSubmit={async () => undefined}/></ThemeProvider>)
+  fireEvent.click(screen.getByRole('tab', { name: 'Оформление' }))
   fireEvent.click(screen.getByRole('button', { name: 'Включить светлую тему' }))
   expect(document.documentElement.dataset.theme).toBe('light')
   fireEvent.click(screen.getByRole('button', { name: 'Включить тёмную тему' }))

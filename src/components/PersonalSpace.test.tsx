@@ -21,7 +21,6 @@ function setup(request?: (path: string, method?: string, body?: unknown) => unkn
 }
 it('lists direct dialogs and groups together without separate navigation sections', async () => {
   setup()
-  fireEvent.click(screen.getByRole('button', { name: 'Личная панель' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Диалог: Лера' }))
   const direct = await screen.findByRole('button', { name: /Лера.*Личный диалог/ })
   expect(screen.getByRole('button', { name: /Выходные.*участников/ })).toBeTruthy()
@@ -51,7 +50,7 @@ it('keeps privacy in its own page and removes an unblocked user immediately', as
     if (path.endsWith('/blocks/2') && method === 'DELETE') { blocked = []; return { ok: true } }
     if (path.endsWith('/message-privacy')) { if (method === 'PUT') calls.push(body); return { mode: 'shared', blocked_user_ids: blocked } }
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Личная панель' })); fireEvent.click(screen.getByRole('button', { name: 'Личные настройки' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Личные настройки' }))
   fireEvent.click(await screen.findByRole('radio', { name: /Никто/ }))
   await waitFor(() => expect(calls).toEqual([{ mode: 'none' }]))
   fireEvent.click(await screen.findByRole('button', { name: 'Разблокировать' }))
@@ -59,7 +58,6 @@ it('keeps privacy in its own page and removes an unblocked user immediately', as
 })
 it('retains selected recipients and the form when conversation creation fails', async () => {
   setup((path, method) => { if (path.split('?')[0]!.endsWith('/conversations') && method === 'POST') throw new Error('Участник запретил сообщения') })
-  fireEvent.click(screen.getByRole('button', { name: 'Личная панель' }))
   fireEvent.click(screen.getByRole('button', { name: 'Новый разговор' }))
   fireEvent.click(await screen.findByRole('checkbox', { name: 'Лера' }))
   fireEvent.click(screen.getByRole('button', { name: 'Начать диалог' }))
@@ -116,4 +114,69 @@ it('does not resurrect exhausted older-history pagination on a background refres
   act(() => window.dispatchEvent(new Event('focus')))
   await waitFor(() => expect(latestLoads).toBeGreaterThan(1))
   expect(screen.queryByRole('button', { name: 'Раньше' })).toBeNull()
+})
+
+it('serializes notification changes and ignores an older notification response', async () => {
+  let read!: (value: unknown) => void, write!: (value: unknown) => void
+  let reads = 0, writes = 0
+  setup((path, method) => {
+    if (path.endsWith('/notifications')) {
+      if (method === 'PUT') { writes++; return new Promise((resolve) => { write = resolve }) }
+      if (++reads === 1) return new Promise((resolve) => { read = resolve })
+      return { muted: true }
+    }
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Диалог: Лера' }))
+  await waitFor(() => expect(read).toBeTypeOf('function'))
+  const toggle = await screen.findByRole('button', { name: 'Отключить уведомления' })
+  act(() => { fireEvent.click(toggle); fireEvent.click(toggle) })
+  expect(writes).toBe(1)
+  await act(async () => { write({ muted: true }) })
+  await act(async () => { read({ muted: false }) })
+  expect(screen.getByRole('button', { name: 'Включить уведомления' }).getAttribute('aria-pressed')).toBe('true')
+})
+
+it('does not send a message twice when submit happens twice before the response', async () => {
+  let finish!: (value: unknown) => void, sends = 0
+  setup((path, method) => {
+    if (path.endsWith('/messages') && method === 'POST') { sends++; return new Promise((resolve) => { finish = resolve }) }
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Диалог: Лера' }))
+  const input = await screen.findByLabelText('Сообщение в беседу')
+  fireEvent.change(input, { target: { value: 'Один раз' } })
+  act(() => { fireEvent.submit(input.closest('form')!); fireEvent.submit(input.closest('form')!) })
+  await waitFor(() => expect(sends).toBe(1))
+  await act(async () => finish({ id: 10, conversation_id: 7, content: 'Один раз', client_message_id: 'key', created_at: 1, author: { user_id: 1, username: 'Я' } }))
+  expect(screen.getAllByText('Один раз')).toHaveLength(1)
+})
+
+it('puts blocking in the named message menu instead of beside every message', async () => {
+  const block = vi.fn()
+  setup((path, method) => {
+    if (path.endsWith('/blocks/2') && method === 'PUT') { block(); return { ok: true } }
+    if (path.endsWith('/messages')) return { messages: [{ id: 1, conversation_id: 7, content: 'Привет', created_at: 1, author: { user_id: 2, username: 'Лера' } }], has_more: false }
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Диалог: Лера' }))
+  const actions = await screen.findByRole('button', { name: 'Действия с сообщением' })
+  expect(screen.queryByRole('button', { name: 'Заблокировать Лера' })).toBeNull()
+  fireEvent.click(actions)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Заблокировать Лера' }))
+  await waitFor(() => expect(block).toHaveBeenCalledOnce())
+})
+
+it('coalesces quick typing in favorites into a single search request', async () => {
+  const queries: string[] = []
+  setup((path) => {
+    if (path.endsWith('/me/favorites')) return { id: 9, saved: true, direct: false, name: 'Избранное', members: [], unread_count: 0 }
+    if (path.includes('/messages?q=')) { queries.push(new URLSearchParams(path.split('?')[1]).get('q')!); return { messages: [], has_more: false } }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Избранное' }))
+  const input = await screen.findByLabelText('Поиск в избранном')
+  act(() => {
+    fireEvent.change(input, { target: { value: 'п' } })
+    fireEvent.change(input, { target: { value: 'пла' } })
+    fireEvent.change(input, { target: { value: 'планы' } })
+  })
+  await waitFor(() => expect(queries).toEqual(['планы']))
+  await screen.findByText('Ничего не найдено')
 })

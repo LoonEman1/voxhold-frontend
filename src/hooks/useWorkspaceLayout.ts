@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 
 export const DEFAULT_CHANNEL_SIDEBAR_WIDTH = 252
 export const DEFAULT_MEMBERS_SIDEBAR_WIDTH = 238
@@ -27,14 +27,16 @@ interface SavedWorkspaceLayout {
 export function clampWorkspacePanelWidth(target: ResizeTarget, width: number, maximum?: number): number {
   const minimum = target === 'channels' ? MIN_CHANNEL_SIDEBAR_WIDTH : MIN_MEMBERS_SIDEBAR_WIDTH
   const configuredMaximum = target === 'channels' ? MAX_CHANNEL_SIDEBAR_WIDTH : MAX_MEMBERS_SIDEBAR_WIDTH
-  const effectiveMaximum = Math.max(minimum, Math.min(configuredMaximum, maximum ?? configuredMaximum))
-  return Math.round(Math.min(effectiveMaximum, Math.max(minimum, width)))
+  const fallback = target === 'channels' ? DEFAULT_CHANNEL_SIDEBAR_WIDTH : DEFAULT_MEMBERS_SIDEBAR_WIDTH
+  const effectiveMaximum = Math.max(minimum, Math.min(configuredMaximum, maximum !== undefined && Number.isFinite(maximum) ? maximum : configuredMaximum))
+  return Math.round(Math.min(effectiveMaximum, Math.max(minimum, Number.isFinite(width) ? width : fallback)))
 }
 
 function loadWorkspaceLayout(): WorkspaceLayout {
   let saved: SavedWorkspaceLayout = {}
   try {
-    saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as SavedWorkspaceLayout
+    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed as SavedWorkspaceLayout
   } catch {
     saved = {}
   }
@@ -48,14 +50,23 @@ function loadWorkspaceLayout(): WorkspaceLayout {
 
 export function useWorkspaceLayout() {
   const [layout, setLayout] = useState(loadWorkspaceLayout)
+  const cancelResize = useRef<(() => void) | null>(null)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      channel_width: layout.channelWidth,
-      members_width: layout.membersWidth,
-      members_open: layout.membersOpen,
-    }))
+    // Persist once a drag settles instead of synchronously writing on each move.
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          channel_width: layout.channelWidth,
+          members_width: layout.membersWidth,
+          members_open: layout.membersOpen,
+        }))
+      } catch { /* The layout still works when browser storage is unavailable. */ }
+    }, 150)
+    return () => window.clearTimeout(timer)
   }, [layout])
+
+  useEffect(() => () => cancelResize.current?.(), [])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -67,14 +78,20 @@ export function useWorkspaceLayout() {
     return () => compact.removeEventListener('change', closeForCompactLayout)
   }, [])
 
-  const resize = (target: ResizeTarget, width: number, workspaceWidth?: number) => {
+  const panelMaximum = (target: ResizeTarget, element?: HTMLElement) => {
+    if (target === 'members' && window.innerWidth <= 1180) return undefined
+    const workspace = element?.closest('.workspace')
+    if (!workspace) return undefined
+    const navigation = workspace.querySelector('.personal-rail')?.getBoundingClientRect().width ?? 0
+    const otherPanel = target === 'members' ? '.channel-sidebar' : window.innerWidth > 1180 ? '.members-sidebar.is-open' : ''
+    const reserved = otherPanel ? workspace.querySelector(otherPanel)?.getBoundingClientRect().width ?? 0 : 0
+    return workspace.getBoundingClientRect().width - navigation - reserved - MIN_CONTENT_WIDTH
+  }
+
+  const resize = (target: ResizeTarget, width: number, maximum?: number) => {
     setLayout((current) => {
-      const membersAreOverlay = (workspaceWidth ?? Number.POSITIVE_INFINITY) <= 1180
-      const remainingPanelWidth = target === 'channels' ? current.membersWidth : current.channelWidth
-      const availableMaximum = workspaceWidth === undefined || membersAreOverlay
-        ? undefined
-        : workspaceWidth - remainingPanelWidth - MIN_CONTENT_WIDTH
-      const nextWidth = clampWorkspacePanelWidth(target, width, availableMaximum)
+      const nextWidth = clampWorkspacePanelWidth(target, width, maximum)
+      if ((target === 'channels' ? current.channelWidth : current.membersWidth) === nextWidth) return current
       return target === 'channels'
         ? { ...current, channelWidth: nextWidth }
         : { ...current, membersWidth: nextWidth }
@@ -83,38 +100,50 @@ export function useWorkspaceLayout() {
 
   const beginResize = (target: ResizeTarget, event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || window.matchMedia?.('(max-width: 760px)').matches) return
+    cancelResize.current?.()
     event.preventDefault()
     const startX = event.clientX
-    const startWidth = target === 'channels' ? layout.channelWidth : layout.membersWidth
-    const workspaceWidth = event.currentTarget.closest('.workspace')?.getBoundingClientRect().width
+    const startWidth = event.currentTarget.parentElement?.getBoundingClientRect().width || (target === 'channels' ? layout.channelWidth : layout.membersWidth)
+    const maximum = panelMaximum(target, event.currentTarget)
+    let frame = 0, nextWidth = startWidth
     document.body.classList.add('is-resizing-workspace')
 
     const move = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== event.pointerId) return
       const delta = pointerEvent.clientX - startX
-      resize(target, startWidth + (target === 'channels' ? delta : -delta), workspaceWidth)
+      nextWidth = startWidth + (target === 'channels' ? delta : -delta)
+      if (!frame) frame = window.requestAnimationFrame(() => { frame = 0; resize(target, nextWidth, maximum) })
     }
-    const finish = () => {
+    const clear = (commit: boolean) => {
+      if (frame) window.cancelAnimationFrame(frame)
+      if (commit) resize(target, nextWidth, maximum)
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
       document.body.classList.remove('is-resizing-workspace')
+      cancelResize.current = null
     }
+    const finish = () => clear(true)
+    cancelResize.current = () => clear(false)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', finish)
     window.addEventListener('pointercancel', finish)
+    window.addEventListener('blur', finish)
   }
 
   const handleResizeKey = (target: ResizeTarget, event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === 'Home') {
+    const maximum = panelMaximum(target, event.currentTarget)
+    if (event.key === 'Home' || event.key === 'End') {
       event.preventDefault()
-      resize(target, target === 'channels' ? DEFAULT_CHANNEL_SIDEBAR_WIDTH : DEFAULT_MEMBERS_SIDEBAR_WIDTH)
+      resize(target, event.key === 'End' ? target === 'channels' ? MAX_CHANNEL_SIDEBAR_WIDTH : MAX_MEMBERS_SIDEBAR_WIDTH : target === 'channels' ? DEFAULT_CHANNEL_SIDEBAR_WIDTH : DEFAULT_MEMBERS_SIDEBAR_WIDTH, maximum)
       return
     }
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
     const handleDelta = event.key === 'ArrowRight' ? 16 : -16
-    const currentWidth = target === 'channels' ? layout.channelWidth : layout.membersWidth
-    resize(target, currentWidth + (target === 'channels' ? handleDelta : -handleDelta))
+    const currentWidth = event.currentTarget.parentElement?.getBoundingClientRect().width || (target === 'channels' ? layout.channelWidth : layout.membersWidth)
+    resize(target, currentWidth + (target === 'channels' ? handleDelta : -handleDelta), maximum)
   }
 
   const resetPanel = (target: ResizeTarget) => {

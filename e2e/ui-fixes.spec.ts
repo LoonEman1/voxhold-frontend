@@ -497,7 +497,6 @@ test('background desktop notifications require explicit permission and use reada
 
 test('personal space keeps channel mentions unread and a notification returns to that channel', async ({ page }) => {
   const fixture = await openTextNotifications(page)
-  await page.getByRole('button', { name: 'Личная панель' }).click()
   await page.locator('.personal-rail').getByRole('button', { name: 'Новый разговор', exact: true }).click()
   await expect(page.locator('.personal-content')).toBeVisible()
   fixture.emit('notification.message', fixture.notification(810, 2))
@@ -927,6 +926,7 @@ test('account deletion belongs to the profile and requires a typed username', as
   })
   await page.locator('.user-dock__profile').click()
   const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  await dialog.getByRole('tab', { name: 'Безопасность', exact: true }).click()
   await dialog.getByRole('button', { name: 'Удалить аккаунт', exact: true }).click()
   const confirmation = dialog.getByRole('button', { name: 'Удалить аккаунт навсегда' })
   await expect(confirmation).toBeDisabled()
@@ -1019,7 +1019,7 @@ test('profile modal traps Tab, supports reverse Tab and restores its trigger on 
   await trigger.click()
   const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
   const first = dialog.getByRole('button', { name: 'Закрыть', exact: true })
-  const last = dialog.getByRole('button', { name: /Включить .* тему/ })
+  const last = dialog.getByRole('button', { name: 'Сохранить', exact: true })
   await last.focus(); await page.keyboard.press('Tab'); await expect(first).toBeFocused()
   await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused()
   await page.keyboard.press('Escape'); await expect(dialog).toBeHidden(); await expect(trigger).toBeFocused()
