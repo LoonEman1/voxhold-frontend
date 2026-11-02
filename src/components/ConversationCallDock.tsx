@@ -7,22 +7,30 @@ import { loadVoicePreferences } from '../services/voiceSettings'
 import { E2EE_VOICE_NOTICE } from '../services/e2ee/notices'
 import { Icon } from './Icon'
 import { Avatar } from './Avatar'
+import { useFloatingWindow } from '../hooks/useFloatingWindow'
 
 function RemoteMedia({ stream, name, deaf, encrypted = false }: { stream: MediaStream; name: string; deaf: boolean; encrypted?: boolean }) {
   const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null), [blocked, setBlocked] = useState(false)
   const hasVideo = stream.getVideoTracks().some((t) => t.readyState === 'live')
   useEffect(() => { const element = audio.current; if (!element) return; element.srcObject = stream; const prefs = loadVoicePreferences(); element.volume = prefs.outputVolume / 100; if (prefs.outputDeviceId && 'setSinkId' in element) void element.setSinkId(prefs.outputDeviceId).catch(() => undefined); void element.play().then(() => setBlocked(false)).catch(() => setBlocked(true)); return () => { element.pause(); element.srcObject = null } }, [stream])
   useEffect(() => { const element = video.current; if (!element) return; element.srcObject = stream; void element.play().catch(() => undefined); return () => { element.srcObject = null } }, [stream, hasVideo])
-  return <div><audio ref={audio} autoPlay muted={deaf}/>{hasVideo && <><span>{name} · Демонстрация экрана{encrypted ? ' (видео не шифруется сквозным шифрованием)' : ''}</span><video ref={video} autoPlay playsInline muted controls/></>}{blocked && <button onClick={() => { void audio.current?.play().then(() => setBlocked(false)) }}>Включить звук {name}</button>}</div>
+  return <div><audio ref={audio} autoPlay muted={deaf}/>{hasVideo && <><span>{name} · Демонстрация экрана{encrypted ? ' (видео не шифруется сквозным шифрованием)' : ''}</span><video ref={video} autoPlay playsInline muted controls/></>}{blocked && <button onClick={() => { void audio.current?.play().then(() => setBlocked(false)).catch(() => setBlocked(true)) }}>Включить звук {name}</button>}</div>
+}
+function LocalScreenPreview({ stream }: { stream: MediaStream }) {
+  const video = useRef<HTMLVideoElement>(null)
+  useEffect(() => { const element = video.current; if (!element) return; element.srcObject = stream; void element.play().catch(() => undefined); return () => { element.srcObject = null } }, [stream])
+  return <div className="direct-call-dock__screen"><span>Ваш экран</span><video ref={video} autoPlay playsInline muted aria-label="Предпросмотр вашего экрана"/></div>
 }
 export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; token: string; userId: number }) {
   const bodyId = useId()
   const [collapsed, setCollapsed] = useState(false)
+  const [localScreen, setLocalScreen] = useState<MediaStream | null>(null)
   const call = useRef<ConversationCall | null>(null), [state, setState] = useState<CallState | null>(null), [media, setMedia] = useState<Record<number, MediaStream>>({}), [error, setError] = useState(''), [pending, setPending] = useState(false), [muted, setMuted] = useState(false), [deaf, setDeaf] = useState(false), [sharing, setSharing] = useState(false), [changedKeys, setChangedKeys] = useState<number[]>([]), [encryptedCall, setEncryptedCall] = useState(false)
+  const floating = useFloatingWindow({ storageKey: 'voxhold.window.direct-call.v1', width: 440, height: 360, enabled: !!state || !!error, collapsed })
   const startGeneration = useRef(0), opening = useRef(false)
   const tokenRef = useRef(token)
   useEffect(() => { tokenRef.current = token }, [token])
-  const leave = useCallback(() => { startGeneration.current++; opening.current = false; call.current?.close(); call.current = null; setState(null); setMedia({}); setPending(false); setSharing(false); setMuted(false); setDeaf(false); setChangedKeys([]); setEncryptedCall(false) }, [])
+  const leave = useCallback(() => { startGeneration.current++; opening.current = false; call.current?.close(); call.current = null; setState(null); setMedia({}); setPending(false); setSharing(false); setLocalScreen(null); setMuted(false); setDeaf(false); setChangedKeys([]); setEncryptedCall(false) }, [])
   useEffect(() => {
     let alive = true
     const start = async (event: Event) => {
@@ -35,7 +43,7 @@ export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; 
       try { runtime = await import('../services/conversationCall') }
       catch (caught) { if (alive && startGeneration.current === generation) { leave(); setError(caught instanceof Error ? caught.message : 'Не удалось загрузить звонок') }; return }
       if (!alive || startGeneration.current !== generation) return
-      const instance = new runtime.ConversationCall(api, () => tokenRef.current, cid, userId, { state: (v, encrypted) => { if (alive) { setState(v); setEncryptedCall(encrypted) } }, media: (id, stream) => { if (alive) setMedia((v) => ({ ...v, [id]: new MediaStream(stream.getTracks()) })) }, removed: (id) => { if (alive) setMedia((v) => Object.fromEntries(Object.entries(v).filter(([key]) => Number(key) !== id))) }, error: (value) => { if (alive) setError(value) }, screen: (v) => { if (alive) setSharing(v) }, ended: () => { if (alive) leave() }, keyChanged: (id) => { if (alive) setChangedKeys((v) => v.includes(id) ? v : [...v, id]) } })
+      const instance = new runtime.ConversationCall(api, () => tokenRef.current, cid, userId, { state: (v, encrypted) => { if (alive) { setState(v); setEncryptedCall(encrypted) } }, media: (id, stream) => { if (alive) setMedia((v) => ({ ...v, [id]: new MediaStream(stream.getTracks()) })) }, removed: (id) => { if (alive) setMedia((v) => Object.fromEntries(Object.entries(v).filter(([key]) => Number(key) !== id))) }, error: (value) => { if (alive) setError(value) }, screen: (v, stream) => { if (alive) { setSharing(v); setLocalScreen(v ? stream ?? null : null) } }, ended: () => { if (alive) leave() }, keyChanged: (id) => { if (alive) setChangedKeys((v) => v.includes(id) ? v : [...v, id]) } })
       call.current = instance; opening.current = false
       try { await instance.start(); if (alive && call.current === instance) setPending(false) }
       catch (e) { if (alive && call.current === instance) { leave(); setError(e instanceof Error ? e.message : 'Не удалось начать звонок') } }
@@ -47,12 +55,13 @@ export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; 
   }, [api, userId, leave])
   if (!state && !error) return null
   const encrypted = encryptedCall && !!state && state.members.length > 1
-  return <aside className={`direct-call-dock ${collapsed ? 'is-collapsed' : ''}`} aria-label="Звонок в беседе">
-    <header className="direct-call-dock__header"><span className={`direct-call-dock__symbol ${pending ? 'is-pending' : ''}`}>{pending ? <span className="spinner"/> : <Icon name="phone" size={19}/>}</span><div><b>{pending ? 'Подключаемся…' : state ? 'Звонок в беседе' : 'Ошибка звонка'}</b>{state && <small>{pending ? 'Устанавливаем соединение' : `Участников: ${state.members.length}`}</small>}</div>{state && <button type="button" className="icon-button" aria-label={collapsed ? 'Развернуть звонок' : 'Свернуть звонок'} title={collapsed ? 'Развернуть звонок' : 'Свернуть звонок'} aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => setCollapsed((value) => !value)}><Icon name={collapsed ? 'maximize' : 'minimize'} size={17}/></button>}</header>
+  return <aside ref={floating.ref} style={{ ...floating.style, height: state ? floating.style.height : undefined }} className={`direct-call-dock floating-window ${collapsed ? 'is-collapsed' : ''}`} aria-label="Звонок в беседе">
+    <header className="direct-call-dock__header"><button type="button" className="floating-window__move" aria-label="Переместить окно звонка" aria-describedby={`${bodyId}-move-help`} title="Переместить окно · стрелки или перетаскивание" onPointerDown={floating.beginMove} onKeyDown={floating.moveKey}><Icon name="grip" size={17}/></button><span className={`direct-call-dock__symbol ${pending ? 'is-pending' : ''}`}>{pending ? <span className="spinner"/> : <Icon name="phone" size={19}/>}</span><div><b>{pending ? 'Подключаемся…' : state ? 'Звонок в беседе' : 'Ошибка звонка'}</b>{state && <small>{pending ? 'Устанавливаем соединение' : `Участников: ${state.members.length}`}</small>}</div>{state && <button type="button" className="icon-button" aria-label={collapsed ? 'Развернуть звонок' : 'Свернуть звонок'} title={collapsed ? 'Развернуть звонок' : 'Свернуть звонок'} aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => setCollapsed((value) => !value)}><Icon name={collapsed ? 'maximize' : 'minimize'} size={17}/></button>}</header>
     {state && <>
       <div id={bodyId} className="direct-call-dock__body" hidden={collapsed}>
         <div className="direct-call-dock__members">{state.members.map((member) => <span key={member.user_id}><Avatar name={member.username} userId={member.user_id} size="small"/><span>{member.username}{member.user_id === userId && <small>Вы</small>}</span></span>)}{state.members.length === 1 && <span className="direct-call-dock__waiting">Ждём участников…</span>}</div>
         {encrypted && <p className="direct-call-dock__e2ee" title={E2EE_VOICE_NOTICE}><Icon name="lock" size={14}/>{E2EE_VOICE_NOTICE}</p>}
+        {localScreen && <LocalScreenPreview stream={localScreen}/>}
         {Object.entries(media).map(([id, stream]) => <RemoteMedia key={id} stream={stream} name={state.members.find((member) => member.user_id === Number(id))?.username ?? 'Участник'} deaf={deaf} encrypted={encrypted}/>)}
       </div>
       {changedKeys.map((id) => <p key={id} className="voice-e2ee-warning" role="alert">Ключ устройства {state.members.find((member) => member.user_id === id)?.username ?? 'участника'} изменился. Сверьте код безопасности в профиле</p>)}
@@ -64,5 +73,7 @@ export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; 
       </div>
     </>}
     {error && <p className="call-error" role="alert">{error}<button type="button" onClick={() => setError('')}>Закрыть</button></p>}
+    <span className="sr-only" id={`${bodyId}-move-help`}>Перемещайте окно стрелками, с Shift — быстрее. Home сбрасывает положение и размер.</span>
+    {state && !collapsed && <button type="button" className="floating-window__resize" aria-label="Изменить размер окна звонка" title="Изменить размер · стрелки или перетаскивание" onPointerDown={floating.beginResize} onKeyDown={floating.resizeKey}><Icon name="more" size={17}/></button>}
   </aside>
 }

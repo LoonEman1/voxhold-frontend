@@ -428,6 +428,9 @@ function wirePeer(
     }
     if (!remote.getTracks().some((track) => track.id === event.track.id)) {
       remote.addTrack(event.track)
+      // This aggregate is modified with addTrack(), which does not emit the
+      // native addtrack event. Keep playback gain aware of late audio tracks.
+      remote.dispatchEvent?.(new Event('voxhold:tracks-changed'))
       clientDiagnostics.record('media', 'stream_remote_track_added', 'info', {
         ...diagnosticContext,
         track_id: event.track.id,
@@ -457,6 +460,7 @@ function wirePeer(
           kind: event.track.kind,
         })
         remote.removeTrack(event.track)
+        remote.dispatchEvent?.(new Event('voxhold:tracks-changed'))
       }, { once: true })
     }
     // Always expose one stable aggregate. Browsers may return a different

@@ -180,3 +180,24 @@ it('coalesces quick typing in favorites into a single search request', async () 
   await waitFor(() => expect(queries).toEqual(['планы']))
   await screen.findByText('Ничего не найдено')
 })
+
+it('keeps an older page when a background refresh finishes out of order', async () => {
+  const message = (id: number) => ({ id, conversation_id: 7, author: { user_id: 2, username: 'Лера' }, content: `history-${id}`, created_at: id, client_message_id: String(id) })
+  let older!: (value: unknown) => void, refresh!: (value: unknown) => void, loads = 0
+  setup((path) => {
+    if (path.includes('/messages?before=')) return new Promise((resolve) => { older = resolve })
+    if (path.endsWith('/messages')) {
+      if (++loads === 1) return { messages: [message(2), message(3)], has_more: true }
+      return new Promise((resolve) => { refresh = resolve })
+    }
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Диалог: Лера' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Раньше' }))
+  act(() => window.dispatchEvent(new CustomEvent('voxhold:community', { detail: { type: 'conversation.changed' } })))
+  await waitFor(() => expect(refresh).toBeTypeOf('function'), { timeout: 2000 })
+  await act(async () => older({ messages: [message(1)], has_more: false }))
+  expect(screen.getByText('history-1')).toBeTruthy()
+  await act(async () => refresh({ messages: [message(2), message(3)], has_more: true }))
+  expect(screen.getByText('history-1')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Раньше' })).toBeNull()
+})

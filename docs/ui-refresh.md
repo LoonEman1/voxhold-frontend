@@ -1,6 +1,6 @@
 # Workspace and personal UI refresh
 
-Based on `dev` 2.6.2. This is a development change, not a new release number.
+Prepared for 2.6.3 from `dev` 2.6.2. Frontend and backend versions are synchronized.
 
 The personal navigation occupies a 76 px column on desktop. On screens up to
 760 px it becomes a persistent bottom navigation row. Channels, personal pages,
@@ -13,10 +13,13 @@ Unread counters and active states have distinct, theme-aware colors. The rail
 shows at most 12 recent conversations; Messages opens the complete searchable
 list. This bounds mounted avatars without discarding conversations.
 
-Personal calls occupy a separate layout row and can be collapsed. Microphone,
-sound, sharing and hangup remain accessible while collapsed. Changing the layout
-does not unmount the media component. The call never covers the message composer.
-Call and screen capture runtimes remain lazy-loaded.
+Personal calls and expanded channel streams use draggable, resizable windows.
+They show participants and screen sharing, preserve the media session during
+movement/resizing/collapse, and remember their geometry. Arrow keys move/resize,
+Shift moves faster and Home resets geometry. Windows stay within the viewport
+and outside personal navigation. Mobile drawers remain above them. Explicit
+fullscreen cinema mode is still available. Publishing a channel stream opens
+its window automatically. Call and capture runtimes remain lazy-loaded.
 
 Profile settings have Profile, Appearance and Security tabs. Unsaved profile edits
 survive tab changes. Security includes password visibility, confirmation and
@@ -34,6 +37,18 @@ Favorites search waits 200 ms after typing, and already-saved messages do not
 offer another Save to favorites action. Blocking is available in the explicit
 message menu rather than as a button alongside every message.
 
+Incoming stream audio and outgoing screen audio support 0–200%. Playback above
+100% uses a lazily created Web Audio gain graph; the video element stays within
+its legal 0–1 volume range. Moving the slider does not renegotiate media or stop
+capture tracks. Mute preserves the chosen level. A separate popup keeps the
+percentage and slider readable in both themes and narrow players.
+
+Search pagination cancels obsolete requests; clearing a search ends loading.
+Older direct history survives a concurrent background refresh. Async dialog
+completions cannot close a newly opened dialog. Cleanup filters are locked during
+preview and recalculation discards the previous deletion plan. Ban lists ignore
+stale server responses; unpin failures retain the list for retry.
+
 Keyboard users can move between profile tabs with arrows, Home and End. The
 country picker supports arrow navigation and closes on Escape while retaining
 the profile dialog. Animations respect reduced motion. No dependencies were added.
@@ -48,7 +63,7 @@ ports, retaining defaults 4190 and 4189. Layout coverage includes 320, 390, 600,
 
 ## Русский
 
-Изменения подготовлены от `dev` 2.6.2 без изменения номера опубликованного релиза.
+Патч 2.6.3 подготовлен от `dev` 2.6.2; версии frontend и backend синхронизированы.
 Личная панель стала постоянной колонкой шириной 76 пикселей. На телефонах она
 занимает отдельную нижнюю строку. Навигация, комментарии новостей, мобильные меню
 и поле ввода учитывают доступное место и не перекрывают друг друга.
@@ -58,9 +73,13 @@ ports, retaining defaults 4190 and 4189. Layout coverage includes 320, 390, 600,
 управления звуком. На панели показаны 12 последних разговоров; весь список
 доступен через «Сообщения». Это уменьшает число одновременно загруженных аватаров.
 
-Панель личного звонка занимает место в раскладке и сворачивается, сохраняя
-управление микрофоном, звуком, экраном и завершением разговора. Медиакомпонент
-продолжает работать при изменении раскладки, поле ввода остаётся доступным.
+Личный звонок и развёрнутая трансляция канала открываются отдельными окнами.
+Видны участники и показ экрана, включая предпросмотр собственного экрана. Окна
+перетаскиваются, меняют размер, сворачиваются и запоминают положение. Стрелки
+перемещают или меняют размер, Shift ускоряет действие, Home сбрасывает геометрию.
+Окно учитывает размер экрана и постоянную навигацию; мобильное меню открывается
+выше окна. Перемещение и изменение размера сохраняют медиасессию. Полноэкранный
+режим доступен отдельной кнопкой. Запуск трансляции канала сразу открывает окно.
 
 В профиле появились вкладки «Профиль», «Оформление», «Безопасность». Несохранённое
 описание не теряется при переключении. Сессии отображаются карточками с отдельными
@@ -73,5 +92,17 @@ ports, retaining defaults 4190 and 4189. Layout coverage includes 320, 390, 600,
 уведомлений. Поиск в избранном объединяет быстрый ввод в один запрос. Блокировка
 собеседника перенесена в явное меню сообщения. Escape сначала закрывает список
 стран, сохраняя открытым профиль. Анимации учитывают уменьшение движения.
+
+Громкость принимаемой трансляции и исходящего звука экрана регулируется до 200%.
+Усиление свыше 100% использует Web Audio; значение громкости самого video остаётся
+в диапазоне 0–1. Аудиограф просмотра создаётся только при необходимости усиления.
+Выключение звука сохраняет выбранный уровень; ползунок и процент вынесены в
+отдельное компактное окно, учитывающее доступную ширину.
+
+Исправлены устаревшие ответы поиска, зависание его загрузки, потеря старой
+истории при фоновом обновлении и завершение старого запроса в заново открытом
+диалоге. Пересчёт очистки удаляет старый план, а фильтры блокируются до ответа.
+Устаревший список блокировок не заменяет текущий; ошибка открепления оставляет
+доступной повторную попытку.
 
 Проверки и команды приведены выше. Новые зависимости не добавлялись.

@@ -1711,6 +1711,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       await audioGain.resume()
       if (streamAudioGainRef.current !== audioGain || streamRoleRef.current !== 'publisher') return
       setStreamMedia(publishStream)
+      if (!restoring) { setStreamCinema(false); setStreamExpanded(true) }
 
       const ended = () => {
         if (streamCaptureRef.current !== capture) return
@@ -2209,7 +2210,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   const createChannel = async (name: string, kind: ChannelKind) => {
     if (!token || !selectedServerId) return
-    const created = await api.channels.create(token, selectedServerId, name, kind)
+    const serverId = selectedServerId
+    const created = await api.channels.create(token, serverId, name, kind)
+    if (activeServerRef.current !== serverId) return
     setPinnedMessages([]); setChannels((current) => {
       const nextChannel = { ...created, last_message_id: created.last_message_id ?? current.find((item) => item.id === created.id)?.last_message_id ?? 0 }
       const next = [...current.filter((item) => item.id !== created.id), nextChannel]
@@ -2672,7 +2675,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <MessageNotifications center={notificationCenter} userId={user?.id ?? 0}/>
       {notificationChannel && token && <Suspense fallback={null}><ChannelNotificationsDialog key={notificationChannel.id} open channel={notificationChannel} api={api} token={token} liveSettings={notificationSettings} onSaved={(value) => { notificationCenter.setSettings(value); setNotificationSettings(value) }} onClose={() => setNotificationChannel(null)} onPreviewSound={() => uiSounds.play('message_notification', voicePreferencesRef.current.uiSoundVolume || 50, voicePreferencesRef.current.outputDeviceId)}/></Suspense>}
       {forwardSource && token && <Suspense fallback={<ModalLoading title="Переслать сообщение" onClose={() => setForwardSource(null)}/>}><ForwardMessageDialog key={`${forwardSource.serverId}:${forwardSource.message.id}`} source={forwardSource} servers={servers} members={members} api={api} token={token} onClose={() => setForwardSource(null)} onForward={forwardMessage}/></Suspense>}
-      <CreateChannelDialog open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
+      <CreateChannelDialog key={selectedServerId} open={dialog === 'channel'} onClose={() => setDialog(null)} onSubmit={createChannel}/>
       <ChannelSettingsDialog slowmode={slowmodeActions} encryption={e2eePolicyActions} open={dialog === 'channelSettings'} onClose={() => { setDialog(null); setEditingChannel(null) }} channel={editingChannel} accessPanel={dialog === 'channelSettings' && editingChannel && token ? <Suspense fallback={<p>Загружаем…</p>}>{editingChannel.kind === 'news' && <NewsChannelSettings key={`news-${editingChannel.id}`} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/>}<ChannelAccessSettings key={editingChannel.id} api={api} token={token} channel={editingChannel} members={members} onSaved={() => channelRefreshRef.current(editingChannel.server_id)}/></Suspense> : null} onRename={renameChannel} onRemove={deleteChannel}/>
       <InviteUserDialog onListLinks={listInviteLinks} onRevokeLink={revokeInviteLink} open={dialog === 'invite'} onClose={() => setDialog(null)} server={selectedServer} onCreateLink={async (input) => { if (!token || !selectedServerId) throw new Error('Сервер не выбран'); const link = await api.inviteLinks.create(token, selectedServerId, input); notify('Ссылка создана', 'success'); return link }}/>
       <ProfileDialog security={securityActions} onDeleteAccount={servers.some((server) => server.role === 'owner') ? undefined : async (password: string) => { if (!token) throw new Error('Сессия истекла'); await api.account.delete(token, password); expire() }} open={dialog === 'profile'} onClose={() => setDialog(null)} profile={profile} hasAvatar={!!user && !!avatarVersions.get(user.id)} onAvatar={async (file, crop) => { if (!token || !user) return; if (file) setMemberAvatar(user.id, (await api.profile.uploadAvatar(token, file, crop)).etag); else { await api.profile.removeAvatar(token); setMemberAvatar(user.id, null) } }} onSubmit={async (patch) => { if (!token) return; const updated = await api.profile.update(token, patch); setProfile(updated); notify('Профиль обновлён', 'success') }}/>

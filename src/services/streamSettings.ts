@@ -11,6 +11,7 @@ export const STREAM_RESOLUTIONS = [
 export const STREAM_FRAME_RATES = [15, 24, 30, 45, 60, 90, 120] as const
 export const STREAM_VIDEO_BITRATES = [2500, 4500, 6000, 8000, 10000, 12000, 16000] as const
 export const STREAM_AUDIO_BITRATES = [64, 96, 128, 192, 256, 320] as const
+export const MAX_STREAM_VOLUME = 200
 
 export type StreamResolution = typeof STREAM_RESOLUTIONS[number]['id']
 export type StreamFrameRate = typeof STREAM_FRAME_RATES[number]
@@ -107,10 +108,10 @@ export function normalizeStreamPreferences(value: unknown): StreamPreferences {
       ? source.audioBitrateKbps as StreamAudioBitrate
       : DEFAULT_STREAM_PREFERENCES.audioBitrateKbps,
     publishVolume: typeof source.publishVolume === 'number' && Number.isFinite(source.publishVolume)
-      ? Math.max(0, Math.min(100, Math.round(source.publishVolume))) : 100,
+      ? Math.max(0, Math.min(MAX_STREAM_VOLUME, Math.round(source.publishVolume))) : 100,
     playbackMuted: source.playbackMuted === true,
     playbackVolume: typeof source.playbackVolume === 'number' && Number.isFinite(source.playbackVolume)
-      ? Math.max(0, Math.min(100, Math.round(source.playbackVolume)))
+      ? Math.max(0, Math.min(MAX_STREAM_VOLUME, Math.round(source.playbackVolume)))
       : DEFAULT_STREAM_PREFERENCES.playbackVolume,
   }
 }

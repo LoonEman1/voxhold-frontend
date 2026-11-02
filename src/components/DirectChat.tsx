@@ -29,7 +29,8 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
   useEffect(() => { if (saved || notificationBusy.current) return; const c = new AbortController(), request = ++notificationGeneration.current; void api.community.request<{ muted: boolean }>(token, `/conversations/${id}/notifications`, 'GET', undefined, c.signal).then((v) => { if (!c.signal.aborted && request === notificationGeneration.current) setMuted(v.muted) }).catch(() => undefined); return () => c.abort() }, [api,token,id,saved,revision])
   const [loadError, setLoadError] = useState('')
   const deletedIds=useRef(new Set<number>())
-  const initialized = useRef(false), olderBusy = useRef(false), draftInput = useRef<HTMLTextAreaElement>(null)
+  const initialized = useRef(false), olderRequest = useRef<AbortController | null>(null), draftInput = useRef<HTMLTextAreaElement>(null)
+  const [olderPending, setOlderPending] = useState(false)
   useEffect(() => {
     if (searchInput.trim() === search) return
     const timer = window.setTimeout(() => { initialized.current = false; setSearch(searchInput.trim()) }, 200)
@@ -47,6 +48,7 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
   const lastHistoryRevision = useRef(revision)
   useEffect(() => {
     let alive = true, running = false, dirty = false
+    olderRequest.current?.abort(); olderRequest.current = null; setOlderPending(false)
     let request: AbortController | null = null
     const refresh = async () => {
       dirty = true
@@ -70,7 +72,10 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
               }
               return [...reconciled.values()].filter((m) => !deletedIds.current.has(m.id)).sort((a,b) => a.id-b.id)
             })
-            setMore(page.has_more); initialized.current = true; setLoading(false); setLoadError('')
+            // A prepend may complete while this catch-up request is in flight.
+            // Its exhausted cursor belongs to the now-earlier history window.
+            if (oldest === undefined || (loadedMessages.current[0]?.id ?? oldest) >= oldest) setMore(page.has_more)
+            initialized.current = true; setLoading(false); setLoadError('')
           } catch (caught) {
             if (alive && !controller.signal.aborted && current === generation.current) { setLoading(false); setLoadError(problem(caught)) }
             break
@@ -80,7 +85,7 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
     }
     refreshHistory.current = () => { void refresh() }
     void refresh()
-    return () => { alive = false; request?.abort(); refreshHistory.current = () => undefined }
+    return () => { alive = false; request?.abort(); olderRequest.current?.abort(); refreshHistory.current = () => undefined }
   }, [api, token, id, search])
   // Do not cancel a multi-page catch-up on every incoming event. Finish the
   // current window, then coalesce those events into one more reconciliation.
@@ -110,17 +115,17 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
   }
   useLayoutEffect(() => { const input = draftInput.current; if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(140, Math.max(37, input.scrollHeight))}px` } }, [draft])
   const loadOlder = async () => {
-    if (olderBusy.current || !messages.length) return
-    olderBusy.current = true
-    const expected = ++generation.current
+    if (olderRequest.current || !messages.length) return
+    const controller = new AbortController()
+    olderRequest.current = controller; setOlderPending(true)
     const list = visible.current
-    if (list) preserveDistance.current = list.scrollHeight - list.scrollTop
     try {
-      const page = await api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]!.id}${search ? `&q=${encodeURIComponent(search)}` : ''}`)
-      if (expected !== generation.current) { preserveDistance.current = null; return }
+      const page = await api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]!.id}${search ? `&q=${encodeURIComponent(search)}` : ''}`, 'GET', undefined, controller.signal)
+      if (controller.signal.aborted) return
+      if (list) preserveDistance.current = list.scrollHeight - list.scrollTop
       setMessages((v) => [...new Map([...page.messages, ...v].filter((m)=>!deletedIds.current.has(m.id)).map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); setMore(page.has_more)
-    } catch (caught) { preserveDistance.current = null; setError(problem(caught)) }
-    finally { olderBusy.current = false }
+    } catch (caught) { if (!controller.signal.aborted) { preserveDistance.current = null; setError(problem(caught)) } }
+    finally { if (olderRequest.current === controller) { olderRequest.current = null; setOlderPending(false) } }
   }
   const asMessage = (m: DirectMessage): Message => ({...m, channel_id:0, edited_at:null})
   const react = async (m: DirectMessage, emoji: string) => {
@@ -138,7 +143,7 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
     <div className="direct-chat__tools" role="toolbar" aria-label={saved ? 'Инструменты избранного' : 'Действия в разговоре'}>{saved ? <label className="direct-chat__search"><Icon name="search" size={18}/><input type="search" aria-label="Поиск в избранном" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Найти заметку, ссылку или файл"/></label> : <><button type="button" className="direct-chat__call" aria-label="Позвонить / присоединиться" title="Начать звонок или присоединиться к участникам" onClick={() => window.dispatchEvent(new CustomEvent('voxhold:start-conversation-call', { detail: id }))}><Icon name="phone" size={18}/><span>Позвонить</span></button>{onCreateGroup && <button type="button" onClick={onCreateGroup}><Icon name="userPlus" size={18}/><span>Создать беседу</span></button>}<button type="button" className="direct-chat__notification" aria-label={muted ? 'Включить уведомления' : 'Отключить уведомления'} title={muted ? 'Включить уведомления' : 'Отключить уведомления'} aria-pressed={muted} disabled={mutePending} onClick={() => void toggleMute()}>{mutePending ? <span className="spinner"/> : <Icon name={muted ? 'bellOff' : 'bell'} size={18}/>}<span>{muted ? 'Без звука' : 'Уведомления'}</span></button></>}</div>
     <div className="direct-chat__messages messages" ref={visible} onScroll={() => { const list = visible.current; followingBottom.current = !!list && list.scrollHeight - list.scrollTop - list.clientHeight < 60; readLatest.current() }} aria-live="polite">
       {!messages.length && !error && !loadError && <PersonalEmpty icon={saved ? 'bookmark' : 'message'} title={loading ? 'Загружаем сообщения…' : saved ? search ? 'Ничего не найдено' : 'Сохраните важное' : 'Начните разговор'}>{saved ? search ? 'Попробуйте другую фразу или очистите поиск.' : 'Ваше личное место для заметок, ссылок и файлов. Перешлите сообщение сюда или напишите себе.' : 'Сообщения видны только участникам этого разговора.'}</PersonalEmpty>}
-      {more && <button className="button button--ghost" onClick={() => void loadOlder()}>Раньше</button>}
+      {more && <button className="button button--ghost" disabled={olderPending} onClick={() => void loadOlder()}>{olderPending ? <><span className="spinner"/>Загружаем историю…</> : 'Раньше'}</button>}
       {messages.map((m, index) => {
         const previous = messages[index - 1], sameDay = !!previous && new Date(previous.created_at * 1000).toDateString() === new Date(m.created_at * 1000).toDateString()
         const grouped = sameDay && previous.author.user_id === m.author.user_id && m.created_at - previous.created_at < 300

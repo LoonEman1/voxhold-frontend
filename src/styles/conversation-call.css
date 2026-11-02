@@ -1,4 +1,4 @@
-.direct-call-dock { position: fixed; right: 20px; bottom: 20px; z-index: 95; width: min(360px, calc(100vw - 40px)); max-height: min(680px, calc(100dvh - 40px)); padding: 16px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface-2); box-shadow: 0 16px 48px #0004; animation: call-dock-in .16s ease-out; }
+.direct-call-dock { position: fixed; right: 20px; bottom: 20px; z-index: 29; width: min(360px, calc(100vw - 40px)); max-height: min(680px, calc(100dvh - 40px)); padding: 16px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface-2); box-shadow: 0 16px 48px #0004; animation: call-dock-in .16s ease-out; }
 .direct-call-dock__header { display: flex; align-items: center; gap: 11px; }
 .direct-call-dock__symbol { display: grid; width: 38px; height: 38px; flex: none; place-items: center; border: 1px solid color-mix(in srgb, var(--lime) 20%, transparent); border-radius: 12px; color: var(--lime); background: var(--lime-soft); }
 .direct-call-dock__header > div { display: grid; min-width: 0; flex: 1; gap: 4px; }
@@ -29,24 +29,11 @@
 @keyframes call-dock-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (max-width: 760px) { .direct-call-dock { right: 12px; bottom: calc(75px + env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 24px)); max-height: calc(100dvh - 100px - env(safe-area-inset-bottom)); padding: 14px; } }
 
-/* Keep the media component mounted while giving the call a real layout row. */
-#root:has(> .workspace):has(> .direct-call-dock) { display: grid; height: 100dvh; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
-#root:has(> .direct-call-dock) > .workspace { grid-column: 1; grid-row: 2; height: 100%; min-height: 0; }
-#root:has(> .workspace) > .direct-call-dock { position: relative; right: auto; bottom: auto; grid-column: 1; grid-row: 1; display: grid; width: 100%; max-height: min(280px, 40dvh); grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 12px 20px; border-width: 0 0 1px; border-radius: 0; box-shadow: none; }
-#root > .direct-call-dock .direct-call-dock__header { grid-column: 1; grid-row: 1; min-width: 0; }
-#root > .direct-call-dock .direct-call-dock__body { grid-column: 2; grid-row: 1; min-width: 0; max-height: 220px; overflow-y: auto; }
-#root > .direct-call-dock .direct-call-dock__members { margin: 0; }
-#root > .direct-call-dock .direct-call-dock__controls { grid-column: 3; grid-row: 1; width: 216px; margin: 0; }
-#root > .direct-call-dock .call-error, #root > .direct-call-dock .voice-e2ee-warning { grid-column: 1 / -1; margin: 0; }
-@media (max-width: 760px) {
-  #root:has(> .workspace) > .direct-call-dock { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px; }
-  #root > .direct-call-dock .direct-call-dock__header { grid-column: 1; grid-row: 1; }
-  #root > .direct-call-dock .direct-call-dock__body { grid-column: 1; grid-row: 2; }
-  #root > .direct-call-dock .direct-call-dock__controls { grid-column: 1; grid-row: 3; width: 100%; }
-  #root:has(> .workspace) > .direct-call-dock.is-collapsed { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
-  #root > .direct-call-dock.is-collapsed .direct-call-dock__symbol, #root > .direct-call-dock.is-collapsed .direct-call-dock__header small { display: none; }
-  #root > .direct-call-dock.is-collapsed .direct-call-dock__header b { overflow: hidden; font-size: var(--font-xs); text-overflow: ellipsis; white-space: nowrap; }
-  #root > .direct-call-dock.is-collapsed .direct-call-dock__controls { grid-column: 2; grid-row: 1; width: 176px; gap: 6px; }
-  #root > .direct-call-dock.is-collapsed .direct-call-dock__controls > button { min-height: 40px; padding: 6px; }
-}
 @media (prefers-reduced-motion: reduce) { .direct-call-dock { animation: none; } .direct-call-dock__controls > button { transition: none; } }
+
+.direct-call-dock.floating-window { display: flex; max-height: none; flex-direction: column; overflow: hidden; padding: 16px 16px 24px; }
+.direct-call-dock.floating-window .direct-call-dock__header, .direct-call-dock.floating-window .direct-call-dock__controls { flex: none; }
+.direct-call-dock.floating-window .direct-call-dock__header { gap: 8px; }
+.direct-call-dock.floating-window .direct-call-dock__body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.direct-call-dock.floating-window.is-collapsed { height: auto; }
+.direct-call-dock.floating-window .direct-call-dock__header .icon-button { flex: none; }

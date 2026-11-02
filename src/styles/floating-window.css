@@ -1,0 +1,34 @@
+.floating-window { position: fixed; right: auto; bottom: auto; min-width: 0; min-height: 0; border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: var(--shadow); }
+.floating-window__move, .floating-window__resize { display: grid; flex: none; place-items: center; padding: 0; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: grab; touch-action: none; }
+.floating-window__move { width: 24px; height: 34px; }
+.floating-window__move:hover, .floating-window__resize:hover { color: var(--text); background: var(--surface-3); }
+.floating-window__resize { position: absolute; z-index: 3; right: 3px; bottom: 3px; width: 22px; height: 22px; cursor: nwse-resize; }
+.floating-window__resize svg { transform: rotate(-45deg); }
+body.is-adjusting-window, body.is-adjusting-window * { user-select: none !important; }
+.floating-window:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+.stream-expanded-player.floating-window { z-index: 29; inset: auto; padding: 12px 14px 24px; overflow: hidden; background: var(--surface-2); container-type: inline-size; }
+.stream-expanded-player.floating-window > header .eyebrow { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; letter-spacing: 1.1px; }
+[data-theme="light"] .stream-expanded-player.floating-window > header .eyebrow { color: #566700; }
+[data-theme="light"] .stream-volume-control.is-boosted output { color: #986200; }
+.stream-expanded-player.floating-window > header { gap: 10px; padding-bottom: 10px; }
+.stream-expanded-player.floating-window > header > div:first-of-type { min-width: 0; flex: 1; }
+.stream-expanded-player.floating-window > header h2 { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.stream-expanded-player.floating-window .stream-expanded-player__meta { flex: none; }
+.stream-expanded-player.floating-window .stream-expanded-player__meta > button { min-width: 32px; padding: 0 7px; }
+.stream-expanded-player.floating-window .stream-expanded-player__meta > button > span, .stream-expanded-player.floating-window .stream-expanded-player__meta > .stream-mode { display: none; }
+.stream-expanded-player.floating-window > footer { min-width: 0; gap: 8px; padding-top: 10px; }
+.stream-expanded-player.floating-window > footer > div { min-width: 0; flex-wrap: wrap; }
+.stream-expanded-player.floating-window .call-controls { max-width: 100%; flex-wrap: wrap; }
+.stream-expanded-player.floating-window .stream-focused-participants { padding: 8px; background: transparent; }
+.stream-expanded-player.floating-window .stream-focused-participant { color: var(--text); background: var(--surface-3); }
+.stream-volume-control .stream-volume-control__mixer input { background: linear-gradient(to right, var(--lime) 0 var(--volume-fill), var(--surface-3) var(--volume-fill) 100%); }
+.stream-expanded-player.floating-window.is-ui-hidden { z-index: 150; inset: 0 !important; width: 100vw !important; height: 100dvh !important; padding: 0; border: 0; border-radius: 0; background: #000; }
+.stream-expanded-player.floating-window.is-ui-hidden > .floating-window__resize { display: none; }
+@container (max-width: 600px) {
+  .stream-expanded-player > footer .stream-quality { display: none; }
+  .stream-expanded-player > footer { flex-direction: column; align-items: stretch; }
+  .stream-expanded-player > footer > div { width: 100%; justify-content: center; }
+  .stream-expanded-player > footer .button { min-height: 34px; padding: 0 9px; font-size: 12px; }
+  .stream-expanded-player .call-controls { justify-content: center; padding: 4px; gap: 3px; }
+}
+@media (prefers-reduced-motion: reduce) { .floating-window { animation: none; } }

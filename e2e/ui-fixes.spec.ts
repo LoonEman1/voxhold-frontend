@@ -342,6 +342,8 @@ test('a stream starts in the call grid, focuses on click, and hides interface in
   await page.mouse.move(400, 300)
   await expect(player).toHaveClass(/is-idle/, { timeout: 6000 })
   await page.keyboard.press('Escape')
+  await expect(player).not.toHaveClass(/is-ui-hidden/)
+  await expect(player).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(player).toHaveCount(0)
   await expect(tile.locator('video')).toBeVisible()

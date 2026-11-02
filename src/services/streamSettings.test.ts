@@ -23,9 +23,9 @@ describe('stream preferences', () => {
       videoBitrateKbps: 12000,
       includeAudio: true,
       audioBitrateKbps: 320,
-      publishVolume: 100,
+      publishVolume: 175,
       playbackMuted: false,
-      playbackVolume: 37,
+      playbackVolume: 200,
     })
     expect(loadStreamPreferences()).toEqual({
       mode: 'p2p',
@@ -37,9 +37,9 @@ describe('stream preferences', () => {
       videoBitrateKbps: 12000,
       includeAudio: true,
       audioBitrateKbps: 320,
-      publishVolume: 100,
+      publishVolume: 175,
       playbackMuted: false,
-      playbackVolume: 37,
+      playbackVolume: 200,
     })
   })
 
