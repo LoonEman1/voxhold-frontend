@@ -9,13 +9,16 @@ export const STREAM_RESOLUTIONS = [
 // 24 matches films, 90/120 high-refresh monitors; the browser never captures
 // faster than the screen actually updates.
 export const STREAM_FRAME_RATES = [15, 24, 30, 45, 60, 90, 120] as const
-export const STREAM_VIDEO_BITRATES = [2500, 4500, 6000, 8000, 10000, 12000, 16000] as const
+export const MIN_STREAM_VIDEO_BITRATE_KBPS = 500
+export const MAX_STREAM_VIDEO_BITRATE_KBPS = 16000
+export const STREAM_VIDEO_BITRATE_STEP_KBPS = 100
 export const STREAM_AUDIO_BITRATES = [64, 96, 128, 192, 256, 320] as const
 export const MAX_STREAM_VOLUME = 200
 
 export type StreamResolution = typeof STREAM_RESOLUTIONS[number]['id']
 export type StreamFrameRate = typeof STREAM_FRAME_RATES[number]
-export type StreamVideoBitrate = typeof STREAM_VIDEO_BITRATES[number]
+/** Video bitrate in Kbit/s; the UI edits Mbit/s with one decimal place. */
+export type StreamVideoBitrate = number
 export type StreamAudioBitrate = typeof STREAM_AUDIO_BITRATES[number]
 export type StreamCodecPreference = 'auto' | StreamCodec
 export type StreamDynamicRangePreference = 'auto' | 'sdr' | 'hdr'
@@ -100,9 +103,7 @@ export function normalizeStreamPreferences(value: unknown): StreamPreferences {
     frameRate: STREAM_FRAME_RATES.includes(source.frameRate as StreamFrameRate)
       ? source.frameRate as StreamFrameRate
       : DEFAULT_STREAM_PREFERENCES.frameRate,
-    videoBitrateKbps: STREAM_VIDEO_BITRATES.includes(source.videoBitrateKbps as StreamVideoBitrate)
-      ? source.videoBitrateKbps as StreamVideoBitrate
-      : DEFAULT_STREAM_PREFERENCES.videoBitrateKbps,
+    videoBitrateKbps: normalizeStreamVideoBitrate(source.videoBitrateKbps),
     includeAudio: source.includeAudio !== false,
     audioBitrateKbps: STREAM_AUDIO_BITRATES.includes(source.audioBitrateKbps as StreamAudioBitrate)
       ? source.audioBitrateKbps as StreamAudioBitrate
@@ -114,6 +115,11 @@ export function normalizeStreamPreferences(value: unknown): StreamPreferences {
       ? Math.max(0, Math.min(MAX_STREAM_VOLUME, Math.round(source.playbackVolume)))
       : DEFAULT_STREAM_PREFERENCES.playbackVolume,
   }
+}
+
+export function normalizeStreamVideoBitrate(value: unknown): StreamVideoBitrate {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_STREAM_PREFERENCES.videoBitrateKbps
+  return Math.max(MIN_STREAM_VIDEO_BITRATE_KBPS, Math.min(MAX_STREAM_VIDEO_BITRATE_KBPS, Math.round(value / STREAM_VIDEO_BITRATE_STEP_KBPS) * STREAM_VIDEO_BITRATE_STEP_KBPS))
 }
 
 export function loadStreamPreferences(): StreamPreferences {

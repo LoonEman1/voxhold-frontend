@@ -106,3 +106,17 @@ ports, retaining defaults 4190 and 4189. Layout coverage includes 320, 390, 600,
 доступной повторную попытку.
 
 Проверки и команды приведены выше. Новые зависимости не добавлялись.
+
+## Custom video bitrate / Ручной битрейт видео
+
+Video bitrate is entered directly in Mbit/s with a 0.1 step, from 0.5 to 16.
+Values above 16 are immediately capped; finer values round to one decimal.
+Clearing the field while editing keeps the last valid setting until commit.
+Presets still populate the field, and custom values survive closing/reloading.
+The media service continues to receive integer Kbit/s; no protocol change.
+
+Видеобитрейт вводится вручную в Мбит/с с шагом 0,1 и пределами 0,5–16.
+Число выше 16 сразу заменяется на 16; лишние знаки округляются до десятых.
+При очистке поля во время ввода сохраняется последний корректный параметр.
+Пресеты подставляют своё значение, а ручное значение сохраняется между входами.
+В WebRTC передаётся целое количество Кбит/с; протокол не меняется.

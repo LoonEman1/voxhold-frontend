@@ -295,7 +295,7 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
 }
 .modal-card > .stream-settings-grid { margin: 0; padding: 0 25px 16px; }
 
-.stream-settings-grid label { display: grid; gap: .35rem; font-size: .75rem; color: var(--muted); }
+.stream-settings-grid label { display: grid; align-content: start; gap: .35rem; font-size: .75rem; color: var(--muted); }
 .stream-settings-grid select {
   width: 100%;
   padding: .65rem .75rem;
@@ -304,8 +304,14 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
   color: var(--text);
   background: var(--surface-3);
 }
+.stream-bitrate-input { display: flex; min-width: 0; align-items: center; gap: 5px; padding-right: 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-3); }
+.stream-bitrate-input:focus-within { outline: 2px solid var(--lime); outline-offset: 1px; }
+.stream-bitrate-input input { width: 100%; min-width: 0; padding: .65rem .6rem; border: 0; border-radius: 10px; color: var(--text); background: transparent; box-shadow: none; font-variant-numeric: tabular-nums; }
+.stream-bitrate-input input:focus { outline: none; box-shadow: none; }
+.stream-bitrate-input > span { flex: none; font-size: 11px; white-space: nowrap; }
+.stream-bitrate-field > small { font-size: 11px; line-height: 1.4; }
 .stream-audio-toggle { display: flex !important; align-items: center; align-self: end; min-height: 40px; }
-.stream-audio-toggle input { accent-color: var(--lime); }
+.stream-audio-toggle input { width: 16px; height: 16px; flex: none; margin: 0; padding: 0; accent-color: var(--lime); }
 .stream-warning { margin: 0 0 .9rem; color: #e6a85b; font-size: .8rem; line-height: 1.45; }
 .modal-card > .stream-warning { margin: 0; padding: 0 25px 16px; }
 .stream-dialog-actions { display: flex; justify-content: flex-end; gap: .65rem; padding: 0 25px 25px; }

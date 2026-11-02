@@ -1,5 +1,37 @@
 import { expect, test } from '@playwright/test'
 
+test('custom stream bitrate accepts tenths, caps 16 Mbit/s and persists across reload', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/stream-settings.html')
+  const input = page.getByRole('spinbutton', { name: 'Битрейт видео, Мбит/с' })
+  await input.fill('7.3')
+  await expect(input).toHaveValue('7.3')
+  await page.getByRole('button', { name: 'Начать трансляцию', exact: true }).click()
+  await expect(page.getByLabel('Битрейт для трансляции')).toHaveText('7300')
+  await page.reload()
+  await expect(input).toHaveValue('7.3')
+  await input.fill('99.9')
+  await expect(input).toHaveValue('16')
+  await input.fill('7.36')
+  await expect(input).toHaveValue('7.4')
+  await input.fill('')
+  await input.pressSequentially('8.1')
+  await expect(input).toHaveValue('8.1')
+  await input.press('ArrowUp')
+  await expect(input).toHaveValue('8.2')
+  await page.getByRole('button', { name: /Игры/ }).click()
+  await expect(input).toHaveValue('12')
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme }, theme)
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      const dialog = page.getByRole('dialog', { name: 'Поделиться экраном' })
+      expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+      await expect(input).toBeInViewport()
+      if (width === 390) await dialog.screenshot({ path: info.outputPath(`custom-bitrate-${theme}.png`), animations: 'disabled' })
+    }
+  }
+})
+
 test('permanent navigation owns space in channels and personal pages at desktop widths', async ({ page }, info) => {
   await page.addInitScript(() => localStorage.setItem('voxhold.workspace-layout.v1', JSON.stringify({ channel_width: 480, members_width: 420, members_open: true })))
   await page.goto('/e2e/fixtures/personal-space.html')
@@ -175,6 +207,7 @@ test('stream window moves and resizes without replacing video; 200% mixer fits b
     await expect(player.locator('h2')).toHaveCSS('color', theme === 'light' ? 'rgb(32, 33, 29)' : 'rgb(245, 243, 236)')
     for (const width of [1280, 600, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
+      await expect.poll(async () => { const box = await player.boundingBox(); return box!.x + box!.width <= width }).toBe(true)
       const toggle = player.getByRole('button', { name: 'Выключить звук трансляции' })
       await toggle.focus()
       const slider = player.getByRole('slider', { name: 'Громкость трансляции' })

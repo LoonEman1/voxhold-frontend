@@ -1,5 +1,5 @@
 import { Icon } from './Icon'
-import { useRef, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react'
 import { MAX_STREAM_VOLUME } from '../services/streamSettings'
 
 /** The button stays compact; hover, keyboard focus and touch reveal the mixer. */
@@ -11,14 +11,27 @@ export function StreamVolumeControl({ volume, muted, onVolumeChange, onToggleMut
   const label = publisher ? 'Исходящая громкость трансляции' : 'Громкость трансляции'
   const action = silent ? 'Включить звук трансляции' : 'Выключить звук трансляции'
   const root = useRef<HTMLDivElement>(null), mixer = useRef<HTMLDivElement>(null)
-  const position = () => {
+  const position = useCallback(() => {
     const anchor = root.current?.getBoundingClientRect(), popup = mixer.current?.getBoundingClientRect()
     if (!root.current || !anchor || !popup) return
     const container = root.current.closest('.floating-window, .stream-mini-player')?.getBoundingClientRect()
     const left = Math.max(8, container ? container.left + 8 : 8), right = Math.min(window.innerWidth - 8, container ? container.right - 8 : window.innerWidth - 8)
     const desired = Math.max(left, Math.min(right - popup.width, anchor.left + anchor.width / 2 - popup.width / 2))
     root.current.style.setProperty('--stream-mixer-left', `${desired - anchor.left}px`)
-  }
+  }, [])
+  useEffect(() => {
+    const anchor = root.current, container = anchor?.closest('.floating-window, .stream-mini-player')
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(position) : null
+    if (anchor) observer?.observe(anchor)
+    if (container) observer?.observe(container)
+    let frame = 0
+    const resize = () => {
+      window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => { frame = window.requestAnimationFrame(position) })
+    }
+    window.addEventListener('resize', resize)
+    return () => { window.removeEventListener('resize', resize); window.cancelAnimationFrame(frame); observer?.disconnect() }
+  }, [position])
   const displayed = silent ? 0 : Math.max(0, Math.min(MAX_STREAM_VOLUME, Math.round(volume)))
   return <div ref={root} style={{ '--volume-fill': `${displayed / MAX_STREAM_VOLUME * 100}%` } as CSSProperties} className={`stream-volume-control${compact ? ' is-compact' : ''}${silent ? ' is-muted' : ''}${displayed > 100 ? ' is-boosted' : ''}`} onPointerEnter={position} onFocusCapture={position}>
     <button type="button" className="stream-volume-control__toggle" disabled={disabled} onClick={onToggleMute} aria-pressed={silent} aria-label={action} title={publisher ? `${action} для зрителей` : action}>
