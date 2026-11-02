@@ -3,6 +3,9 @@ import type { WorkerEvent } from '../../src/services/e2ee/frameProcessor'
 import { BrowserVoiceSession } from '../../src/services/voice'
 import type { BrowserVoiceInput } from '../../src/services/voiceInput'
 import { DEFAULT_VOICE_PREFERENCES } from '../../src/services/voiceSettings'
+import { CallE2EE } from '../../src/services/e2ee/voiceE2EE'
+import { createDevice } from '../../src/services/e2ee/deviceKeys'
+import { importDevicePublicKey } from '../../src/services/e2ee/keyWrap'
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -13,16 +16,49 @@ async function gathered(peer: RTCPeerConnection) {
   }))
 }
 
-async function runSession(mode: E2EETransformMode | 'none', keyState: 'valid' | 'wrong' | 'missing' = 'valid') {
+async function runSession(mode: E2EETransformMode | 'none', keyState: 'valid' | 'wrong' | 'missing' = 'valid', exchange: 'seeded' | 'bootstrap' | 'late' = 'seeded') {
   const started = performance.now()
   const events: { side: string; event: WorkerEvent }[] = []
   const errors: string[] = []
   const sendTransform = mode === 'none' ? null : new E2EEMediaTransform(mode, (event) => events.push({ side: 'sender', event }))
   const receiveTransform = mode === 'none' ? null : new E2EEMediaTransform(mode, (event) => events.push({ side: 'receiver', event }))
+  let senderCall: CallE2EE | null = null, receiverCall: CallE2EE | null = null
+  let joinAt = 0, firstDecryptedAt: number | null = null, firstAudibleAt: number | null = null
+  let keyMessages = 0
+  const deliveries = new Set<ReturnType<typeof setTimeout>>()
+  let beginExchange = () => {}
   const key = crypto.getRandomValues(new Uint8Array(32))
-  sendTransform?.setSendKey(0, key)
-  receiveTransform?.setSendKey(1, key)
-  if (keyState !== 'missing') receiveTransform?.addReceiveKey('sender', 0, keyState === 'wrong' ? crypto.getRandomValues(new Uint8Array(32)) : key)
+  if (exchange === 'seeded') {
+    void sendTransform?.setSendKey(0, key)
+    void receiveTransform?.setSendKey(1, key)
+    if (keyState !== 'missing') void receiveTransform?.addReceiveKey('sender', 0, keyState === 'wrong' ? crypto.getRandomValues(new Uint8Array(32)) : key)
+  } else {
+    const devices = await Promise.all([createDevice(1), createDevice(2)])
+    const publicKeys = await Promise.all(devices.map((device) => importDevicePublicKey(device.publicKey)))
+    await Promise.all([sendTransform!.ready, receiveTransform!.ready])
+    const members = devices.map((device, index) => ({ connectionId: index ? 'receiver' : 'sender', userId: device.userId, deviceId: device.deviceId }))
+    const calls: CallE2EE[] = []
+    const relayKey = (callback: () => void) => {
+      const timer = setTimeout(() => { deliveries.delete(timer); callback() }, 25)
+      deliveries.add(timer)
+    }
+    devices.forEach((device, index) => {
+      calls.push(new CallE2EE({
+        room: 'voice:1', device, mode: mode as E2EETransformMode, media: index ? receiveTransform! : sendTransform!,
+        directory: { publicKey: async (member) => publicKeys[member.userId - 1]! },
+        transport: {
+          sendKey: (_to, payload) => { keyMessages++; relayKey(() => calls[1 - index]!.receiveKey(members[index]!, payload)) },
+          requestKey: () => relayKey(() => calls[1 - index]!.keyRequested(members[index]!)),
+        },
+        onError: (error) => errors.push(error instanceof Error ? error.message : String(error)),
+        onFirstFrame: (direction) => { if (index === 1 && direction === 'recv') firstDecryptedAt = performance.now() },
+      }))
+    })
+    senderCall = calls[0]!
+    receiverCall = calls[1]!
+    if (exchange === 'late') senderCall.setParticipants([members[0]!])
+    beginExchange = () => { joinAt = performance.now(); calls.forEach((call) => call.setParticipants(members)) }
+  }
   const relay = new RTCPeerConnection(sendTransform?.peerConfiguration({}) ?? {})
   const transceiver = relay.addTransceiver('audio', { direction: 'recvonly' })
   sendTransform?.attachSender(transceiver.sender, 'audio')
@@ -47,7 +83,10 @@ async function runSession(mode: E2EETransformMode | 'none', keyState: 'valid' | 
   } as unknown as BrowserVoiceInput
   const session = new BrowserVoiceSession({
     input,
-    e2ee: receiveTransform ? { media: receiveTransform, onReceiverOwners: (owners) => owners.forEach((owner, id) => receiveTransform.mapReceiver(id, owner)) } : undefined,
+    e2ee: receiveTransform ? { media: receiveTransform, onReceiverOwners: (owners) => {
+      if (receiverCall) receiverCall.setReceiverOwners(owners)
+      else owners.forEach((owner, id) => receiveTransform.mapReceiver(id, owner))
+    } } : undefined,
     onAnswer: (sdp) => { answer = relay.setRemoteDescription({ type: 'answer', sdp }) },
     onICECandidate: (candidate) => {
       const value = { candidate: candidate.candidate, sdpMid: candidate.sdp_mid, sdpMLineIndex: candidate.sdp_mline_index }
@@ -88,6 +127,16 @@ async function runSession(mode: E2EETransformMode | 'none', keyState: 'valid' | 
     const silent = context.createGain()
     silent.gain.value = 0.000001
     analyser.connect(silent).connect(context.destination)
+    if (exchange !== 'seeded') {
+      beginExchange()
+      const sample = new Float32Array(analyser.fftSize)
+      const deadline = performance.now() + 1_500
+      while (performance.now() < deadline) {
+        analyser.getFloatTimeDomainData(sample)
+        if (Math.sqrt(sample.reduce((sum, value) => sum + value * value, 0) / sample.length) > 0.05) { firstAudibleAt = performance.now(); break }
+        await delay(10)
+      }
+    }
     await delay(3500)
     const values = new Float32Array(analyser.fftSize)
     analyser.getFloatTimeDomainData(values)
@@ -99,19 +148,24 @@ async function runSession(mode: E2EETransformMode | 'none', keyState: 'valid' | 
       sine += value * Math.sin(phase)
       cosine += value * Math.cos(phase)
     }
-    if (mode !== 'none') await delay(Math.max(0, 16_000 - (performance.now() - started)))
+    if (mode !== 'none' && exchange === 'seeded') await delay(Math.max(0, 16_000 - (performance.now() - started)))
     let encrypted = 0, decrypted = 0, authDrops = 0, unknownKeyDrops = 0
     for (const { side, event } of events) {
       if (event.type !== 'stats') continue
       if (side === 'sender') encrypted += event.encrypted
       else { decrypted += event.decrypted; authDrops += event.dropped.auth; unknownKeyDrops += event.dropped.unknown_key }
     }
-    return { mode, keyState, connected, errors, rms: Math.sqrt(energy / values.length), toneRatio: energy ? Math.min(1, 2 * (sine * sine + cosine * cosine) / (values.length * energy)) : 0, encrypted, decrypted, authDrops, unknownKeyDrops }
+    return { mode, keyState, exchange, connected, errors, rms: Math.sqrt(energy / values.length), toneRatio: energy ? Math.min(1, 2 * (sine * sine + cosine * cosine) / (values.length * energy)) : 0, encrypted, decrypted, authDrops, unknownKeyDrops,
+      firstDecryptedMs: firstDecryptedAt === null ? null : firstDecryptedAt - joinAt,
+      firstAudibleMs: firstAudibleAt === null ? null : firstAudibleAt - joinAt, keyMessages }
   } finally {
     session.close()
     relay.close()
     sendTransform?.close()
     receiveTransform?.close()
+    senderCall?.close()
+    receiverCall?.close()
+    deliveries.forEach(clearTimeout)
     oscillator.stop()
     track.stop()
     localTrack.stop()

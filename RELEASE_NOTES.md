@@ -1,3 +1,14 @@
+# Unreleased / В разработке
+
+- Быстрый вход в E2EE-каналы: немедленная раздача первого ключа после
+  подтверждения входа, подтверждения установки ключей в worker, предварительная
+  подготовка и параллельный запуск с микрофоном/ICE.
+- Новый ключ активируется по аутентифицированным ACK; ожидание старых клиентов
+  и недоставленных подтверждений ограничено одной секундой.
+- Fast E2EE onboarding retains the v2 key/frame formats and existing backend
+  relay. Browser regressions measure the first decrypted and audible frame with
+  real key distribution. See [design, measurements and compatibility](docs/e2ee-fast-join.md).
+
 # Voxhold Frontend 2.6.1
 
 Патч от 2 ноября 2026 года. Устранён шум вместо голоса при включённом E2EE:

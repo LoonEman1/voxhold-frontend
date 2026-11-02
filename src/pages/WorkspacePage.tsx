@@ -203,6 +203,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const voiceMediaRef = useRef<BrowserVoiceSession | null>(null)
   // FEAT-13: key session and media worker of an end-to-end encrypted channel.
   const voiceE2EERef = useRef<CallE2EE | null>(null)
+  const voiceE2EERuntimeRef = useRef<typeof import('../services/e2ee/runtime') | null>(null)
+  const voicePreparationRef = useRef<AbortController | null>(null)
   const [voiceEncryption, setVoiceEncryption] = useState<{ active: boolean; changedKeys: number[] }>({ active: false, changedKeys: [] })
   const voiceSessionRef = useRef<ActiveVoiceSession | null>(voiceSession)
   const recording = useCallRecordings({ api, token, scope: `${realtimeBaseUrl || window.location.origin}:${user?.id ?? 0}`, serverId: selectedServerId, voice: voiceSession, voiceMedia: voiceMediaRef, stream: streamMedia, notify, mediaVersion: voiceStatus })
@@ -603,6 +605,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
     const media = voiceMediaRef.current
     voiceMediaRef.current = null
+    voicePreparationRef.current?.abort()
+    voicePreparationRef.current = null
     media?.close()
     voiceE2EERef.current?.close()
     voiceE2EERef.current = null
@@ -637,14 +641,18 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * this device's registered key, the worker and the sender-key session.
    * Throws a user-facing error when the browser cannot encrypt.
    */
-  const prepareVoiceE2EE = useCallback(async (channelId: number) => {
-    if (!token || !user) throw new Error('Сессия истекла. Войдите снова')
-    const runtime = await import('../services/e2ee/runtime')
+  const prepareVoiceE2EE = useCallback(async (channelId: number, startedAt = performance.now()) => {
+    const controller = new AbortController()
+    voicePreparationRef.current?.abort()
+    voicePreparationRef.current = controller
+    const runtime = voiceE2EERuntimeRef.current ?? await import('../services/e2ee/runtime')
     return runtime.openCallE2EE({
       api,
-      token,
-      userId: user.id,
+      token: token ?? '',
+      userId: user?.id ?? 0,
       room: `voice:${channelId}`,
+      startedAt,
+      signal: controller.signal,
       transport: {
         sendKey: (to, payload) => { realtimeRef.current?.sendE2EEKey(channelId, to.userId, to.deviceId, payload) },
         requestKey: (to) => { realtimeRef.current?.requestE2EEKey(channelId, to.userId, to.deviceId) },
@@ -652,16 +660,30 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onKeyChanged: (userId) => {
         setVoiceEncryption((current) => current.changedKeys.includes(userId) ? current : { ...current, changedKeys: [...current.changedKeys, userId] })
       },
-      onError: (error) => clientDiagnostics.record('webrtc', 'e2ee_key_error', 'warn', { error_name: error instanceof Error ? error.name : typeof error }),
     })
   }, [api, token, user])
+
+  useEffect(() => {
+    const userId = user?.id, channelId = selectedChannel?.id
+    if (!token || !userId || !channelId || selectedChannel?.kind !== 'voice' || !selectedChannel.e2ee_required || voiceSession?.channelId === channelId) return
+    let canceled = false
+    let release: (() => void) | undefined
+    void import('../services/e2ee/runtime').then((runtime) => {
+      if (canceled) return
+      voiceE2EERuntimeRef.current = runtime
+      release = runtime.prewarmVoiceChannel({ api, token, userId, channelId }, voiceParticipantsRef.current)
+    }).catch(() => undefined)
+    return () => { canceled = true; release?.() }
+  }, [api, token, user?.id, selectedChannel?.id, selectedChannel?.kind, selectedChannel?.e2ee_required, voiceSession?.channelId])
 
   useEffect(() => () => closeVoiceLocally(), [closeVoiceLocally])
 
   // Room membership drives sender-key rotation and receiver -> sender mapping.
   useEffect(() => {
     const e2ee = voiceE2EERef.current
-    if (!e2ee || !voiceSession) return
+    // The relay accepts key messages only after voice.joined confirmed us.
+    // A pending local session must not consume the first-distribution path.
+    if (!e2ee || !voiceSession?.connectionId) return
     e2ee.setParticipants(Object.values(voiceParticipants)
       .filter((participant) => participant.server_id === voiceSession.serverId && participant.channel_id === voiceSession.channelId)
       .map((participant) => ({ connectionId: participant.connection_id, userId: participant.user_id, deviceId: participant.e2ee_device_id })))
@@ -1409,26 +1431,23 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     voiceSessionRef.current = pending
     setVoiceSession(pending)
 
-    // Media start waits for the runtime ICE configuration (or a fixed
-    // host-only fallback) before any peer is created.
-    const iceConfiguration = await ensureWebRTCConfig()
-    if (voiceSessionRef.current !== pending) return
-
-    const input = await ensureVoiceInput()
-    if (!input) return
-    if (voiceSessionRef.current !== pending) return
-
+    // Start key preparation, capture and ICE lookup together. A warmed module
+    // consumes its worker synchronously before React releases the warm lease.
+    const startedAt = performance.now()
+    const encryptionPromise = channel.e2ee_required ? prepareVoiceE2EE(channel.id, startedAt) : Promise.resolve(null)
+    const preparation = voicePreparationRef.current
     let encryption: Awaited<ReturnType<typeof prepareVoiceE2EE>> | null = null
-    if (channel.e2ee_required) {
-      try {
-        encryption = await prepareVoiceE2EE(channel.id)
-      } catch (error) {
-        if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
-        return
-      }
-      if (voiceSessionRef.current !== pending) { encryption.e2ee.close(); return }
-      voiceE2EERef.current = encryption.e2ee
+    let input: BrowserVoiceInput | null
+    let iceConfiguration: RTCConfiguration
+    try {
+      [iceConfiguration, input, encryption] = await Promise.all([ensureWebRTCConfig(), ensureVoiceInput(), encryptionPromise])
+    } catch (error) {
+      preparation?.abort()
+      if (voiceSessionRef.current === pending) { setVoiceError(voiceErrorMessage(error)); closeVoiceLocally() }
+      return
     }
+    if (!input || voiceSessionRef.current !== pending) { encryption?.e2ee.close(); return }
+    if (encryption) voiceE2EERef.current = encryption.e2ee
     const e2ee = encryption?.e2ee
 
     // Function declaration (not arrow) so it can close over `media`
