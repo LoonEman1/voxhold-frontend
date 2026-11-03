@@ -131,7 +131,7 @@ jobs:
     timeout-minutes: 15
     container:
       # Keep this version in sync with Playwright in package-lock.json.
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
       options: --ipc=host
     steps:
       - name: Checkout
@@ -190,7 +190,7 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       # Browsers are preinstalled; keep in sync with client-performance.
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
       options: --ipc=host
 
     env:
