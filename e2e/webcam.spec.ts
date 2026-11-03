@@ -8,19 +8,20 @@ test.afterEach(async ({ page }, info) => {
   }
 })
 
-test('camera replaces the card, expands and changes quality while screen and voice stay independent', async ({ page }) => {
-  await page.goto('/e2e/fixtures/webcam.html')
+for (const publisherId of [1, 2]) test(`camera replaces the card, expands and changes quality from peer ${publisherId} while screen and voice stay independent`, async ({ page }) => {
+  const name = publisherId === 1 ? 'Alice' : 'Bob'
+  await page.goto(`/e2e/fixtures/webcam.html?publisher=${publisherId}`)
   await page.getByRole('button', { name: 'Камера', exact: true }).click()
   await expect(page.getByRole('group', { name: 'Качество камеры' }).getByRole('button')).toHaveCount(3)
   await page.getByRole('button', { name: 'Низкое' }).click()
   await page.getByRole('button', { name: 'Включить камеру', exact: true }).click()
   const tile = page.locator('.camera-tile')
   await expect(tile).toHaveCount(1, { timeout: 15_000 })
-  await expect(tile.locator('footer')).toContainText('Alice')
+  await expect(tile.locator('footer')).toContainText(name)
   await expect(page.locator('.voice-participant')).toHaveCount(1)
   await expect.poll(() => tile.locator('video').evaluate((video) => video.getVideoPlaybackQuality().totalVideoFrames)).toBeGreaterThan(3)
-  await tile.getByRole('button', { name: 'Развернуть камеру: Alice' }).click()
-  await expect(page.getByRole('dialog', { name: 'Камера · Alice' })).toBeVisible()
+  await tile.getByRole('button', { name: `Развернуть камеру: ${name}` }).click()
+  await expect(page.getByRole('dialog', { name: `Камера · ${name}` })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.getByRole('button', { name: 'Экран', exact: true }).click()

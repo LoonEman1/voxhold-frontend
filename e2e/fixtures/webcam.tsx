@@ -11,6 +11,8 @@ import type { CameraQuality } from '../../src/services/camera'
 import '../../src/styles/global.css'
 import '../../src/styles/workspace.css'
 
+const publisherId = new URLSearchParams(location.search).get('publisher') === '2' ? 2 : 1
+const viewerId = publisherId === 1 ? 2 : 1
 const calls = new Map<number, ConversationCall>()
 const joined = new Set<number>()
 const errors: string[] = []
@@ -43,9 +45,9 @@ function Fixture() {
   useEffect(() => {
     const report = (message: string) => { errors.push(message); setError(message) }
     const callbacks = { state: () => {}, media: () => {}, removed: () => {}, error: report, screen: () => {}, ended: () => {} }
-    publisher = new ConversationCall(api(1), 'fixture', 1, 1, { ...callbacks, camera: (stream) => { publisherCamera = stream } })
-    const viewer = new ConversationCall(api(2), 'fixture', 1, 2, { ...callbacks, remoteCamera: (_id, value) => setCamera(value ? new MediaStream(value.getTracks()) : null), media: (_id, value) => setScreen(value.getVideoTracks().length ? new MediaStream(value.getVideoTracks()) : null) })
-    calls.set(1, publisher); calls.set(2, viewer)
+    publisher = new ConversationCall(api(publisherId), 'fixture', 1, publisherId, { ...callbacks, camera: (stream) => { publisherCamera = stream } })
+    const viewer = new ConversationCall(api(viewerId), 'fixture', 1, viewerId, { ...callbacks, remoteCamera: (_id, value) => setCamera(value ? new MediaStream(value.getTracks()) : null), media: (_id, value) => setScreen(value.getVideoTracks().length ? new MediaStream(value.getVideoTracks()) : null) })
+    calls.set(publisherId, publisher); calls.set(viewerId, viewer)
     // Avoid persisted key storage changing this transport regression's scope.
     Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined })
     const originalCapture = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices)
@@ -62,7 +64,7 @@ function Fixture() {
   }, [])
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}><header style={{ padding: 20, display: 'flex', gap: 12 }}>
     <button disabled={!ready} onClick={() => setSettings(true)}>Камера</button><button disabled={!ready} onClick={() => publisher.stopCamera()}>Выключить камеру</button><button disabled={!ready} onClick={() => void publisher.shareScreen()}>Экран</button><button onClick={() => publisher.mute(true)}>Выключить микрофон</button>
-  </header><VoicePanel cameras={camera ? { alice: camera } : {}} channel={channel} activeChannel={channel} participants={members.map((member) => ({ connection_id: member.user_id === 1 ? 'alice' : 'bob', user_id: member.user_id, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false, self_video: member.user_id === 1 && !!camera }))} members={members} currentUserId={2} connectionStatus="connected" realtimeOnline selfMute={false} selfDeaf={false} error={error} onJoin={async () => {}} onLeave={() => publisher.close()} onToggleMute={() => {}} onToggleDeaf={() => {}} onOpenProfile={() => {}} stream={screen ? { channel_id: 1, server_id: 1, publisher_user_id: 1, publisher_connection_id: 'alice', codec: 'vp8', mode: 'server', has_audio: false, viewer_count: 1, started_at_ms: 1 } : null} streamStatus="connected" streamError="" streamMedia={screen} streamPreferences={DEFAULT_STREAM_PREFERENCES} onStreamPreferencesChange={() => {}} onOpenStreamSettings={() => {}} onWatchStream={() => {}} onLeaveStream={() => {}} onExpandStream={() => {}}/>
+  </header><VoicePanel cameras={camera ? { [publisherId === 1 ? 'alice' : 'bob']: camera } : {}} channel={channel} activeChannel={channel} participants={members.map((member) => ({ connection_id: member.user_id === 1 ? 'alice' : 'bob', user_id: member.user_id, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false, self_video: member.user_id === publisherId && !!camera }))} members={members} currentUserId={viewerId} connectionStatus="connected" realtimeOnline selfMute={false} selfDeaf={false} error={error} onJoin={async () => {}} onLeave={() => publisher.close()} onToggleMute={() => {}} onToggleDeaf={() => {}} onOpenProfile={() => {}} stream={screen ? { channel_id: 1, server_id: 1, publisher_user_id: publisherId, publisher_connection_id: publisherId === 1 ? 'alice' : 'bob', codec: 'vp8', mode: 'server', has_audio: false, viewer_count: 1, started_at_ms: Date.now() } : null} streamStatus="connected" streamError="" streamMedia={screen} streamPreferences={DEFAULT_STREAM_PREFERENCES} onStreamPreferencesChange={() => {}} onOpenStreamSettings={() => {}} onWatchStream={() => {}} onLeaveStream={() => {}} onExpandStream={() => {}}/>
   {settings && <CameraSettingsDialog quality={quality} active={!!camera} onClose={() => setSettings(false)} onCancel={() => { if (!camera) publisher.stopCamera() }} onApply={async (value) => { if (camera) await publisher.setCameraQuality(value); else await publisher.startCamera(value); setQuality(value) }}/>}
   </main>
 }

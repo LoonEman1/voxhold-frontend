@@ -158,6 +158,11 @@ export class ConversationCall {
       // adding video during the initial audio negotiation cannot race SDP.
       peer.serial = peer.serial.then(async () => {
         if (this.closed || pc.signalingState !== 'stable') return
+        // Exactly one side initiates a new pair. Simultaneous initial offers
+        // can roll back Chromium's first ICE gathering before either side has
+        // candidates, leaving an otherwise answered connection stuck at new.
+        // Once a remote description exists, both sides may negotiate media.
+        if (!pc.remoteDescription && this.userId > peer.member.user_id) return
         try {
           peer.makingOffer = true
           await pc.setLocalDescription()
