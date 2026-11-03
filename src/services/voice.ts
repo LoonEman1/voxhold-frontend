@@ -10,11 +10,14 @@ import type { BrowserVoiceInput } from './voiceInput'
 import { readPeerStats } from './peerStats'
 import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
 import type { E2EEMediaTransform } from './e2ee/mediaTransform'
+import { CameraCapture, configureCameraSender, type CameraQuality } from './camera'
 
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
 interface VoiceMediaOptions {
+  onCamera?: (stream: MediaStream | null) => void
+  onRemoteCamera?: (connectionId: string, stream: MediaStream | null) => void
   /** The pre-started microphone capture. The session never closes it. */
   input: BrowserVoiceInput
   /** Runtime ICE configuration loaded from the backend; empty means host-only. */
@@ -133,6 +136,9 @@ export class BrowserVoiceSession {
   private recoveryStartedAt: number | null = null
   private peer: RTCPeerConnection | null = null
   private inputSender: RTCRtpSender | null = null
+  private cameraSender: RTCRtpSender | null = null
+  private camera: CameraCapture
+  private readonly remoteCameras = new Map<string, MediaStream>()
   private readonly remoteOutputs = new Map<string, VoiceRemoteOutput>()
   // The server names every relayed track "audio-<connectionId>" in the offer
   // msid, which lets us attribute remote audio levels to room participants.
@@ -167,6 +173,10 @@ export class BrowserVoiceSession {
   }
 
   constructor(private readonly options: VoiceMediaOptions) {
+    this.camera = new CameraCapture((stream) => {
+      if (!stream) void this.cameraSender?.replaceTrack(null).catch(() => undefined)
+      this.options.onCamera?.(stream)
+    })
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.visibilityHandler)
     }
@@ -238,6 +248,17 @@ export class BrowserVoiceSession {
     }
 
     peer.ontrack = ({ track: remoteTrack, transceiver }) => {
+      if (!this.closed && remoteTrack.kind === 'video') {
+        if (transceiver) this.remoteTransceivers.set(remoteTrack.id, transceiver)
+        this.remoteCameras.set(remoteTrack.id, new MediaStream([remoteTrack]))
+        this.refreshRemoteOwners()
+        remoteTrack.addEventListener('ended', () => {
+          const owner = this.trackOwners.get(remoteTrack.id)
+          if (owner) this.options.onRemoteCamera?.(owner, null)
+          this.remoteCameras.delete(remoteTrack.id)
+        }, { once: true })
+        return
+      }
       if (this.closed || remoteTrack.kind !== 'audio') return
       if (transceiver) this.remoteTransceivers.set(remoteTrack.id, transceiver)
       this.refreshRemoteOwners()
@@ -346,7 +367,7 @@ export class BrowserVoiceSession {
     })
     this.remoteTransceivers.forEach((transceiver, trackId) => {
       const owner = transceiver.mid !== null ? this.midOwners.get(transceiver.mid) : undefined
-      if (this.options.e2ee && transceiver.receiver.track.kind === 'audio') {
+      if (this.options.e2ee && (transceiver.receiver.track.kind === 'audio' || transceiver.receiver.track.kind === 'video')) {
         // mid may be null during ontrack, and track labels may be supplied by
         // a later offer. The native receiver keeps the same worker identity.
         let receiverId = this.receiverIds.get(transceiver.receiver)
@@ -354,10 +375,15 @@ export class BrowserVoiceSession {
           receiverId = `voice-receiver-${++this.nextReceiverId}`
           this.receiverIds.set(transceiver.receiver, receiverId)
         }
-        this.options.e2ee.media.attachReceiver(transceiver.receiver, 'audio', receiverId)
+        this.options.e2ee.media.attachReceiver(transceiver.receiver, transceiver.receiver.track.kind, receiverId)
         if (owner) receiverOwners.set(receiverId, owner)
       }
       const previous = this.trackOwners.get(trackId)
+      const camera = this.remoteCameras.get(trackId)
+      if (camera) {
+        if (previous && previous !== owner) this.options.onRemoteCamera?.(previous, null)
+        if (owner) this.options.onRemoteCamera?.(owner, camera)
+      }
       if (owner) this.trackOwners.set(trackId, owner)
       else this.trackOwners.delete(trackId)
       const output = this.remoteOutputs.get(trackId)
@@ -612,6 +638,17 @@ export class BrowserVoiceSession {
       try { await peer.setRemoteDescription({ type: 'offer', sdp }) }
       catch (error) { this.midOwners.clear(); previousOwners.forEach((owner, mid) => this.midOwners.set(mid, owner)); throw error }
       if (this.closed) return
+      // Keep the SFU's upload m-line send-capable even before camera access
+      // is requested. replaceTrack then enables video without an extra offer.
+      if (!this.cameraSender) {
+        const uploadMid = sdp.split(/(?=^m=)/m).find((section) => /^m=video /.test(section) && /^a=(?:recvonly|sendrecv)\r?$/m.test(section))?.match(/^a=mid:(.+)\r?$/m)?.[1]?.trim()
+        const upload = peer.getTransceivers?.().find((value) => value.mid === uploadMid)
+        if (upload) {
+          upload.direction = 'sendrecv'
+          this.cameraSender = upload.sender
+          this.options.e2ee?.media.attachSender(upload.sender, 'video')
+        }
+      }
       this.refreshRemoteOwners()
       const candidates = this.pendingRemoteCandidates.splice(0)
       for (const candidate of candidates) {
@@ -622,6 +659,7 @@ export class BrowserVoiceSession {
 
       const answer = await peer.createAnswer()
       await peer.setLocalDescription(answer)
+      if (this.cameraSender && this.camera.stream) await configureCameraSender(this.cameraSender, this.camera.quality)
       if (peer.localDescription?.sdp) {
         clientDiagnostics.record('webrtc', 'voice_answer_created', 'debug', {
           sdp_bytes: peer.localDescription.sdp.length,
@@ -673,6 +711,29 @@ export class BrowserVoiceSession {
     })
   }
 
+  async startCamera(quality: CameraQuality) {
+    if (this.closed || !this.cameraSender) throw new Error('Дождитесь подключения к голосовому каналу')
+    const sender = this.cameraSender
+    const stream = await this.camera.start(quality)
+    if (!stream || this.closed) return
+    try {
+      await sender.replaceTrack(stream.getVideoTracks()[0]!)
+      await configureCameraSender(sender, quality)
+    } catch (error) { this.camera.stop(); throw error }
+  }
+  async setCameraQuality(quality: CameraQuality) {
+    const previous = this.camera.quality
+    try {
+      await this.camera.setQuality(quality)
+      if (this.cameraSender) await configureCameraSender(this.cameraSender, quality)
+    } catch (error) {
+      await this.camera.setQuality(previous).catch(() => undefined)
+      if (this.cameraSender) await configureCameraSender(this.cameraSender, previous).catch(() => undefined)
+      throw error
+    }
+  }
+  stopCamera() { this.camera.stop() }
+
   resumeAudio() {
     if (this.analysis?.context.state === 'suspended') {
       void this.analysis.context.resume().catch(() => undefined)
@@ -688,6 +749,13 @@ export class BrowserVoiceSession {
   close() {
     if (this.closed) return
     this.closed = true
+    this.camera.stop()
+    this.remoteCameras.forEach((_stream, trackId) => {
+      const owner = this.trackOwners.get(trackId)
+      if (owner) this.options.onRemoteCamera?.(owner, null)
+    })
+    this.remoteCameras.clear()
+    this.cameraSender = null
     this.recordingListeners.forEach((listener) => listener())
     this.recordingListeners.clear()
     if (this.unsubscribeInput) this.unsubscribeInput()

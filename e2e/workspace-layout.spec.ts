@@ -212,6 +212,7 @@ test('personal call icons expose their state and collapse without ending the cal
       async start() { this.callbacks.state({ conversation_id: 7, revision: 1, members: [{ user_id: 1, username: 'Александр' }, { user_id: 2, username: 'Лера' }] }, false); }
       mute(value) { window.callUI.muted = value; }
       async shareScreen() { this.callbacks.screen(true); }
+      stopCamera() {}
       close() { window.callUI.closed++; }
     }
   ` }))
@@ -223,7 +224,10 @@ test('personal call icons expose their state and collapse without ending the cal
   await toolbar.getByRole('button', { name: 'Позвонить / присоединиться', exact: true }).click()
   const dock = page.getByLabel('Звонок в беседе', { exact: true })
   await expect(dock.getByText('Лера', { exact: true })).toBeVisible()
-  await expect(dock.getByRole('group', { name: 'Управление личным звонком' }).locator('button > svg')).toHaveCount(4)
+  await expect(dock.getByRole('group', { name: 'Управление личным звонком' }).locator('button > svg')).toHaveCount(5)
+  await dock.getByRole('button', { name: 'Включить камеру', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Включить камеру' })).toBeVisible()
+  await page.getByRole('button', { name: 'Отмена', exact: true }).click()
   expect((await page.getByLabel('Сообщение в беседу').boundingBox())!.y).toBe(initialComposer!.y)
   const initialWindow = await dock.boundingBox()
   await dock.getByRole('button', { name: 'Переместить окно звонка' }).focus()

@@ -187,6 +187,7 @@ Frontend и backend выпускаются с общим номером **2.5.1*
 - [Звонки, записи и аватары](docs/calls-recordings.md)
 - [Восстановление медиа и участники каналов](docs/media-recovery-and-members.md)
 - [Производительность клиента](docs/client-performance.md)
+- [Вебкамеры в каналах и звонках](docs/webcam.md)
 - [Участие в разработке](CONTRIBUTING.ru.md)
 
 

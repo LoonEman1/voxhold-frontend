@@ -265,6 +265,7 @@ export interface ChannelReadSnapshot {
 }
 
 export interface VoiceParticipant {
+  self_video?: boolean
   connection_id: string
   user_id: EntityId
   server_id: EntityId

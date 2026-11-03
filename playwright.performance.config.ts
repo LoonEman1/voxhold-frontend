@@ -4,7 +4,7 @@ const baseURL = `http://127.0.0.1:${process.env.VOXHOLD_PERFORMANCE_PORT || '418
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['client-performance.spec.ts', 'client-reliability.spec.ts', 'media-recovery.spec.ts', 'live-stream-settings.spec.ts'],
+  testMatch: ['client-performance.spec.ts', 'client-reliability.spec.ts', 'media-recovery.spec.ts', 'live-stream-settings.spec.ts', 'webcam.spec.ts'],
   timeout: 30_000,
   workers: 1,
   outputDir: 'node_modules/.cache/playwright-performance',
@@ -13,7 +13,7 @@ export default defineConfig({
     headless: true,
     viewport: { width: 1000, height: 900 },
     permissions: ['microphone'],
-    launchOptions: { args: ['--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },
+    launchOptions: { executablePath: process.env.VOXHOLD_E2E_BROWSER_EXECUTABLE, args: ['--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },
     trace: 'retain-on-failure',
   },
   webServer: {

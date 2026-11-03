@@ -252,8 +252,8 @@ export class RealtimeClient {
     return this.send('e2ee.key_request', { channel_id: channelId, recipient_user_id: recipientUserId, recipient_device_id: recipientDeviceId })
   }
 
-  updateVoiceState(selfMute: boolean, selfDeaf: boolean) {
-    return this.send('voice.state_update', { self_mute: selfMute, self_deaf: selfDeaf })
+  updateVoiceState(selfMute: boolean, selfDeaf: boolean, selfVideo?: boolean) {
+    return this.send('voice.state_update', { self_mute: selfMute, self_deaf: selfDeaf, ...(selfVideo === undefined ? {} : { self_video: selfVideo }) })
   }
 
   leaveVoice() {

@@ -1,0 +1,20 @@
+.camera-tile { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface-2); }
+.camera-tile.is-speaking { border-color: var(--lime); box-shadow: 0 0 0 2px var(--lime-soft); }
+.camera-tile__preview { position: relative; display: block; flex: 1; min-height: 0; width: 100%; aspect-ratio: 16 / 9; padding: 0; overflow: hidden; border: 0; background: #111; cursor: pointer; }
+.camera-tile video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.camera-tile video.is-mirrored, .camera-expanded video.is-mirrored { transform: scaleX(-1); }
+.camera-tile__expand { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 8px; color: #fff; background: #0009; font-size: var(--font-xs); }
+.camera-tile footer { display: flex; align-items: center; gap: 8px; padding: 12px; }
+.camera-tile footer b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-sm); }
+.camera-tile footer small { color: var(--muted); }
+.camera-expanded.modal-card { width: min(1100px, calc(100vw - 32px)); }
+.camera-expanded__video { display: grid; width: 100%; place-items: center; background: #111; }
+.camera-expanded__video video { display: block; width: 100%; max-height: 70dvh; object-fit: contain; }
+.camera-expanded__video:fullscreen video { height: 100dvh; max-height: 100dvh; }
+.camera-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 20px 0; }
+.camera-presets button { display: grid; gap: 8px; padding: 14px 8px; border: 1px solid var(--line-strong); border-radius: 12px; color: var(--text); background: var(--surface-3); cursor: pointer; }
+.camera-presets button[aria-pressed="true"] { border-color: var(--lime); background: var(--lime-soft); }
+.camera-presets small { color: var(--muted); font-size: 11px; }
+.direct-call-dock__members > .camera-tile { flex-basis: 100%; }
+.direct-call-dock__controls { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.camera-quality-button { font-size: var(--font-xs); }
