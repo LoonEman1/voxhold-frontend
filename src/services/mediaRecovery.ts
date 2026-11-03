@@ -106,7 +106,7 @@ export class DecodeWatchdog {
     if (this.sampling || typeof document === 'undefined' || document.visibilityState !== 'visible') return
     const generation = this.generation
     this.sampling = true
-    let sample: InboundVideoSample | null = null
+    let sample: InboundVideoSample | null
     try {
       sample = await this.options.getSample()
     } catch {
