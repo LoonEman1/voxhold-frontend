@@ -149,6 +149,17 @@ jobs:
         run: npm run test:e2e:e2ee
       - name: Test themes, recording UI and avatar crop
         run: npm run test:e2e:ui
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-browser-failures-${{ github.run_id }}
+          path: |
+            node_modules/.cache/playwright-performance
+            node_modules/.cache/playwright-e2ee
+            node_modules/.cache/playwright-ui
+          if-no-files-found: ignore
+          retention-days: 7
 
   container:
     name: Build Docker image
