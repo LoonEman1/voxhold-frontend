@@ -7,6 +7,7 @@ export interface StreamPublishPipeline {
   stream: MediaStream
   renditions: StreamRendition[]
   close: () => void
+  configureCapture?: (constraints: MediaTrackConstraints) => Promise<void>
 }
 
 // Kept as an alias for callers compiled against the experimental HDR API.
@@ -196,7 +197,7 @@ async function createWorkerSDRPipeline(capture: MediaStream, codec: StreamCodec,
     worker.onmessage = ({ data }) => { if (!closed && data.type === 'error') onFailure?.(new Error(data.reason || 'SDR worker stopped')) }
     worker.onerror = () => { if (!closed) onFailure?.(new Error('SDR worker stopped')) }
     clientDiagnostics.record('media', 'stream_processing_path', 'info', { path: 'worker_conversion' })
-    return { stream: new MediaStream([output, ...capture.getAudioTracks()]), renditions: buildSDRStreamRenditions(codec), close }
+    return { stream: new MediaStream([output, ...capture.getAudioTracks()]), renditions: buildSDRStreamRenditions(codec), close, configureCapture: (constraints) => processorTrack.applyConstraints(constraints) }
   } catch {
     close()
     return null
@@ -288,6 +289,7 @@ function createFrameDrivenSDRPipeline(
   return {
     stream: new MediaStream([sdrTrack, ...capture.getAudioTracks()]),
     renditions: buildSDRStreamRenditions(codec),
+    configureCapture: (constraints) => processorTrack.applyConstraints(constraints),
     close: () => {
       if (closed) return
       closed = true
@@ -360,7 +362,8 @@ export async function createSDRPublishPipeline(
   }
 
   const frameRate = Math.max(1, Math.min(120, settings.frameRate ?? 30))
-  const canvasStream = canvas.captureStream(frameRate)
+  // Leave headroom for live FPS increases; the sender caps the actual rate.
+  const canvasStream = canvas.captureStream(120)
   const sdrTrack = canvasStream.getVideoTracks()[0]
   if (!sdrTrack) {
     video.pause()
@@ -395,7 +398,7 @@ export async function createSDRPublishPipeline(
       reportFailure(error)
     }
   }
-  const frameIntervalMs = Math.max(8, Math.round(1000 / frameRate))
+  let frameIntervalMs = Math.max(8, Math.round(1000 / frameRate))
   let framePending = false
   const scheduleFrame = () => {
     if (closed || framePending || typeof video.requestVideoFrameCallback !== 'function') return
@@ -440,6 +443,17 @@ export async function createSDRPublishPipeline(
   return {
     stream,
     renditions: buildSDRStreamRenditions(codec),
+    configureCapture: async (constraints) => {
+      await playbackTrack.applyConstraints(constraints)
+      if (closed) throw new Error('Трансляция уже завершена')
+      const rate = typeof constraints.frameRate === 'object' ? constraints.frameRate.max : constraints.frameRate
+      frameIntervalMs = Math.max(8, Math.round(1000 / (rate || 30)))
+      if (typeof video.requestVideoFrameCallback !== 'function') {
+        if (interval !== null) window.clearInterval(interval)
+        interval = window.setInterval(draw, frameIntervalMs)
+      }
+      stopHiddenClock?.(); stopHiddenClock = null; followVisibility()
+    },
     close: () => {
       if (closed) return
       closed = true
@@ -481,5 +495,6 @@ export async function createHDRPublishPipeline(
     stream: new MediaStream([sdrTrack, source, ...capture.getAudioTracks()]),
     renditions,
     close: sdrPipeline.close,
+    configureCapture: sdrPipeline.configureCapture,
   }
 }

@@ -853,3 +853,12 @@ button.message-mention:hover { background: color-mix(in srgb, var(--violet) 30%,
 .safety-code code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-sm); letter-spacing: .06em; word-spacing: .3em; line-height: 1.7; }
 [data-theme="light"] .safety-code { border-color: rgba(31,32,27,.12); }
 .direct-call-dock__e2ee { margin: 6px 0; color: #a8a79f; font-size: var(--font-2xs); line-height: 1.4; }
+
+.stream-settings-live-note { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 20px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2); color: var(--muted); font-size: var(--font-xs); line-height: 1.7; }
+.stream-settings-live-note > svg { flex: 0 0 auto; margin-top: 3px; color: var(--lime); }
+.stream-presets button:disabled { opacity: .55; cursor: wait; }
+
+.voice-streams-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; width: 100%; max-width: 1160px; margin: 0 auto 14px; color: var(--muted); font-size: var(--font-xs); }
+.voice-streams-heading > span { display: flex; align-items: center; gap: 8px; }
+.voice-streams-heading b { padding: 3px 7px; border-radius: 6px; color: var(--text); background: var(--surface-3); }
+.call-stream-tile.is-selected { border-color: var(--lime); }

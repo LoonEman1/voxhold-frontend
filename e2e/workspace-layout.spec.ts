@@ -1,5 +1,95 @@
 import { expect, test } from '@playwright/test'
 
+test('channel stream cards select a publisher and preserve the other screen after stop', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/channel-streams.html')
+  const first = page.getByRole('region', { name: 'Лера показывает экран' }), second = page.getByRole('region', { name: 'Миша показывает экран' })
+  await expect(first).toBeVisible(); await expect(second).toBeVisible()
+  await second.getByRole('button', { name: 'Смотреть: Миша показывает экран' }).click()
+  await expect(second.locator('video')).toBeVisible()
+  await second.locator('video').evaluate((video) => { Object.assign(window, { selectedStreamVideo: video }) })
+  await page.getByRole('button', { name: 'Fixture: stop first publisher' }).click()
+  await expect(first).toHaveCount(0)
+  expect(await second.locator('video').evaluate((video) => video === (window as unknown as { selectedStreamVideo: HTMLVideoElement }).selectedStreamVideo)).toBe(true)
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme }, theme)
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      if (width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath(`channel-streams-${theme}.png`) })
+    }
+  }
+})
+
+test('publisher edits live quality from the call window', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/channel-streams.html')
+  await page.getByRole('button', { name: 'Показать свой экран', exact: true }).click()
+  const own = page.getByRole('region', { name: 'Вы показываете экран' })
+  await expect(own.locator('video')).toBeVisible()
+  await own.getByRole('button', { name: 'Развернуть: Вы показываете экран' }).click()
+  const player = page.getByRole('dialog', { name: 'Трансляция в канале Вечерний разговор' })
+  await player.getByRole('button', { name: 'Настройки трансляции', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Настройки трансляции', exact: true })
+  await dialog.getByRole('combobox', { name: 'Разрешение', exact: true }).selectOption('720p')
+  await dialog.getByRole('combobox', { name: 'Кадры', exact: true }).selectOption('15')
+  await dialog.getByRole('spinbutton', { name: 'Битрейт видео, Мбит/с' }).fill('2.7')
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  }
+  await dialog.screenshot({ animations: 'disabled', path: info.outputPath('live-stream-settings-mobile.png') })
+  await dialog.getByRole('button', { name: 'Применить', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByLabel('Применённое качество')).toHaveText('720p · 15 FPS · 2.7 Мбит/с')
+  await expect(player.locator('video')).toBeVisible()
+})
+
+test('personal pages reclaim the duplicate column and events stay usable on mobile', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message))
+  for (const theme of ['dark', 'light']) for (const width of [1920, 1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/e2e/fixtures/personal-space.html')
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme }, theme)
+    const navigation = page.getByRole('navigation', { name: 'Личное пространство', exact: true })
+    await navigation.getByRole('button', { name: 'Избранное', exact: true }).click()
+    await expect(page.locator('.channel-sidebar')).toBeHidden()
+    const rail = await navigation.boundingBox(), content = await page.locator('.personal-content').boundingBox()
+    expect(content!.x).toBeCloseTo(width > 760 ? rail!.width : 0, 0)
+    expect(content!.width).toBeCloseTo(width > 760 ? width - rail!.width : width, 0)
+    await expect(page.getByRole('navigation', { name: 'Разделы личного пространства' })).toHaveCount(0)
+    if (width <= 760) { await navigation.getByRole('button', { name: 'Ещё разделы' }).click(); await page.getByRole('menuitem', { name: 'События сервера' }).click() }
+    else await navigation.getByRole('button', { name: 'События сервера', exact: true }).click()
+    const card = page.getByRole('article', { name: 'Вечер настольных игр' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Пойду', exact: true }).click()
+    await expect(card.getByRole('button', { name: 'Пойду', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect(await page.locator('.personal-content').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+    if (width === 1280 || width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath(`server-events-${theme}-${width}.png`) })
+    await navigation.getByRole('button', { name: 'Аккаунт: Александр' }).click()
+    await expect(page.getByRole('menuitem', { name: 'Настройки профиля' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Выйти', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await navigation.getByRole('button', { name: 'Сообщения', exact: true }).click()
+    if (width <= 760) await page.getByRole('button', { name: 'Список разговоров' }).click()
+    await expect(page.locator('.personal-conversation').filter({ hasText: 'Лера' })).toBeVisible()
+  }
+  expect(errors).toEqual([])
+})
+
+test('events have a useful empty state and a working local-time editor', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/personal-space.html?emptyEvents')
+  await page.getByRole('button', { name: 'События сервера', exact: true }).click()
+  await expect(page.getByText('Пока без планов', { exact: true })).toBeVisible()
+  await page.screenshot({ animations: 'disabled', path: info.outputPath('server-events-empty.png') })
+  await page.getByRole('button', { name: 'Запланировать встречу', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Создать событие' })
+  await dialog.getByLabel('Название', { exact: true }).fill('Обсудим новый патч')
+  await dialog.getByLabel('Описание', { exact: true }).fill('Идеи и предложения для сообщества')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByRole('article', { name: 'Обсудим новый патч' })).toBeVisible()
+})
+
 test('custom stream bitrate accepts tenths, caps 16 Mbit/s and persists across reload', async ({ page }, info) => {
   await page.goto('/e2e/fixtures/stream-settings.html')
   const input = page.getByRole('spinbutton', { name: 'Битрейт видео, Мбит/с' })

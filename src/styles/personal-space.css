@@ -2,6 +2,19 @@
 .workspace:has(> .personal-rail) { --navigation-width: 76px; }
 .personal-rail { position: relative; z-index: 25; grid-column: 1; grid-row: 1; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; gap: 10px; padding: 18px 10px; border-right: 1px solid var(--line); background: var(--bg); }
 .personal-rail__label { display: none; }
+.personal-rail__more { display: none !important; }
+.personal-rail__bottom { display: flex; flex-direction: column; gap: 10px; }
+.personal-rail__voice { position: absolute; right: 0; bottom: 0; width: 11px; height: 11px; border: 2px solid var(--bg); border-radius: 50%; background: var(--lime); }
+.personal-rail .personal-rail__account > .avatar { width: 34px; height: 34px; }
+.workspace:has(> .personal-content[data-view]:not([data-view="messages"])) > .channel-sidebar { display: none; }
+@media (min-width: 761px) {
+  .personal-content[data-view]:not([data-view="messages"]) { grid-column: 2 / -1; }
+}
+@media (max-width: 760px) {
+  .personal-rail__more { display: grid !important; }
+  .personal-rail__bottom { flex: 1; flex-direction: row; gap: 2px; }
+  .personal-rail .personal-rail__account > .avatar { width: 23px; height: 23px; }
+}
 .personal-rail__home, .personal-rail__item { --rail-accent: var(--lime); position: relative; display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 16px; color: var(--muted); background: var(--surface-2); cursor: pointer; transition: border-radius .15s, background .15s, border-color .15s, color .15s, transform .15s; }
 .personal-rail__item[data-section="inbox"] { --rail-accent: var(--cyan); }
 .personal-rail__item[data-section="favorites"] { --rail-accent: var(--violet); }

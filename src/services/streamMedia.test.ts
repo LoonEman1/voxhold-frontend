@@ -169,6 +169,12 @@ describe('stream remote media', () => {
       degradationPreference: 'balanced',
       encodings: [{ maxBitrate: 6_000_000, maxFramerate: 30, priority: 'high', networkPriority: 'high' }],
     })
+    await session.updatePreferences({ ...DEFAULT_STREAM_PREFERENCES, videoBitrateKbps: 1700, frameRate: 15 })
+    expect(applied).toMatchObject({ encodings: [{ maxBitrate: 1_700_000, maxFramerate: 15 }] })
+    expect(FakePeerConnection.latest).toBe(peer)
+    expect(line.sender.track).toBe(video)
+    expect(line.sender.replaceTrack).toHaveBeenCalledOnce()
+    expect(peer?.close).not.toHaveBeenCalled()
     session.close()
   })
 
