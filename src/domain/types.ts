@@ -377,6 +377,8 @@ export interface StreamWatching {
 }
 
 export interface StreamStopped {
+  /** Absent on single-publisher backends. */
+  publisher_connection_id?: string
   server_id: EntityId
   channel_id: EntityId
   reason?: string

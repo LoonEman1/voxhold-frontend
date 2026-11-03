@@ -16,8 +16,8 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ ...fixture.auth, expir
 vi.mock('../components/Toast', () => ({ useToast: () => fixture.notify }))
 vi.mock('../theme/ThemeContext', () => ({ useTheme: () => ({ theme: 'dark', toggleTheme: vi.fn() }) }))
 vi.mock('../components/PersistentStreamPlayer', () => ({ PersistentStreamPlayer: () => null }))
-vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () => void; onWatchStream: () => void; connectionStatus: string; streamStatus: string; streamError: string }) => <>
-  <button onClick={props.onJoin}>Join fixture</button><button onClick={props.onWatchStream}>Watch fixture</button>
+vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () => void; onWatchStream: (publisherId?: string) => void; streamList?: ActiveStream[]; connectionStatus: string; streamStatus: string; streamError: string }) => <>
+  <button onClick={props.onJoin}>Join fixture</button><button onClick={() => props.onWatchStream()}>Watch fixture</button>{props.streamList?.map((item) => <button key={item.publisher_connection_id} onClick={() => props.onWatchStream(item.publisher_connection_id)}>Watch {item.publisher_connection_id}</button>)}
   <output data-testid="voice-state">{props.connectionStatus}</output><output data-testid="stream-state">{props.streamStatus}</output><output data-testid="stream-error">{props.streamError}</output>
 </> }))
 vi.mock('../services/voiceInput', () => ({ BrowserVoiceInput: class { isHealthy = true; close() {} } }))
@@ -39,7 +39,7 @@ vi.mock('../services/realtime', () => ({ RealtimeClient: class {
   close() {} subscribe() {} unsubscribe() {}
   joinVoice() { fixture.joinVoice(); return 'voice-join' }
   leaveVoice() { return 'voice-leave' }
-  watchStream() { return fixture.watch() }
+  watchStream(...args: unknown[]) { return fixture.watch(...args) }
   leaveStream() { return fixture.leave() }
   sendStreamICECandidate() { return 'old-media' }
 } }))
@@ -138,4 +138,28 @@ it('does not commit a Workspace render for repeated presence or identical unread
   expect(unread).toHaveBeenCalledOnce()
   expect(await unread.mock.results[0]!.value).toEqual([])
   expect(commits.mock.calls.length).toBe(afterBurst)
+})
+
+
+it('does not close the watched peer when another publisher in the channel stops', async () => {
+  await startViewer()
+  act(() => emit('onStreamStarted', { ...stream, publisher_user_id: 3, publisher_connection_id: 'second' }))
+  act(() => emit('onStreamStopped', { server_id: 1, channel_id: 1, publisher_connection_id: 'second' }))
+  expect(fixture.viewers[0]!.close).not.toHaveBeenCalled()
+  expect(fixture.watch).toHaveBeenCalledOnce()
+})
+
+it('switches publisher only after leave acknowledgement and ignores the previous publisher stop', async () => {
+  await startViewer()
+  act(() => emit('onStreamStarted', { ...stream, publisher_user_id: 3, publisher_connection_id: 'second' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Watch second' }))
+  expect(fixture.leave).toHaveBeenCalledOnce()
+  expect(fixture.watch).toHaveBeenCalledOnce()
+  act(() => emit('onStreamLeft', { server_id: 1, channel_id: 1, publisher_connection_id: 'publisher' }, 'rewatch-leave'))
+  await waitFor(() => expect(fixture.watch).toHaveBeenCalledTimes(2))
+  expect(fixture.watch.mock.calls[1]?.[3]).toBe('second')
+  act(() => emit('onStreamStopped', { server_id: 1, channel_id: 1, publisher_connection_id: 'publisher' }))
+  expect(fixture.viewers[1]!.close).not.toHaveBeenCalled()
+  act(() => emit('onStreamStopped', { server_id: 1, channel_id: 1, publisher_connection_id: 'second' }))
+  expect(fixture.viewers[1]!.close).toHaveBeenCalledOnce()
 })

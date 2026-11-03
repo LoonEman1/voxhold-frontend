@@ -49,6 +49,9 @@ interface VoicePanelProps {
   onOpenProfile: (userId: number, role: ServerRole) => void
   onParticipantContextMenu?: (event: ReactMouseEvent, participant: VoiceParticipant, member: ServerMember | undefined) => void
   stream: ActiveStream | null
+  streamList?: ActiveStream[]
+  streamRole?: 'publisher' | 'viewer' | null
+  multipleStreams?: boolean
   streamStatus: 'idle' | 'requesting' | 'signaling' | 'connected'
   streamError: string
   streamMedia: MediaStream | null
@@ -56,7 +59,7 @@ interface VoicePanelProps {
   streamQuality?: StreamQualityStats | null
   onStreamPreferencesChange: (value: StreamPreferences) => void
   onOpenStreamSettings: () => void
-  onWatchStream: () => void
+  onWatchStream: (publisherId?: string) => void
   onLeaveStream: () => void
   onExpandStream: () => void
   onFullscreenStream?: () => void
@@ -72,10 +75,10 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel, encryption }: VoicePanelProps) {
+export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamList, streamRole, multipleStreams = false, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel, encryption }: VoicePanelProps) {
   const encrypted = !!channel.e2ee_required
   const activeHere = activeChannel?.id === channel.id
-  const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
+  const availableStreams = streamList ?? (stream ? [stream] : [])
   const connecting = activeHere && (connectionStatus === 'requesting' || connectionStatus === 'signaling')
   const speakers = useSpeakingUsers(speakingUserIds)
   const speakingUsers = useMemo(() => new Set(speakers), [speakers])
@@ -96,8 +99,14 @@ export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeCh
       {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
       <div className="voice-stage-content">
 
-      <section className={`voice-participants ${!participants.length && !stream && !streamMedia && !streamError ? 'is-empty' : ''}`}>
-        {participants.length || stream || streamMedia || streamError ? <div className="voice-participant-grid"><StreamPanel tile onPlaybackRecovery={onPlaybackRecovery} stream={stream} currentUserId={currentUserId} publisherName={publisherName} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} quality={streamQuality} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={onWatchStream} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>{participants.map((participant) => {
+      {availableStreams.length > 0 && <div className="voice-streams-heading"><span><Icon name="monitor" size={16}/>Трансляции <b>{availableStreams.length}</b></span>{activeHere && connectionStatus === 'connected' && !streamRole && multipleStreams && availableStreams.length < 8 && <button type="button" className="button button--secondary button--small" onClick={onOpenStreamSettings}><Icon name="add" size={15}/>Показать свой экран</button>}</div>}
+      <section className={`voice-participants ${!participants.length && !availableStreams.length && !streamMedia && !streamError ? 'is-empty' : ''}`}>
+        {participants.length || availableStreams.length || streamMedia || streamError ? <div className="voice-participant-grid">{availableStreams.map((item) => {
+          const selected = item.publisher_connection_id === stream?.publisher_connection_id
+          return <StreamPanel key={item.publisher_connection_id} tile onPlaybackRecovery={onPlaybackRecovery} stream={item} currentUserId={currentUserId} publisherName={members.find((member) => member.user_id === item.publisher_user_id)?.username} voiceActive={activeHere && connectionStatus === 'connected' && streamRole !== 'publisher'} watchBlockedReason={streamRole === 'publisher' && item.publisher_user_id !== currentUserId ? 'Завершите свой показ, чтобы смотреть другую трансляцию' : undefined} status={selected ? streamStatus : 'idle'} error={selected ? streamError : ''} media={selected ? streamMedia : null} preferences={streamPreferences} quality={selected ? streamQuality : null} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={() => onWatchStream(item.publisher_connection_id)} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>
+        })}
+        {(!availableStreams.length || !stream && streamMedia) && <StreamPanel tile stream={null} currentUserId={currentUserId} voiceActive={activeHere && connectionStatus === 'connected'} status={streamStatus} error={streamError} media={streamMedia} preferences={streamPreferences} audioMuted={streamAudioMuted} onPreferencesChange={onStreamPreferencesChange} onOpenSettings={onOpenStreamSettings} onWatch={() => onWatchStream()} onLeave={onLeaveStream} onExpand={onExpandStream} onFullscreen={onFullscreenStream} onToggleAudio={onToggleStreamAudio}/>}
+        {participants.map((participant) => {
           const member = members.find((item) => item.user_id === participant.user_id)
           const username = member?.username ?? `Пользователь #${participant.user_id}`
           const role = member?.role ?? 'member'
@@ -108,7 +117,7 @@ export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeCh
           return <button className={`voice-participant ${isMe ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)}>
             <div className="voice-participant__avatar"><Avatar userId={participant.user_id} name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
             <span><b className={`member-name--${role}`}>{username}{isMe && <small>вы</small>}</b><em>{roleMeta[role].shortLabel}</em></span>
-            {stream?.publisher_user_id === participant.user_id && <b className="voice-participant__live" title="Показывает экран"><Icon name="monitor" size={11}/>В эфире</b>}
+            {availableStreams.some((item) => item.publisher_user_id === participant.user_id) && <b className="voice-participant__live" title="Показывает экран"><Icon name="monitor" size={11}/>В эфире</b>}
             <div className="voice-participant__state">{participant.self_deaf && <span title="Звук выключен"><Icon name="headphonesOff" size={14}/></span>}{participant.self_mute && <span title="Микрофон выключен"><Icon name="micOff" size={14}/></span>}</div>
           </button>
         })}</div> : <div className="voice-empty"><span><Icon name="people" size={25}/></span><div><b>Здесь пока тихо</b><p>Подключитесь первым — остальные увидят вас в комнате сразу.</p></div></div>}

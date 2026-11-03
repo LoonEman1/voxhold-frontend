@@ -55,8 +55,10 @@ export type IconName =
   | 'volume'
   | 'volumeOff'
   | 'pip'
+  | 'refresh'
 
 const paths: Record<IconName, React.ReactNode> = {
+  refresh: <><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></>,
   grip: <><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" strokeWidth="3"/></>,
   bookmark: <><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/><path d="M9 7h6"/></>,
   calendar: <><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 11h18m-13 4h.01M12 15h.01M16 15h.01"/></>,

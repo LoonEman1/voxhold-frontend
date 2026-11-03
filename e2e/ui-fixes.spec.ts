@@ -1,5 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 
+async function chooseWorkspaceAccountAction(page: Page, label: string) {
+  await page.getByRole('button', { name: 'Аккаунт: Александр', exact: true }).click()
+  await page.getByRole('menuitem', { name: label, exact: true }).click()
+}
+
 async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
@@ -880,7 +885,7 @@ test('ban action describes instance-wide scope before confirmation', async ({ pa
 
 test('native context menus remain available in inputs and with Shift', async ({ page }) => {
   await openCallWorkspace(page, { withPeers: true })
-  await page.locator('.user-dock__profile').click()
+  await chooseWorkspaceAccountAction(page, 'Настройки профиля')
   const input = page.getByRole('dialog', { name: 'Ваш профиль' }).locator('textarea')
   await expect(input).toBeVisible()
   expect(await input.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))).toBe(true)
@@ -910,7 +915,7 @@ test('mobile controls use readable type and muted text meets contrast in both th
     }, theme)
     ratios.forEach((ratio) => expect(ratio).toBeGreaterThanOrEqual(4.5))
   }
-  await page.locator('.user-dock__profile').click()
+  await chooseWorkspaceAccountAction(page, 'Настройки профиля')
   await page.setViewportSize({ width: 375, height: 812 })
   const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
   await expect(dialog.locator('textarea')).toBeVisible()
@@ -926,7 +931,7 @@ test('account deletion belongs to the profile and requires a typed username', as
     if (route.request().method() === 'DELETE') { deletes++; await route.fulfill({ status: 409, json: { error: 'try later' } }) }
     else await route.fallback()
   })
-  await page.locator('.user-dock__profile').click()
+  await chooseWorkspaceAccountAction(page, 'Настройки профиля')
   const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
   await dialog.getByRole('tab', { name: 'Безопасность', exact: true }).click()
   await dialog.getByRole('button', { name: 'Удалить аккаунт', exact: true }).click()
@@ -1008,7 +1013,7 @@ test('cross-tab rotation preserves voice and unmount does not start recovery', a
     await expect.poll(() => fixture.counts().connections).toBe(baseline.connections + 1)
     expect(await recoveries()).toBe(1)
     await expect(page.locator('.voice-dock')).toBeVisible()
-    await page.locator('.user-dock').getByRole('button', { name: 'Выйти', exact: true }).click()
+    await chooseWorkspaceAccountAction(page, 'Выйти')
     await page.getByRole('dialog', { name: 'Выйти из аккаунта?' }).getByRole('button', { name: 'Выйти', exact: true }).click()
     await expect(page.locator('.workspace')).toHaveCount(0)
     expect(await recoveries()).toBe(1)
