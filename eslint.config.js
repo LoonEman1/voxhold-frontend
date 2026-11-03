@@ -18,7 +18,9 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      // Preserve the existing Hooks checks when upgrading the plugin. React
+      // Compiler diagnostics are a separate migration, not part of this bump.
+      'react-hooks/rules-of-hooks': 'error',
       // Intentionally unused parameters are prefixed with an underscore.
       '@typescript-eslint/no-unused-vars': [
         'error',

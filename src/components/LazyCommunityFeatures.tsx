@@ -7,7 +7,7 @@ export { featuresChanged, openForward, saveFavorite } from '../services/communit
 
 const LazyComposerTools = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.ComposerTools })))
 const LazyPollCard = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.PollCard })))
-const LazyEventsView = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.EventsView })))
+const LazyEventsView = lazy(() => import('./ServerEventsView').then((module) => ({ default: module.EventsView })))
 const LazyAuditView = lazy(() => import('./AuditView').then((module) => ({ default: module.AuditView })))
 const ScheduledMessagesDialog = lazy(() => import('./ScheduledMessages').then((module) => ({ default: module.ScheduledMessagesDialog })))
 const LazyDesktopNotificationSettings = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.DesktopNotificationSettings })))
@@ -25,7 +25,7 @@ export function ComposerTools(props: ComponentProps<typeof Features.ComposerTool
 }
 
 export function PollCard(props: ComponentProps<typeof Features.PollCard>) { return <Suspense fallback={loading}><LazyPollCard {...props}/></Suspense> }
-export function EventsView(props: ComponentProps<typeof Features.EventsView>) { return <Suspense fallback={loading}><LazyEventsView {...props}/></Suspense> }
+export function EventsView(props: ComponentProps<typeof LazyEventsView>) { return <Suspense fallback={loading}><LazyEventsView {...props}/></Suspense> }
 export function AuditView(props: ComponentProps<typeof LazyAuditView>) { return <Suspense fallback={loading}><LazyAuditView {...props}/></Suspense> }
 export function DesktopNotificationSettings() { return <Suspense fallback={loading}><LazyDesktopNotificationSettings/></Suspense> }
 export function UniversalForward(props: ComponentProps<typeof Features.UniversalForward>) { return <Suspense fallback={loading}><LazyUniversalForward {...props}/></Suspense> }

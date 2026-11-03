@@ -31,6 +31,7 @@ interface PersistentStreamPlayerProps {
   onExpand: () => void
   onCollapse: () => void
   onLeave: () => void
+  onOpenSettings?: () => void
   /** Expanded only: enter the fullscreen cinema mode right after mounting. */
   startInCinema?: boolean
 }
@@ -38,7 +39,7 @@ interface PersistentStreamPlayerProps {
 /** Cinema controls fade out after this long without input. */
 export const CINEMA_IDLE_MS = 2_500
 
-export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, startInCinema = false, callControls, participants, audioMuted = false, onToggleAudio }: PersistentStreamPlayerProps) {
+export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, onOpenSettings, startInCinema = false, callControls, participants, audioMuted = false, onToggleAudio }: PersistentStreamPlayerProps) {
   const quality = useStreamQuality(qualityOverride)
   const playerRef = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -211,6 +212,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         <span className="stream-mini-player__channel"><Icon name="volume" size={13}/>{channelName}</span>
       </button>
       <div className="stream-mini-player__actions">
+        {isPublisher && onOpenSettings && <button type="button" onClick={onOpenSettings} aria-label="Настройки трансляции" title="Изменить качество без остановки"><Icon name="settings" size={17}/></button>}
         {isPublisher ? publisherAudioControl : stream?.has_audio && volumeControl(true)}
         {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Картинка в картинке" aria-label="Смотреть поверх других окон"><Icon name="pip" size={17}/></button>}
         <button type="button" onClick={onExpand} title="На весь экран" aria-label="Открыть трансляцию на весь экран"><Icon name="maximize" size={17}/></button>
@@ -224,6 +226,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
       <button type="button" className="floating-window__move" aria-label="Переместить окно трансляции" title="Переместить окно · стрелки или перетаскивание" onPointerDown={floating.beginMove} onKeyDown={floating.moveKey}><Icon name="grip" size={18}/></button>
       <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА{duration && ` · ${duration}`}</span><h2>{channelName}</h2></div>
       <div className="stream-expanded-player__meta">
+        {isPublisher && onOpenSettings && <button type="button" onClick={onOpenSettings} aria-label="Настройки трансляции" title="Изменить качество без остановки"><Icon name="settings"/><span>Качество</span></button>}
         {stream && <><span className="stream-mode">{stream.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></>}
         {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} aria-label="Картинка в картинке" title="Смотреть поверх других окон"><Icon name="pip"/><span>Картинка в картинке</span></button>}
         <button type="button" onClick={() => void enterCinemaMode()} aria-label="Полный экран" title="Открыть настоящий полноэкранный режим без интерфейса"><Icon name="maximize"/><span>Полный экран</span></button>

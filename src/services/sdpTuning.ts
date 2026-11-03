@@ -136,9 +136,12 @@ export function streamStartBitrateKbps(targetKbps: number) {
 export function tunePublisherRemoteDescription(
   sdp: string,
   preferences: { videoBitrateKbps: number; audioBitrateKbps: number },
+  liveChanges = false,
 ) {
   return withOpusStereo(
     withVideoStartBitrate(sdp, streamStartBitrateKbps(preferences.videoBitrateKbps)),
-    preferences.audioBitrateKbps * 1000,
+    // Negotiate headroom once; RTCRtpSender's cap still selects the actual
+    // rate, and withOpusStereo preserves a lower server-provided ceiling.
+    liveChanges ? 320_000 : preferences.audioBitrateKbps * 1000,
   )
 }

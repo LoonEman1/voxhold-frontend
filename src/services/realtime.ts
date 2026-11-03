@@ -122,7 +122,7 @@ interface RealtimeOptions {
   onError?: (error: RealtimeServerError) => void
   onStateChange: (state: ConnectionState) => void
   onUnauthorized: () => void
-  onReady?: () => void
+  onReady?: (capabilities?: { multipleStreams: boolean }) => void
   onSubscribed?: () => void
   onSyncRequired?: (event: { server_id: number; channel_id: number }) => void
 }
@@ -252,8 +252,8 @@ export class RealtimeClient {
     return this.send('e2ee.key_request', { channel_id: channelId, recipient_user_id: recipientUserId, recipient_device_id: recipientDeviceId })
   }
 
-  updateVoiceState(selfMute: boolean, selfDeaf: boolean) {
-    return this.send('voice.state_update', { self_mute: selfMute, self_deaf: selfDeaf })
+  updateVoiceState(selfMute: boolean, selfDeaf: boolean, selfVideo?: boolean) {
+    return this.send('voice.state_update', { self_mute: selfMute, self_deaf: selfDeaf, ...(selfVideo === undefined ? {} : { self_video: selfVideo }) })
   }
 
   leaveVoice() {
@@ -287,11 +287,12 @@ export class RealtimeClient {
     })
   }
 
-  watchStream(serverId: number, channelId: number, capabilities?: StreamWatchCapabilities) {
+  watchStream(serverId: number, channelId: number, capabilities?: StreamWatchCapabilities, publisherConnectionId?: string) {
     return this.send('stream.watch', {
       server_id: serverId,
       channel_id: channelId,
       ...(capabilities ?? {}),
+      ...(publisherConnectionId ? { publisher_connection_id: publisherConnectionId } : {}),
     })
   }
 
@@ -399,7 +400,7 @@ export class RealtimeClient {
     socket.addEventListener('open', () => {
       if (this.socket !== socket) return
       clientDiagnostics.record('websocket', 'opened', 'info')
-      this.send('auth', { token: this.options.token, message_sync: true })
+      this.send('auth', { token: this.options.token, message_sync: true, multi_streams: true })
     })
 
     socket.addEventListener('message', (event) => {
@@ -423,7 +424,7 @@ export class RealtimeClient {
           this.e2eeBatch = (payload.data as { e2ee_batch?: boolean } | undefined)?.e2ee_batch === true
           this.options.onStateChange('online')
           this.syncSubscription()
-          this.options.onReady?.()
+          this.options.onReady?.({ multipleStreams: (payload.data as { multi_streams?: boolean } | undefined)?.multi_streams === true })
           window.dispatchEvent(new Event('voxhold:ready'))
         } else if (payload.type === 'channel.subscribed' && payload.data) {
           const data = payload.data as { server_id: number; channel_id: number }

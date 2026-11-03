@@ -34,7 +34,7 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       release: ${{ steps.plan.outputs.release }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Test release planning
@@ -91,10 +91,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -131,13 +131,13 @@ jobs:
     timeout-minutes: 15
     container:
       # Keep this version in sync with Playwright in package-lock.json.
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
       options: --ipc=host
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -149,6 +149,17 @@ jobs:
         run: npm run test:e2e:e2ee
       - name: Test themes, recording UI and avatar crop
         run: npm run test:e2e:ui
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-browser-failures-${{ github.run_id }}
+          path: |
+            node_modules/.cache/playwright-performance
+            node_modules/.cache/playwright-e2ee
+            node_modules/.cache/playwright-ui
+          if-no-files-found: ignore
+          retention-days: 7
 
   container:
     name: Build Docker image
@@ -161,7 +172,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
@@ -190,7 +201,7 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       # Browsers are preinstalled; keep in sync with client-performance.
-      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
       options: --ipc=host
 
     env:
@@ -204,10 +215,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -220,7 +231,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: webrtc-browser-smoke-${{ github.run_id }}
           path: node_modules/.cache/playwright-results
@@ -239,7 +250,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
@@ -288,7 +299,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Publish immutable tag and GitHub release

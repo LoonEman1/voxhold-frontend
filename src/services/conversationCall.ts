@@ -7,13 +7,16 @@ import { loadStreamPreferences } from './streamSettings'
 import { CallE2EE, createKeyDirectory } from './e2ee/voiceE2EE'
 import { e2eeTransformMode } from './e2ee/mediaTransform'
 import { IndexedDBStore, ensureDevice } from './e2ee/deviceKeys'
+import { CameraCapture, configureCameraSender, type CameraQuality } from './camera'
 
-interface Peer { member: CallMember; pc: RTCPeerConnection; makingOffer: boolean; ignoreOffer: boolean; settingAnswer: boolean; pending: RTCIceCandidateInit[]; serial: Promise<void>; media:MediaStream; screenSharing:boolean; screenRevision:number }
+interface Peer { member: CallMember; pc: RTCPeerConnection; makingOffer: boolean; ignoreOffer: boolean; settingAnswer: boolean; pending: RTCIceCandidateInit[]; serial: Promise<void>; media:MediaStream; screenSharing:boolean; screenRevision:number; cameraSharing:boolean; cameraStreamId:string; cameraMedia:MediaStream; trackStreams:Map<string,string>; cameraStreamIds:Set<string> }
 export class ConversationCall {
   readonly sessionId = crypto.randomUUID()
   private peers = new Map<number, Peer>()
   private microphone: MediaStream | null = null
   private screen: MediaStream | null = null
+  private camera: CameraCapture
+  private cameraSenders = new Map<Peer, RTCRtpSender>()
   private configuration: RTCConfiguration = {}
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private closed = false
@@ -21,6 +24,7 @@ export class ConversationCall {
   private syncing = false
   private joined=false
   private screenRevision=0
+  private cameraStreamId = ''
   private revision=-1
   private latestState: CallState | null = null
   private lastHeartbeat = 0
@@ -30,7 +34,18 @@ export class ConversationCall {
   // registered a device key; screen video passes through unencrypted.
   private e2ee: CallE2EE | null = null
   private e2eeDeviceId = ''
-  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState, encrypted: boolean) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean, stream?: MediaStream) => void; ended: () => void; keyChanged?: (userId: number) => void }) {}
+  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState, encrypted: boolean) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean, stream?: MediaStream) => void; camera?: (stream: MediaStream | null) => void; remoteCamera?: (userId: number, stream: MediaStream | null) => void; ended: () => void; keyChanged?: (userId: number) => void }) {
+    this.camera = new CameraCapture((stream) => {
+      if (stream) this.cameraStreamId = stream.id
+      if (!stream) {
+        for (const [peer, sender] of this.cameraSenders) if (peer.pc.signalingState !== 'closed') peer.pc.removeTrack(sender)
+        this.cameraSenders.clear()
+      }
+      this.screenRevision++
+      this.broadcastMedia()
+      this.callbacks.camera?.(stream)
+    })
+  }
   setToken(token: string) { this.credentials = token }
   private get token() { return typeof this.credentials === 'string' ? this.credentials : this.credentials() }
   async start() {
@@ -113,7 +128,7 @@ export class ConversationCall {
     if (!mine || mine.session_id !== this.sessionId) { if(this.joined){this.close();this.callbacks.ended()} return }
     this.revision=state.revision
     const remote = state.members.filter((m) => m.user_id !== this.userId)
-    for (const [id, peer] of this.peers) if (!remote.some((m) => m.user_id === id && m.session_id === peer.member.session_id)) { peer.pc.close(); this.peers.delete(id); this.callbacks.removed(id) }
+    for (const [id, peer] of this.peers) if (!remote.some((m) => m.user_id === id && m.session_id === peer.member.session_id)) { peer.pc.close(); this.cameraSenders.delete(peer); this.peers.delete(id); this.callbacks.removed(id); this.callbacks.remoteCamera?.(id, null) }
     for (const member of remote) if (!this.peers.has(member.user_id)) this.addPeer(member)
     if (this.e2ee) {
       this.e2ee.setParticipants(state.members.map((m) => ({ connectionId: `${m.user_id}:${m.session_id}`, userId: m.user_id, deviceId: m.e2ee_device_id })))
@@ -126,25 +141,47 @@ export class ConversationCall {
   private addPeer(member: CallMember) {
     const encrypted = this.encryptedWith(member) ? this.e2ee : null
     const pc = new RTCPeerConnection(encrypted ? encrypted.media.peerConfiguration(this.configuration) : this.configuration)
-    const peer: Peer = { member, pc, makingOffer: false, ignoreOffer: false, settingAnswer: false, pending: [], serial: Promise.resolve(), media:new MediaStream(), screenSharing:false, screenRevision:-1 }
+    const peer: Peer = { member, pc, makingOffer: false, ignoreOffer: false, settingAnswer: false, pending: [], serial: Promise.resolve(), media:new MediaStream(), screenSharing:false, screenRevision:-1, cameraSharing:false, cameraStreamId:'', cameraMedia:new MediaStream(), trackStreams:new Map(), cameraStreamIds:new Set() }
     this.peers.set(member.user_id, peer)
-    const media = peer.media
-    pc.ontrack = ({ track, receiver }) => { encrypted?.media.attachReceiver(receiver, track.kind === 'video' ? 'video' : 'audio', `peer:${member.user_id}`); if(track.kind!=='video'||peer.screenSharing)media.addTrack(track); this.callbacks.media(member.user_id, media); const remove = () => { media.removeTrack(track); this.callbacks.media(member.user_id, media) }; track.onended = remove; track.onmute = () => { if (track.kind === 'video') remove() }; track.onunmute = () => { if (!media.getTracks().includes(track)) if(track.kind!=='video'||peer.screenSharing)media.addTrack(track); this.callbacks.media(member.user_id, media) } }
+    pc.ontrack = ({ track, receiver, streams }) => {
+      encrypted?.media.attachReceiver(receiver, track.kind === 'video' ? 'video' : 'audio', `peer:${member.user_id}`)
+      peer.trackStreams.set(track.id, streams?.[0]?.id ?? '')
+      this.refreshPeerMedia(peer)
+      const remove = () => { peer.media.removeTrack(track); peer.cameraMedia.removeTrack(track); this.callbacks.media(member.user_id, peer.media); this.callbacks.remoteCamera?.(member.user_id, peer.cameraMedia.getVideoTracks().length ? peer.cameraMedia : null) }
+      track.onended = remove
+      track.onmute = () => { if (track.kind === 'video') remove() }
+      track.onunmute = () => this.refreshPeerMedia(peer)
+    }
     pc.onicecandidate = ({ candidate }) => { if (candidate) void this.send(peer, { candidate: candidate.toJSON() }).catch((e: unknown) => this.report(e)) }
-    pc.onnegotiationneeded = async () => {
-      if (this.closed) return
-      try { peer.makingOffer = true; await pc.setLocalDescription(); if (pc.localDescription) await this.send(peer, { description: pc.localDescription.toJSON() }) }
-      catch (e) { this.report(e) } finally { peer.makingOffer = false }
+    pc.onnegotiationneeded = () => {
+      // Camera/screen changes and incoming descriptions share one queue, so
+      // adding video during the initial audio negotiation cannot race SDP.
+      peer.serial = peer.serial.then(async () => {
+        if (this.closed || pc.signalingState !== 'stable') return
+        // Exactly one side initiates a new pair. Simultaneous initial offers
+        // can roll back Chromium's first ICE gathering before either side has
+        // candidates, leaving an otherwise answered connection stuck at new.
+        // Once a remote description exists, both sides may negotiate media.
+        if (!pc.remoteDescription && this.userId > peer.member.user_id) return
+        try {
+          peer.makingOffer = true
+          await pc.setLocalDescription()
+          const cameraSender = this.cameraSenders.get(peer)
+          if (cameraSender) await configureCameraSender(cameraSender, this.camera.quality)
+          if (pc.localDescription) await this.send(peer, { description: pc.localDescription.toJSON() })
+        } finally { peer.makingOffer = false }
+      }).catch((error: unknown) => this.report(error))
     }
     pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' && !this.closed) { this.callbacks.error(`Нет соединения с ${member.username}. Проверьте доступность TURN-сервера.`); pc.restartIce() } }
-    void this.send(peer,{media:{screen:!!this.screen,revision:this.screenRevision}}).catch((e:unknown)=>this.report(e))
+    void this.send(peer,{media:this.mediaState()}).catch((e:unknown)=>this.report(e))
     for (const stream of [this.microphone, this.screen]) if (stream) for (const track of stream.getTracks()) this.addTrack(peer, track, stream)
+    if (this.camera.stream) this.attachCamera(peer, this.camera.stream)
   }
   private addTrack(peer: Peer, track: MediaStreamTrack, stream: MediaStream) {
     const sender = peer.pc.addTrack(track, stream)
     if (this.encryptedWith(peer.member)) this.e2ee?.media.attachSender(sender, track.kind === 'video' ? 'video' : 'audio')
   }
-  private async send(peer: Peer, data: { candidate?: RTCIceCandidateInit; description?: RTCSessionDescriptionInit; media?:{screen:boolean;revision:number}; e2ee?: { payload?: string; request?: boolean } }) {
+  private async send(peer: Peer, data: { candidate?: RTCIceCandidateInit; description?: RTCSessionDescriptionInit; media?:CallSignal['media']; e2ee?: { payload?: string; request?: boolean } }) {
     for(let attempt=0;attempt<4;attempt++){
       if(this.closed)return
       const requestedToken = this.token
@@ -171,8 +208,8 @@ export class ConversationCall {
       if(value.media){
         if(value.media.revision<target.screenRevision)return
         target.screenRevision=value.media.revision;target.screenSharing=value.media.screen
-        for(const receiver of pc.getReceivers()){const track=receiver.track;if(track.kind==='video'){if(target.screenSharing&&track.readyState==='live'&&!target.media.getTracks().includes(track))target.media.addTrack(track);if(!target.screenSharing)target.media.removeTrack(track)}}
-        this.callbacks.media(target.member.user_id,target.media)
+        target.cameraSharing=!!value.media.camera;target.cameraStreamId=value.media.camera_stream_id ?? ''; if (target.cameraStreamId) target.cameraStreamIds.add(target.cameraStreamId)
+        this.refreshPeerMedia(target)
       } else if (value.description) {
         if(pc.remoteDescription?.type===value.description.type&&pc.remoteDescription.sdp===value.description.sdp)return
         const ready = !target.makingOffer && (pc.signalingState === 'stable' || target.settingAnswer)
@@ -182,8 +219,9 @@ export class ConversationCall {
         if (collision && pc.signalingState !== 'stable') await pc.setLocalDescription({ type: 'rollback' })
         target.settingAnswer = value.description.type === 'answer'
         await pc.setRemoteDescription(value.description); target.settingAnswer = false
+        this.refreshPeerMedia(target)
         for (const candidate of target.pending.splice(0)) await this.addCandidate(target,candidate,false)
-        if (value.description.type === 'offer') { await pc.setLocalDescription(); if (pc.localDescription) await this.send(target, { description: pc.localDescription.toJSON() }) }
+        if (value.description.type === 'offer') { await pc.setLocalDescription(); const cameraSender = this.cameraSenders.get(peer); if (cameraSender) await configureCameraSender(cameraSender, this.camera.quality); if (pc.localDescription) await this.send(target, { description: pc.localDescription.toJSON() }) }
       } else if (value.candidate) {
         await this.addCandidate(target,value.candidate,true)
       }
@@ -210,7 +248,7 @@ export class ConversationCall {
       const stream = await captureScreen(loadStreamPreferences())
       if (this.closed) { stream.getTracks().forEach((t) => t.stop()); return }
       this.screen = stream; this.screenRevision++
-      for (const peer of this.peers.values()) void this.send(peer, { media: { screen: true, revision: this.screenRevision } }).catch((e: unknown) => this.report(e))
+      this.broadcastMedia()
       for (const peer of this.peers.values()) for (const track of stream.getTracks()) this.addTrack(peer, track, stream)
       stream.getVideoTracks()[0]?.addEventListener('ended', () => { if (this.screen === stream) this.stopScreen() }, { once: true })
       this.callbacks.screen(true, stream)
@@ -218,16 +256,73 @@ export class ConversationCall {
   }
   private stopScreen() {
     const stream = this.screen; if (!stream) return; this.screen = null;this.screenRevision++
-    for(const peer of this.peers.values())void this.send(peer,{media:{screen:false,revision:this.screenRevision}}).catch((e:unknown)=>this.report(e))
+    this.broadcastMedia()
     for (const peer of this.peers.values()) for (const sender of peer.pc.getSenders()) if (sender.track && stream.getTracks().includes(sender.track)) peer.pc.removeTrack(sender)
     stream.getTracks().forEach((t) => t.stop()); this.callbacks.screen(false)
   }
   private async leaveRemote() {
     await this.api.community.request(this.token, `/conversations/${this.conversationId}/call`, 'DELETE', { session_id: this.sessionId }).catch(() => undefined)
   }
+  private mediaState(): NonNullable<CallSignal['media']> {
+    return { screen: !!this.screen, revision: this.screenRevision, camera: !!this.camera.stream, camera_stream_id: this.cameraStreamId }
+  }
+  private broadcastMedia() {
+    for (const peer of this.peers.values()) void this.send(peer, { media: this.mediaState() }).catch((error: unknown) => this.report(error))
+  }
+  private refreshPeerMedia(peer: Peer) {
+    const sections = peer.pc.remoteDescription?.sdp.split(/(?=^m=)/m) ?? []
+    for (const transceiver of peer.pc.getTransceivers?.() ?? []) {
+      const section = sections.find((value) => value.split(/\r?\n/).includes(`a=mid:${transceiver.mid}`))
+      const streamId = section?.match(/^a=msid:(\S+)/m)?.[1]
+      if (streamId) peer.trackStreams.set(transceiver.receiver.track.id, streamId)
+    }
+    for (const receiver of peer.pc.getReceivers()) {
+      const track = receiver.track
+      const camera = track.kind === 'video' && peer.cameraStreamIds.has(peer.trackStreams.get(track.id) ?? '')
+      const live = track.readyState === 'live' && !track.muted
+      const showCamera = camera && live && peer.cameraSharing && peer.trackStreams.get(track.id) === peer.cameraStreamId
+      const showMedia = live && (track.kind !== 'video' || !camera && peer.screenSharing)
+      if (showCamera && !peer.cameraMedia.getTracks().includes(track)) peer.cameraMedia.addTrack(track)
+      if (!showCamera) peer.cameraMedia.removeTrack(track)
+      if (showMedia && !peer.media.getTracks().includes(track)) peer.media.addTrack(track)
+      if (!showMedia) peer.media.removeTrack(track)
+    }
+    for (const streamId of peer.cameraStreamIds) if (streamId !== peer.cameraStreamId && ![...peer.trackStreams.values()].includes(streamId)) peer.cameraStreamIds.delete(streamId)
+    this.callbacks.media(peer.member.user_id, peer.media)
+    this.callbacks.remoteCamera?.(peer.member.user_id, peer.cameraMedia.getVideoTracks().length ? peer.cameraMedia : null)
+  }
+  private attachCamera(peer: Peer, stream: MediaStream) {
+    const track = stream.getVideoTracks()[0]!
+    this.addTrack(peer, track, stream)
+    const sender = peer.pc.getSenders().find((value) => value.track === track)
+    if (sender) {
+      this.cameraSenders.set(peer, sender)
+      void configureCameraSender(sender, this.camera.quality).catch((error: unknown) => this.report(error))
+    }
+  }
+  async startCamera(quality: CameraQuality) {
+    if (this.closed) return
+    const stream = await this.camera.start(quality)
+    if (!stream || this.closed) return
+    try { for (const peer of this.peers.values()) this.attachCamera(peer, stream) }
+    catch (error) { this.camera.stop(); throw error }
+  }
+  stopCamera() { this.camera.stop() }
+  async setCameraQuality(quality: CameraQuality) {
+    const previous = this.camera.quality
+    try {
+      await this.camera.setQuality(quality)
+      await Promise.all([...this.cameraSenders.values()].map((sender) => configureCameraSender(sender, quality)))
+    } catch (error) {
+      await this.camera.setQuality(previous).catch(() => undefined)
+      await Promise.all([...this.cameraSenders.values()].map((sender) => configureCameraSender(sender, previous).catch(() => undefined)))
+      throw error
+    }
+  }
   close() {
     if (this.closed) return
     this.closed = true; this.controller.abort(); if (this.heartbeat) clearInterval(this.heartbeat); this.heartbeat = null
+    this.camera.stop()
     for (const peer of this.peers.values()) peer.pc.close(); this.peers.clear()
     this.e2ee?.close(); this.e2ee = null
     this.microphone?.getTracks().forEach((t) => t.stop()); this.microphone = null; this.stopScreen()

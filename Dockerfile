@@ -26,7 +26,7 @@ COPY src ./src
 RUN npm run typecheck
 RUN npm test
 
-FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS runtime
 ENV BACKEND_UPSTREAM=host.docker.internal:8080
 ENV CSP_CONNECT_EXTRA=""
 COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template

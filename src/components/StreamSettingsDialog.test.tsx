@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
 import { useState } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { DEFAULT_STREAM_PREFERENCES, loadStreamPreferences, saveStreamPreferences } from '../services/streamSettings'
 import { StreamSettingsDialog } from './StreamSettingsDialog'
@@ -9,6 +9,34 @@ import { StreamSettingsDialog } from './StreamSettingsDialog'
 vi.mock('../services/hdrCapabilities', () => ({ detectHDRCapabilities: async () => ({ canPublishHDR: true }) }))
 vi.mock('../services/stream', () => ({ canRestrictOwnAudio: () => true, selectedStreamCodec: () => 'h264', supportedStreamCodecs: () => ['h264', 'vp8', 'vp9', 'av1'] }))
 afterEach(() => { cleanup(); localStorage.clear() })
+
+it('holds live edits until apply and keeps the draft after an update fails', async () => {
+  const apply = vi.fn(async () => { throw new Error('Кодер отклонил настройки') }), change = vi.fn(), close = vi.fn()
+  render(<StreamSettingsDialog open live liveHasAudio busy={false} preferences={DEFAULT_STREAM_PREFERENCES} onChange={change} onApply={apply} onClose={close} onStart={vi.fn()}/> )
+  expect(screen.getByLabelText('Видеокодек')).toBeDisabled()
+  expect(screen.getByLabelText('Передача')).toBeDisabled()
+  const input = screen.getByRole('spinbutton', { name: 'Битрейт видео, Мбит/с' })
+  fireEvent.change(input, { target: { value: '7.3' } })
+  expect(change).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Кодер отклонил настройки')
+  expect(input).toHaveValue(7.3)
+  expect(close).not.toHaveBeenCalled()
+  expect(apply).toHaveBeenCalledWith(expect.objectContaining({ videoBitrateKbps: 7300 }))
+})
+
+it('prevents repeated live submissions and closes only after success', async () => {
+  let done!: () => void
+  const apply = vi.fn(() => new Promise<void>((resolve) => { done = resolve })), close = vi.fn()
+  render(<StreamSettingsDialog open live busy={false} preferences={DEFAULT_STREAM_PREFERENCES} onChange={vi.fn()} onApply={apply} onClose={close} onStart={vi.fn()}/> )
+  const button = screen.getByRole('button', { name: 'Применить' })
+  fireEvent.click(button); fireEvent.click(button)
+  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
+  expect(apply).toHaveBeenCalledTimes(1)
+  expect(close).not.toHaveBeenCalled()
+  await act(async () => done())
+  await waitFor(() => expect(close).toHaveBeenCalledOnce())
+})
 
 it('edits custom Mbit/s, immediately caps 16 and preserves custom values in storage', () => {
   function Fixture() {
