@@ -54,7 +54,7 @@ test('persistent navigation, full-size dialogs, groups and privacy work without 
   await expect(page.getByRole('navigation', { name: 'Личное пространство', exact: true })).toBeVisible()
   await page.screenshot({ animations: 'disabled', path: info.outputPath('personal-dialogs-desktop.png') })
   await page.mouse.move(600, 400)
-  await expect(page.getByRole('navigation', { name: 'Разделы личного пространства' }).getByRole('button', { name: /^(Беседы|Диалоги|Отложенные)$/ })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Разделы личного пространства' })).toHaveCount(0)
   await expect(page.locator('.personal-conversation').filter({ hasText: 'Планы на выходные' })).toBeVisible()
   await expect(page.locator('.personal-conversation').filter({ hasText: 'Личный диалог' })).toHaveCount(1)
   await page.getByRole('button', { name: 'Создать беседу', exact: true }).click()

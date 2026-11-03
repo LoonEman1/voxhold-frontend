@@ -1,5 +1,6 @@
 import type { StreamCodec, StreamDynamicRange, StreamICECandidate, StreamRendition } from '../domain/types'
 import type { StreamPreferences } from './streamSettings'
+import { selectedStreamResolution } from './streamSettings'
 export { captureScreen, canRestrictOwnAudio, capturedAudioIncludesOwnPlayback } from './screenCapture'
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
@@ -171,7 +172,7 @@ function preferCodec(transceiver: RTCRtpTransceiver, codec: StreamCodec, profile
   }
 }
 
-async function configureSender(sender: RTCRtpSender, preferences: StreamPreferences, withPriority: boolean) {
+async function configureSender(sender: RTCRtpSender, preferences: StreamPreferences, withPriority: boolean, sourceSettings?: MediaTrackSettings) {
   const track = sender.track
   if (!track) return
   const parameters = sender.getParameters()
@@ -179,8 +180,15 @@ async function configureSender(sender: RTCRtpSender, preferences: StreamPreferen
   const encoding = parameters.encodings[0]
   if (!encoding) return
   if (track.kind === 'video') {
+    track.contentHint = preferences.content === 'motion' ? 'motion' : 'detail'
     encoding.maxBitrate = preferences.videoBitrateKbps * 1000
     encoding.maxFramerate = preferences.frameRate
+    const size = selectedStreamResolution(preferences)
+    const source = sourceSettings ?? track.getSettings?.()
+    // Some capture sources accept applyConstraints without resizing. Enforce
+    // the output bound in the encoder too, using source dimensions to avoid
+    // double scaling a pipeline whose next smaller frame is still in flight.
+    encoding.scaleResolutionDownBy = Math.max(1, (source?.width ?? size.width) / size.width, (source?.height ?? size.height) / size.height)
     // Text stays readable when frame rate drops first; games and video stay
     // smooth when the encoder may lower resolution and frame rate together.
     parameters.degradationPreference = preferences.content === 'motion' ? 'balanced' : 'maintain-resolution'
@@ -196,12 +204,12 @@ async function configureSender(sender: RTCRtpSender, preferences: StreamPreferen
   await sender.setParameters(parameters)
 }
 
-async function applySenderLimits(sender: RTCRtpSender, preferences: StreamPreferences) {
+async function applySenderLimits(sender: RTCRtpSender, preferences: StreamPreferences, sourceSettings?: MediaTrackSettings) {
   try {
-    await configureSender(sender, preferences, true)
+    await configureSender(sender, preferences, true, sourceSettings)
   } catch {
     // An engine that rejects priorities must still receive the bitrate caps.
-    await configureSender(sender, preferences, false)
+    await configureSender(sender, preferences, false, sourceSettings)
   }
 }
 
@@ -401,8 +409,17 @@ function monitorVideoQuality(
   return () => window.clearInterval(timer)
 }
 
-async function applyAllSenderLimits(peer: RTCPeerConnection, preferences: StreamPreferences) {
-  await Promise.all(peer.getSenders().map((sender) => applySenderLimits(sender, preferences).catch(() => undefined)))
+async function applyAllSenderLimits(peer: RTCPeerConnection, preferences: StreamPreferences, sourceSettings?: MediaTrackSettings) {
+  await Promise.all(peer.getSenders().map((sender) => applySenderLimits(sender, preferences, sourceSettings).catch(() => undefined)))
+}
+
+async function applyLiveSenderLimits(peer: RTCPeerConnection, preferences: StreamPreferences, sourceSettings?: MediaTrackSettings) {
+  const senders = peer.getSenders().filter((sender) => sender.track)
+  if (!senders.some((sender) => sender.track?.kind === 'video' && sender.getParameters().encodings.length)) throw new Error('Дождитесь подключения трансляции')
+  await Promise.all(senders.map(async (sender) => {
+    await applySenderLimits(sender, preferences, sourceSettings)
+    if (sender.track?.kind === 'video') sender.track.contentHint = preferences.content === 'motion' ? 'motion' : 'detail'
+  }))
 }
 
 function wirePeer(
@@ -513,6 +530,7 @@ export class BrowserServerStreamSession {
   private readonly pendingCandidates: StreamICECandidate[] = []
   private offerQueue = Promise.resolve()
   private tracksAdded = false
+  private sourceSettings?: MediaTrackSettings
   private closed = false
   private readonly stopQualityMonitor: () => void
   private readonly stopDiagnosticMonitor: () => void
@@ -564,6 +582,17 @@ export class BrowserServerStreamSession {
 
   recoverPlayback() { this.watchdog?.recoverPlayback() }
 
+  updatePreferences(preferences: StreamPreferences, sourceSettings?: MediaTrackSettings) {
+    const operation = this.offerQueue.then(async () => {
+      if (this.closed || !this.options.localStream || !this.tracksAdded) throw new Error('Дождитесь подключения трансляции')
+      await applyLiveSenderLimits(this.peer, preferences, sourceSettings)
+      this.options.preferences = preferences
+      this.sourceSettings = sourceSettings
+    })
+    this.offerQueue = operation.catch(() => undefined)
+    return operation
+  }
+
   async replacePublisherVideoTrack(track: MediaStreamTrack) {
     if (this.closed || !this.options.localStream) throw new Error('Трансляция уже завершена')
     const sender = this.peer.getSenders().find((value) => value.track?.kind === 'video')
@@ -585,7 +614,7 @@ export class BrowserServerStreamSession {
       })
       await this.peer.setRemoteDescription({
         type: 'offer',
-        sdp: this.options.localStream ? tunePublisherRemoteDescription(sdp, this.options.preferences) : sdp,
+        sdp: this.options.localStream ? tunePublisherRemoteDescription(sdp, this.options.preferences, true) : sdp,
       })
       const pending = this.pendingCandidates.splice(0)
       for (const candidate of pending) {
@@ -621,7 +650,7 @@ export class BrowserServerStreamSession {
       }
       const answer = await this.peer.createAnswer()
       await this.peer.setLocalDescription(answer)
-      await applyAllSenderLimits(this.peer, this.options.preferences)
+      await applyAllSenderLimits(this.peer, this.options.preferences, this.sourceSettings)
       const localSDP = this.peer.localDescription?.sdp
       if (!localSDP) throw new Error('Браузер не создал SDP-ответ трансляции')
       clientDiagnostics.record('webrtc', 'stream_answer_created', 'debug', {
@@ -691,10 +720,33 @@ interface PeerState {
 export class BrowserP2PStreamPublisher {
   private readonly peers = new Map<string, PeerState>()
   private closed = false
+  private settingsQueue = Promise.resolve()
+  private sourceSettings?: MediaTrackSettings
 
   constructor(private readonly options: P2PPublisherOptions) {}
 
+  updatePreferences(preferences: StreamPreferences, sourceSettings?: MediaTrackSettings) {
+    const update = this.settingsQueue.then(async () => {
+      if (this.closed) throw new Error('Трансляция уже завершена')
+      await Promise.all([...this.peers.entries()].map(([id, state]) => {
+        const operation = state.operation.then(async () => {
+          if (this.peers.get(id) !== state) return
+          try { await applyLiveSenderLimits(state.peer, preferences, sourceSettings) }
+          catch (error) { if (this.peers.get(id) === state) throw error }
+        })
+        state.operation = operation.catch(() => undefined)
+        return operation
+      }))
+      if (this.closed) throw new Error('Трансляция уже завершена')
+      this.options.preferences = preferences
+      this.sourceSettings = sourceSettings
+    })
+    this.settingsQueue = update.catch(() => undefined)
+    return update
+  }
+
   async addViewer(connectionId: string) {
+    await this.settingsQueue
     if (this.closed) return
     if (this.peers.has(connectionId)) {
       this.restartViewer(connectionId)
@@ -759,7 +811,7 @@ export class BrowserP2PStreamPublisher {
       if (this.closed || this.peers.get(connectionId) !== state) return
       await state.peer.setRemoteDescription({
         type: 'answer',
-        sdp: tunePublisherRemoteDescription(sdp, this.options.preferences),
+        sdp: tunePublisherRemoteDescription(sdp, this.options.preferences, true),
       })
       clientDiagnostics.record('webrtc', 'stream_answer_received', 'debug', {
         transport: 'p2p',
@@ -862,7 +914,7 @@ export class BrowserP2PStreamPublisher {
       if (restartICE) state.peer.restartIce()
       const offer = await state.peer.createOffer(restartICE ? { iceRestart: true } : undefined)
       await state.peer.setLocalDescription(offer)
-      await applyAllSenderLimits(state.peer, this.options.preferences)
+      await applyAllSenderLimits(state.peer, this.options.preferences, this.sourceSettings)
       const localSDP = state.peer.localDescription?.sdp
       if (!localSDP) throw new Error('Браузер не создал P2P SDP-предложение')
       clientDiagnostics.record('webrtc', 'stream_offer_created', 'debug', {

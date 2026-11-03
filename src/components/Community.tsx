@@ -8,6 +8,8 @@ import type { Message, MessageNotification, ServerMember, ServerRole } from '../
 import type { Conversation, InboxItem, Privacy, CustomRole } from '../domain/community'
 import { Avatar } from './Avatar'
 import { Icon, type IconName } from './Icon'
+import { ContextMenu, type ContextMenuState } from './ContextMenu'
+import { createPortal } from 'react-dom'
 import '../styles/community.css'
 import '../styles/personal-space.css'
 
@@ -158,8 +160,9 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   }}>{children}<CommunityFeatureHost api={api} token={token} userId={userId} conversations={conversations} activeConversation={!creating && conversations.some((c)=>c.id===selected && (view==='favorites'?c.saved:view==='messages'?!c.saved:false))?selected:null}/></CommunityContext.Provider>
 }
 
-export function CommunityNavigation() {
+export function CommunityNavigation({ account }: { account?: ReactNode } = {}) {
   const context = useCommunity()
+  const [menu, setMenu] = useState<ContextMenuState | null>(null)
   if (!context) return null
   const nav = (view: View, icon: IconName, label: string, count = 0, desktopOnly = false) => <button type="button" data-section={view} className={`personal-rail__item ${desktopOnly ? 'personal-rail__desktop' : ''} ${context.view === view ? 'is-active' : ''}`} title={label} aria-label={label} aria-pressed={context.view === view} onClick={() => context.setView(view)}><Icon name={icon} size={22}/>{count > 0 && <b className="personal-badge" aria-label={`${count} непрочитанных`}>{badge(count)}</b>}<span className="personal-rail__tooltip">{label}</span><span className="personal-rail__label" aria-hidden="true">{view === 'privacy' ? 'Настройки' : label}</span></button>
 
@@ -174,24 +177,27 @@ export function CommunityNavigation() {
       <div className="personal-rail__divider"/>
       <button type="button" className="personal-rail__item personal-rail__desktop" aria-label="Новый разговор" title="Новый разговор" onClick={() => context.startChat()}><Icon name="add" size={22}/><span className="personal-rail__tooltip">Новый разговор</span></button>
       <div className="personal-rail__recents">{context.conversations.filter((c) => !c.saved).slice(0, 12).map((chat) => { const person = chat.members.find((m) => m.user_id !== context.userId), name = conversationName(chat, context.userId), active = context.view === 'messages' && context.selected === chat.id; return <button key={chat.id} type="button" className={`personal-rail__item ${active ? 'is-active' : ''}`} title={name} aria-label={`${chat.direct ? 'Диалог' : 'Беседа'}: ${name}`} aria-pressed={active} onClick={() => context.selectChat(chat)}>{chat.direct ? <Avatar name={name} userId={person?.user_id}/> : <Icon name="people" size={22}/>}{chat.unread_count > 0 && <b className="personal-badge">{badge(chat.unread_count)}</b>}</button> })}</div>
-      <div className="personal-rail__bottom">{nav('privacy', 'settings', 'Личные настройки')}</div>
+      <button type="button" className={`personal-rail__item personal-rail__more ${['events', 'audit', 'privacy'].includes(context.view ?? '') ? 'is-active' : ''}`} aria-label="Ещё разделы" aria-haspopup="menu" aria-expanded={!!menu} onClick={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect()
+        const sections: Array<readonly [Exclude<View, null>, IconName, string]> = [
+          ...(context.serverId ? [['events', 'calendar', 'События сервера'] as const] : []),
+          ...(context.serverId && (context.owner || context.members.some((m) => m.user_id === context.userId && m.role === 'admin')) ? [['audit', 'audit', 'Журнал администрации'] as const] : []),
+          ['privacy', 'settings', 'Личные настройки'],
+        ]
+        setMenu({ x: bounds.left, y: bounds.top, items: sections.map(([view, icon, label]) => ({ key: view, kind: 'action', icon, label, onSelect: () => context.setView(view) })) })
+      }}><Icon name="more" size={22}/><span className="personal-rail__label" aria-hidden="true">Ещё</span></button>
+      <div className="personal-rail__bottom">{nav('privacy', 'settings', 'Личные настройки', 0, true)}{account}</div>
+      {menu && createPortal(<ContextMenu menu={menu} onClose={() => setMenu(null)}/>, document.body)}
     </nav>
 }
 
 export function CommunitySidebar({ children }: { children: ReactNode }) {
   const c = useCommunity(), [search, setSearch] = useState('')
   if (!c?.view) return <>{children}</>
+  if (c.view !== 'messages') return null
   const chats = c.conversations.filter((chat) => !chat.saved && conversationName(chat, c.userId).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
-  const admin = c.owner || c.members.some((member) => member.user_id === c.userId && member.role === 'admin')
-  const sections = [
-    ['inbox', 'inbox', 'Входящие'], ['favorites', 'bookmark', 'Избранное'],
-    ...(c.serverId ? [['events', 'calendar', 'События сервера']] : []),
-    ...(c.serverId && admin ? [['audit', 'audit', 'Журнал администрации']] : []),
-    ['privacy', 'settings', 'Личные настройки'],
-  ] as Array<[Exclude<View, null>, IconName, string]>
   return <div className="personal-sidebar">
-    <header className="personal-sidebar__header"><div><span className="eyebrow">ВАШЕ ПРОСТРАНСТВО</span><h2>Личное</h2></div><button className="icon-button" title="К каналам" aria-label="Вернуться к каналам" onClick={() => c.setView(null)}><Icon name="hash"/></button></header>
-    <nav className="personal-sidebar__nav" aria-label="Разделы личного пространства">{sections.map(([view, icon, label]) => <button key={view} className={c.view === view ? 'is-active' : ''} aria-current={c.view === view ? 'page' : undefined} onClick={() => c.setView(view)}><Icon name={icon} size={17}/><span>{label}</span>{view === 'inbox' && c.inboxCount > 0 && <b className="personal-count">{badge(c.inboxCount)}</b>}</button>)}</nav>
+    <header className="personal-sidebar__header"><div><span className="eyebrow">ЛИЧНОЕ ОБЩЕНИЕ</span><h2>Сообщения</h2></div><button className="icon-button" title="К каналам" aria-label="Вернуться к каналам" onClick={() => c.setView(null)}><Icon name="hash"/></button></header>
     <div className="personal-sidebar__section"><span>РАЗГОВОРЫ</span><button className="icon-button" aria-label="Новый разговор" title="Новый разговор" onClick={() => c.startChat()}><Icon name="add" size={17}/></button></div>
     <label className="personal-search"><Icon name="search" size={15}/><input type="search" aria-label="Найти разговор" placeholder="Имя или название беседы" value={search} onChange={(event) => setSearch(event.target.value)}/></label>
     <div className="personal-conversations">{chats.map((chat) => {
@@ -217,8 +223,8 @@ export function CommunityContent({ children, onMenu }: { children: ReactNode; on
   const people = c.creating ? [...new Map([...c.conversations.flatMap((value) => value.members), ...c.members].filter((member) => member.user_id !== c.userId).map((member) => [member.user_id, member])).values()] : []
   return <>
     <div className="community-channel-content" hidden={c.view !== null} inert={c.view !== null}>{children}</div>
-    {c.view && <section className="personal-content" aria-label="Личное пространство">
-      <header className="personal-content__header"><button className="icon-button mobile-menu" aria-label="Список разговоров" onClick={onMenu}><Icon name="menu"/></button><span className="personal-content__icon"><Icon name={c.view === 'favorites' ? 'bookmark' : c.view === 'events' ? 'calendar' : c.view === 'audit' ? 'audit' : c.view === 'inbox' ? 'inbox' : c.view === 'privacy' ? 'settings' : 'message'} size={22}/></span><div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{subtitle}</p></div><button className="icon-button personal-content__close" aria-label="Вернуться к каналам" title="Вернуться к каналам" onClick={() => c.setView(null)}><Icon name="close"/></button></header>
+    {c.view && <section className="personal-content" data-view={c.view} aria-label="Личное пространство">
+      <header className="personal-content__header">{c.view === 'messages' && <button className="icon-button mobile-menu" aria-label="Список разговоров" onClick={onMenu}><Icon name="menu"/></button>}<span className="personal-content__icon"><Icon name={c.view === 'favorites' ? 'bookmark' : c.view === 'events' ? 'calendar' : c.view === 'audit' ? 'audit' : c.view === 'inbox' ? 'inbox' : c.view === 'privacy' ? 'settings' : 'message'} size={22}/></span><div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{subtitle}</p></div><button className="icon-button personal-content__close" aria-label="Вернуться к каналам" title="Вернуться к каналам" onClick={() => c.setView(null)}><Icon name="close"/></button></header>
       {c.error && <div role="alert" className="personal-error">{c.error}<button className="button button--small button--secondary" disabled={c.busy} onClick={c.refresh}>Повторить</button></div>}
       {c.view === 'inbox' && <div className="personal-scroll"><div className="personal-page"><div className="personal-page__heading"><h2>Требует внимания</h2><span>{c.inboxCount ? `${c.inboxCount}${c.moreInbox ? '+' : ''} уведомлений` : 'Вы в курсе всего'}</span></div><div className="inbox-list">{c.items.map((item) => <button className="inbox-item" key={item.message_id} onClick={() => { c.onNavigate(item); c.setView(null); void c.action(() => c.api.community.request(c.token, `/me/inbox/${item.message_id}`, 'PUT')) }}><span className="inbox-item__icon"><Icon name={item.reason === 'thread' ? 'chat' : 'reply'} size={19}/></span><span className="inbox-item__body"><small>{item.channel_name} · {item.reason === 'thread' ? 'Обсуждение' : item.reason === 'reply' ? 'Ответ вам' : 'Упоминание'}</small><b>{item.author}</b><span>{item.content || 'Вложение'}</span></span><Icon name="chevron" size={16}/></button>)}</div>{!c.items.length && !c.error && <PersonalEmpty icon="check" title={c.loading ? 'Загружаем входящие…' : 'Всё прочитано'}>Новые упоминания, ответы и обсуждения появятся здесь.</PersonalEmpty>}{c.moreInbox && <button className="button button--secondary" disabled={c.busy} onClick={() => void c.loadInbox()}>Ещё уведомления</button>}</div></div>}
       {c.view === 'privacy' && <PrivacySettings/>}
