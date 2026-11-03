@@ -7,7 +7,7 @@ import type { E2EEMediaTransform } from './e2ee/mediaTransform'
 
 class FakeTrack extends EventTarget {
   readonly id = crypto.randomUUID()
-  readonly kind = 'audio'
+  constructor(readonly kind: 'audio' | 'video' = 'audio') { super() }
   enabled = true
   readyState = 'live'
   stop = vi.fn(() => { this.readyState = 'ended' })
@@ -21,7 +21,8 @@ class FakeMediaStream {
   }
 
   getTracks() { return [...this.tracks] }
-  getAudioTracks() { return [...this.tracks] }
+  getAudioTracks() { return this.tracks.filter((track) => track.kind === 'audio') }
+  getVideoTracks() { return this.tracks.filter((track) => track.kind === 'video') }
   addTrack(track: FakeTrack) { this.tracks.push(track) }
   removeTrack(track: FakeTrack) { this.tracks = this.tracks.filter((item) => item !== track) }
 }
@@ -308,6 +309,36 @@ describe('BrowserVoiceSession', () => {
     expect(inputTrack.stop).not.toHaveBeenCalled()
     input.close()
     expect(inputTrack.stop).toHaveBeenCalledOnce()
+  })
+
+  it('uses the reserved camera sender, attributes remote video and releases only the camera on stop', async () => {
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const cameraTrack = new FakeTrack('video')
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(new FakeMediaStream([cameraTrack]) as unknown as MediaStream)
+    const onCamera = vi.fn(), onRemoteCamera = vi.fn()
+    const session = new BrowserVoiceSession({ input, onCamera, onRemoteCamera, onAnswer: vi.fn(), onICECandidate: vi.fn(), onConnectionStateChange: vi.fn(), onError: vi.fn() })
+    await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+    const peer = FakePeerConnection.latest!
+    const sender = new FakeSender()
+    const upload = { mid: 'upload', sender, receiver: { track: new FakeTrack('video') }, direction: 'recvonly' }
+    const remoteTrack = new FakeTrack('video')
+    const remote = { mid: 'remote', sender: new FakeSender(), receiver: { track: remoteTrack } }
+    Object.assign(peer, { getTransceivers: () => [upload, remote] })
+    await session.acceptOffer('v=0\nm=video 9 UDP/TLS/RTP/SAVPF 96\na=mid:upload\na=recvonly\nm=video 9 UDP/TLS/RTP/SAVPF 96\na=mid:remote\na=sendonly\na=msid:camera-room camera-alice\n')
+    expect(upload.direction).toBe('sendrecv')
+    await session.startCamera('low')
+    expect(sender.replaceTrack).toHaveBeenCalledWith(cameraTrack)
+    expect(peer.sender.replaceTrack).not.toHaveBeenCalled()
+    peer.ontrack?.({ track: remoteTrack, transceiver: remote } as unknown as RTCTrackEvent)
+    expect(onRemoteCamera).toHaveBeenCalledWith('alice', expect.any(FakeMediaStream))
+    session.stopCamera()
+    expect(sender.replaceTrack).toHaveBeenLastCalledWith(null)
+    expect(cameraTrack.stop).toHaveBeenCalledOnce()
+    expect(inputTrack.stop).not.toHaveBeenCalled()
+    session.close()
+    expect(onRemoteCamera).toHaveBeenLastCalledWith('alice', null)
+    input.close()
   })
 })
 

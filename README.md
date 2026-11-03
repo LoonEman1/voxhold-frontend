@@ -188,6 +188,7 @@ GitHub Releases automatically.
 - [Calls, recordings and avatars](docs/calls-recordings.md)
 - [Media recovery and channel members](docs/media-recovery-and-members.md)
 - [Client performance](docs/client-performance.md)
+- [Webcams in channels and calls](docs/webcam.md)
 - [Contributing](CONTRIBUTING.md)
 
 

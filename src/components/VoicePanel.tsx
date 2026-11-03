@@ -6,7 +6,8 @@ import type { StreamQualityStats } from '../services/stream'
 import { roleMeta } from '../lib/roles'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
-import { E2EE_RECORDING_NOTICE, E2EE_STREAM_NOTICE, E2EE_VOICE_NOTICE } from '../services/e2ee/notices'
+import { CameraTile } from './CameraTile'
+import { E2EE_CAMERA_NOTICE, E2EE_RECORDING_NOTICE, E2EE_STREAM_NOTICE, E2EE_VOICE_NOTICE } from '../services/e2ee/notices'
 import type { StreamPanel as LoadedStreamPanel } from './StreamPanel'
 import { lazy, Suspense, type ComponentProps } from 'react'
 const LazyStreamPanel = lazy(() => import('./StreamPanel').then((module) => ({ default: module.StreamPanel })))
@@ -15,6 +16,7 @@ function StreamPanel(props: ComponentProps<typeof LoadedStreamPanel>) { return p
 export type VoiceConnectionStatus = 'idle' | 'requesting' | 'signaling' | 'connected'
 
 interface VoicePanelProps {
+  cameras?: Record<string, MediaStream>
   onPlaybackRecovery?: () => void
   controls?: ReactNode
   chat?: ReactNode
@@ -70,7 +72,7 @@ const statusLabel: Record<VoiceConnectionStatus, string> = {
   connected: 'Голосовая связь установлена',
 }
 
-export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel, encryption }: VoicePanelProps) {
+export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeChannel, participants, members, currentUserId, speakingUserIds, connectionStatus, realtimeOnline, selfMute, selfDeaf, error, recovering = false, micUnavailable = false, onRetryMic, playbackBlocked = false, onEnablePlayback, onJoin, onLeave, onToggleMute, onToggleDeaf, onOpenProfile, onParticipantContextMenu, stream, streamStatus, streamError, streamMedia, streamPreferences, streamQuality, onStreamPreferencesChange, onOpenStreamSettings, onWatchStream, onLeaveStream, onExpandStream, onFullscreenStream, streamAudioMuted = false, onToggleStreamAudio, controls, chat, recordingLabel, encryption }: VoicePanelProps) {
   const encrypted = !!channel.e2ee_required
   const activeHere = activeChannel?.id === channel.id
   const publisherName = stream ? members.find((item) => item.user_id === stream.publisher_user_id)?.username : undefined
@@ -89,7 +91,7 @@ export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, partici
       {activeHere && encryption?.active && <p className="voice-e2ee-note"><Icon name="lock" size={13}/>{E2EE_VOICE_NOTICE}</p>}
       {activeHere && encryption?.changedKeyNames.map((name) => <div key={name} className="voice-e2ee-warning" role="alert">Ключ устройства {name} изменился. Сверьте код безопасности в профиле участника</div>)}
       {encrypted && (stream || streamMedia) && <p className="voice-e2ee-note voice-e2ee-note--muted">{E2EE_STREAM_NOTICE}</p>}
-      {error && <div className="voice-error" role="alert">{error}</div>}
+      {encrypted && activeHere && Object.keys(cameras).length > 0 && <p className="voice-e2ee-note voice-e2ee-note--muted">{E2EE_CAMERA_NOTICE}</p>}{error && <div className="voice-error" role="alert">{error}</div>}
       {micUnavailable && onRetryMic && <button className="button button--ghost" onClick={onRetryMic}>Повторить подключение микрофона</button>}
       {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
       <div className="voice-stage-content">
@@ -101,6 +103,8 @@ export function VoicePanel({ onPlaybackRecovery, channel, activeChannel, partici
           const role = member?.role ?? 'member'
           const isMe = participant.user_id === currentUserId
           const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
+          const camera = activeHere && (isMe || participant.self_video) ? cameras[participant.connection_id] : undefined
+          if (camera) return <CameraTile key={participant.connection_id} media={camera} name={username} isMe={isMe} speaking={isSpeaking} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)}/>
           return <button className={`voice-participant ${isMe ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)}>
             <div className="voice-participant__avatar"><Avatar userId={participant.user_id} name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
             <span><b className={`member-name--${role}`}>{username}{isMe && <small>вы</small>}</b><em>{roleMeta[role].shortLabel}</em></span>
