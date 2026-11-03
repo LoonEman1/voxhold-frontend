@@ -57,6 +57,13 @@ interface Subscription {
   channelId: number
 }
 
+interface PendingE2EEKey {
+  channelId: number
+  recipient_user_id: number
+  recipient_device_id: string
+  payload: string
+}
+
 interface RealtimeOptions {
   onNotification?: (event: MessageNotification) => void
   onNotificationSettings?: (value: NotificationSettings) => void
@@ -153,6 +160,9 @@ export class RealtimeClient {
   private pendingPing: string | null = null
   private lastMessageAt = 0
   private hiddenAt: number | null = null
+  private e2eeBatch = false
+  private readonly pendingE2EEKeys: PendingE2EEKey[] = []
+  private e2eeBatchTimer: ReturnType<typeof setTimeout> | null = null
   private readonly visibility = () => {
     if (document.visibilityState === 'hidden') { this.hiddenAt ??= Date.now(); return }
     const elapsed = this.hiddenAt === null ? 0 : Date.now() - this.hiddenAt
@@ -209,7 +219,33 @@ export class RealtimeClient {
 
   /** Sends a wrapped voice sender key to one device in the channel (FEAT-13). */
   sendE2EEKey(channelId: number, recipientUserId: number, recipientDeviceId: string, payload: string) {
+    if (this.e2eeBatch && this.authenticated && this.socket?.readyState === WebSocket.OPEN) {
+      this.pendingE2EEKeys.push({ channelId, recipient_user_id: recipientUserId, recipient_device_id: recipientDeviceId, payload })
+      if (this.pendingE2EEKeys.length >= 256) this.flushE2EEKeys()
+      else this.e2eeBatchTimer ??= setTimeout(() => this.flushE2EEKeys(), 10)
+      return String(++this.requestSequence)
+    }
     return this.send('e2ee.key', { channel_id: channelId, recipient_user_id: recipientUserId, recipient_device_id: recipientDeviceId, payload })
+  }
+
+  private clearE2EEKeys() {
+    if (this.e2eeBatchTimer !== null) clearTimeout(this.e2eeBatchTimer)
+    this.e2eeBatchTimer = null
+    this.pendingE2EEKeys.length = 0
+  }
+
+  private flushE2EEKeys() {
+    const pending = this.pendingE2EEKeys.splice(0)
+    this.clearE2EEKeys()
+    if (!this.authenticated) return
+    const rooms = new Map<number, Omit<PendingE2EEKey, 'channelId'>[]>()
+    for (const { channelId, ...key } of pending) {
+      const keys = rooms.get(channelId) ?? []
+      keys.push(key); rooms.set(channelId, keys)
+    }
+    for (const [channelId, keys] of rooms) {
+      for (let offset = 0; offset < keys.length; offset += 32) this.send('e2ee.keys', { channel_id: channelId, keys: keys.slice(offset, offset + 32) })
+    }
   }
 
   requestE2EEKey(channelId: number, recipientUserId: number, recipientDeviceId: string) {
@@ -221,6 +257,7 @@ export class RealtimeClient {
   }
 
   leaveVoice() {
+    this.clearE2EEKeys()
     return this.send('voice.leave', {})
   }
 
@@ -321,6 +358,7 @@ export class RealtimeClient {
   private resetSocket() {
     const socket = this.socket
     this.socket = null; this.clearHeartbeat()
+    this.clearE2EEKeys(); this.e2eeBatch = false
     this.authenticated = this.awaitingUnsubscribe = false; this.activeSubscription = this.pendingSubscription = null
     return socket
   }
@@ -382,6 +420,7 @@ export class RealtimeClient {
           this.heartbeatTimer = setInterval(() => this.heartbeat(), 25_000)
           this.attempts = 0
           this.authenticated = true
+          this.e2eeBatch = (payload.data as { e2ee_batch?: boolean } | undefined)?.e2ee_batch === true
           this.options.onStateChange('online')
           this.syncSubscription()
           this.options.onReady?.()

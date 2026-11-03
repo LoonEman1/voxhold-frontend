@@ -4,7 +4,7 @@
  * Opus frames (FEAT-13). Video frames pass through unchanged. No per-frame
  * logging: only counters, posted every 15 s.
  */
-import { createFrameProcessor, type TransformOptions, type WorkerCommand } from './frameProcessor'
+import { createFrameProcessor, type TransformOptions, type WorkerRequest } from './frameProcessor'
 
 declare const self: DedicatedWorkerGlobalScope
 
@@ -25,9 +25,12 @@ function pipe(readable: ReadableStream<EncodedFrame>, writable: WritableStream<E
   void readable.pipeThrough(transform).pipeTo(writable).catch(() => undefined)
 }
 
-self.onmessage = ({ data }: MessageEvent<WorkerCommand | { type: 'stream'; readable: ReadableStream<EncodedFrame>; writable: WritableStream<EncodedFrame>; options: TransformOptions }>) => {
+self.onmessage = ({ data }: MessageEvent<WorkerRequest | { type: 'stream'; readable: ReadableStream<EncodedFrame>; writable: WritableStream<EncodedFrame>; options: TransformOptions }>) => {
   if (data.type === 'stream') pipe(data.readable, data.writable, data.options)
-  else void processor.command(data)
+  else void processor.command(data.command).then(
+    () => self.postMessage({ type: 'applied', id: data.id }),
+    () => self.postMessage({ type: 'commandError', id: data.id }),
+  )
 }
 
 // RTCRtpScriptTransform (Firefox, Safari, recent Chrome).
@@ -35,3 +38,5 @@ self.onrtctransform = (event: RTCTransformEvent) => {
   const transformer = event.transformer
   pipe(transformer.readable as ReadableStream<EncodedFrame>, transformer.writable as WritableStream<EncodedFrame>, transformer.options as TransformOptions)
 }
+
+self.postMessage({ type: 'ready' })

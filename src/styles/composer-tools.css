@@ -1,0 +1,4 @@
+.composer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; flex: none; padding: 5px 18px 8px; }
+.composer-tools button { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; border: 0; background: none; color: var(--muted); font-size: var(--font-xs); cursor: pointer; }
+.composer-tools button:hover, .composer-tools button:focus-visible { color: var(--text); }
+.direct-chat__tools > button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-3); color: var(--text); cursor: pointer; }

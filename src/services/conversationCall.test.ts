@@ -2,10 +2,24 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { ConversationCall } from './conversationCall'
 import { ApiError, type VoxholdApi } from './api'
 import { captureScreen } from './stream'
+import { IndexedDBStore } from './e2ee/deviceKeys'
 vi.mock('./stream', () => ({ captureScreen: vi.fn() }))
 import type { CallState } from '../domain/community'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); vi.clearAllMocks() })
+
+it('does not silently downgrade to a plain call when E2EE preparation fails', async () => {
+  vi.stubGlobal('RTCRtpScriptTransform', class {})
+  vi.stubGlobal('indexedDB', {})
+  const getDevice = vi.spyOn(IndexedDBStore.prototype, 'getDevice').mockRejectedValue(new Error('key storage unavailable'))
+  const request = vi.fn().mockResolvedValue({})
+  const { call, stop } = isolatedCall(request)
+  try {
+    await expect(call.start()).rejects.toThrow('key storage unavailable')
+    expect(request.mock.calls.some((args) => args[2] === 'PUT')).toBe(false)
+    expect(stop).toHaveBeenCalledOnce()
+  } finally { getDevice.mockRestore(); call.close() }
+})
 
 it('keeps a newer membership event when the initial HTTP snapshot arrives late', async () => {
   const close = vi.fn(), stop = vi.fn(), state = vi.fn()

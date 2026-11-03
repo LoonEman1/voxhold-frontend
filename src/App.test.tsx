@@ -20,10 +20,11 @@ it('keeps accepted workspace mounted during rotation and responds to new invite 
   const view = render(<AppRouter api={api}/>)
   fireEvent.click(await screen.findByRole('button', { name: 'Stay in browser' }))
   await screen.findByText('Workspace mounted')
-  expect(fixture.mounts).toHaveBeenCalledOnce()
+  // The lazy component's DOM can appear before its passive mount effect runs.
+  await waitFor(() => expect(fixture.mounts).toHaveBeenCalledOnce())
   expect(window.location.hash).toBe('')
   fixture.auth.token = 'rotated'
-  view.rerender(<AppRouter api={api}/>)
+  await act(async () => { view.rerender(<AppRouter api={api}/>) })
   expect(fixture.mounts).toHaveBeenCalledOnce()
   expect(fixture.unmounts).not.toHaveBeenCalled()
   await act(async () => { window.location.hash = '#/invite/two'; window.dispatchEvent(new HashChangeEvent('hashchange')) })

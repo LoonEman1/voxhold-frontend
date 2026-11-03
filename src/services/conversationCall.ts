@@ -30,7 +30,7 @@ export class ConversationCall {
   // registered a device key; screen video passes through unencrypted.
   private e2ee: CallE2EE | null = null
   private e2eeDeviceId = ''
-  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState, encrypted: boolean) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean) => void; ended: () => void; keyChanged?: (userId: number) => void }) {}
+  constructor(private api: VoxholdApi, private credentials: string | (() => string), readonly conversationId: number, private userId: number, private callbacks: { state: (v: CallState, encrypted: boolean) => void; media: (userId: number, stream: MediaStream) => void; removed: (userId: number) => void; error: (message: string) => void; screen: (active: boolean, stream?: MediaStream) => void; ended: () => void; keyChanged?: (userId: number) => void }) {}
   setToken(token: string) { this.credentials = token }
   private get token() { return typeof this.credentials === 'string' ? this.credentials : this.credentials() }
   async start() {
@@ -55,7 +55,7 @@ export class ConversationCall {
       this.heartbeat = setInterval(() => { void this.refresh() }, 12_000)
     } catch (e) { this.close(); void this.leaveRemote(); throw e }
   }
-  /** Optional: a browser or profile without support simply calls in clear. */
+  /** Unsupported browsers use legacy calls; preparation failures fail closed. */
   private async prepareEncryption() {
     const mode = e2eeTransformMode()
     if (!mode || typeof indexedDB === 'undefined') return
@@ -78,9 +78,11 @@ export class ConversationCall {
         },
       })
       this.e2eeDeviceId = device.deviceId
-    } catch {
+    } catch (error) {
+      this.e2ee?.close()
       this.e2ee = null
       this.e2eeDeviceId = ''
+      throw error
     }
   }
   private deviceField() { return this.e2eeDeviceId ? { e2ee_device_id: this.e2eeDeviceId } : {} }
@@ -211,7 +213,7 @@ export class ConversationCall {
       for (const peer of this.peers.values()) void this.send(peer, { media: { screen: true, revision: this.screenRevision } }).catch((e: unknown) => this.report(e))
       for (const peer of this.peers.values()) for (const track of stream.getTracks()) this.addTrack(peer, track, stream)
       stream.getVideoTracks()[0]?.addEventListener('ended', () => { if (this.screen === stream) this.stopScreen() }, { once: true })
-      this.callbacks.screen(true)
+      this.callbacks.screen(true, stream)
     } finally { this.screenPending = false }
   }
   private stopScreen() {

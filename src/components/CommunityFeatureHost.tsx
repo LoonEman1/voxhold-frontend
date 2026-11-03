@@ -1,7 +1,8 @@
+import '../styles/community-notices.css'
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import type { VoxholdApi } from '../services/api'
 import type { CallState, Conversation, DirectMessage, FeatureSource } from '../domain/community'
-import { UniversalForward, featuresChanged } from './CommunityFeatures'
+import { UniversalForward, featuresChanged } from './LazyCommunityFeatures'
 // Loaded right after mount: the call runtime (WebRTC, E2EE) stays out of the
 // WorkspacePage chunk.
 const ConversationCallDock = lazy(() => import('./ConversationCallDock').then((module) => ({ default: module.ConversationCallDock })))
