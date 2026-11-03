@@ -113,6 +113,13 @@ npm run dev
 
 Проверки:
 
+Проверка типов и сборка используют нативный компилятор TypeScript 7 (`tsc`),
+установленный как `@typescript/native`. Зависимость `typescript` — npm-алиас
+`@typescript/typescript6`: он предоставляет совместимый API для ESLint и
+отдельную команду `tsc6`. При обновлении зависимостей сохраняйте эти алиасы:
+TypeScript 7.0 сам этот API не предоставляет. Ускоряются проверки при
+разработке; JavaScript для браузера по-прежнему собирает Vite.
+
 ```bash
 npm run typecheck
 npm run lint
