@@ -6,6 +6,8 @@ import type { StreamQualityStats } from '../services/stream'
 import { useLiveDuration } from '../hooks/useLiveDuration'
 import { viewerLabel } from '../lib/format'
 import { useMediaPlayback } from '../hooks/useMediaPlayback'
+import { useStreamPlaybackGain } from '../hooks/useStreamPlaybackGain'
+import { MAX_STREAM_VOLUME } from '../services/streamSettings'
 import { pictureInPictureAvailable, togglePictureInPicture } from '../lib/pictureInPicture'
 import { StreamVolumeControl } from './StreamVolumeControl'
 import { Icon } from './Icon'
@@ -40,6 +42,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
   const pendingPublisher = !stream && !!media
   const isPublisher = pendingPublisher || stream?.publisher_user_id === currentUserId
   const duration = useLiveDuration(stream?.started_at_ms)
+  const gain = useStreamPlaybackGain(media, preferences.playbackVolume, !!isPublisher)
   const { videoRef, state: playbackState, attach, enableAudio } = useMediaPlayback({
     role: isPublisher ? 'publisher' : 'viewer',
     muted: !!isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0),
@@ -49,14 +52,14 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
   })
 
   useEffect(() => {
-    attach(media)
+    attach(gain.media)
     return () => attach(null)
-  }, [media, attach])
+  }, [gain.media, attach])
 
   useEffect(() => {
     const video = videoRef.current
-    if (video) video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
-  }, [isPublisher, preferences.playbackVolume, videoRef])
+    if (video) video.volume = gain.elementVolume
+  }, [gain.elementVolume, videoRef])
 
   if (!stream && !pendingPublisher) {
     if (!error) return null
@@ -67,7 +70,8 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
   }
 
   const updateVolume = (value: number) => {
-    const volume = Math.max(0, Math.min(100, value))
+    gain.resume()
+    const volume = Math.max(0, Math.min(MAX_STREAM_VOLUME, value))
     if (isPublisher) {
       if (volume > 0) onPreferencesChange({ ...preferences, publishVolume: volume })
       if ((volume === 0) !== audioMuted) onToggleAudio?.()
@@ -75,7 +79,7 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
       onPreferencesChange({ ...preferences, playbackVolume: volume || preferences.playbackVolume, playbackMuted: volume === 0 })
     }
   }
-  const togglePlaybackAudio = () => onPreferencesChange({ ...preferences, playbackVolume: preferences.playbackVolume || 100, playbackMuted: !(preferences.playbackMuted || preferences.playbackVolume === 0) })
+  const togglePlaybackAudio = () => { gain.resume(); onPreferencesChange({ ...preferences, playbackVolume: preferences.playbackVolume || 100, playbackMuted: !(preferences.playbackMuted || preferences.playbackVolume === 0) }) }
   const volumeControl = (compact = false) => <StreamVolumeControl
     compact={compact} publisher={!!isPublisher}
     volume={isPublisher ? preferences.publishVolume : preferences.playbackVolume}
@@ -101,13 +105,13 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
       <span className="call-stream-tile__live"><i/>{stream ? 'В ЭФИРЕ' : 'ЗАПУСК'}</span>
       {media && <span className="call-stream-tile__expand"><Icon name="maximize" size={22}/>Развернуть</span>}
     </button>
-    {!isPublisher && playbackState === 'audio_blocked' && media && <button className="call-stream-tile__audio" onClick={enableAudio}><Icon name="volume" size={14}/>Включить звук</button>}
+    {!isPublisher && (playbackState === 'audio_blocked' || gain.blocked) && media && <button className="call-stream-tile__audio" onClick={() => { gain.resume(); enableAudio() }}><Icon name="volume" size={14}/>Включить звук</button>}
     <footer><div><b><Icon name="monitor" size={14}/>{isPublisher ? 'Ваш экран' : publisherName ?? 'Трансляция экрана'}</b><small>{playbackState === 'stalled' ? liveLabel : subtitle}</small></div><div className="call-stream-tile__actions">
       {stream?.has_audio && (isPublisher || watching) && volumeControl(true)}
       {media && onFullscreen && <button className="icon-button" onClick={onFullscreen} aria-label="Трансляция на полный экран"><Icon name="maximize" size={16}/></button>}
       {(isPublisher || watching) && <button className="icon-button" onClick={onLeave} aria-label={isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'}><Icon name="close" size={16}/></button>}
     </div></footer>
-    {error && <p className="voice-error" role="alert">{error}</p>}
+    {(error || gain.error) && <p className="voice-error" role="alert">{error || gain.error}</p>}
   </section>
 
   return <section className="stream-panel">
@@ -123,15 +127,15 @@ export function StreamPanel({ tile = false, onPlaybackRecovery, stream, currentU
     {media && <div className="stream-video" onClick={(event) => { if (event.target === videoRef.current) onExpand() }} onDoubleClick={onFullscreen ?? onExpand}>
       <video ref={videoRef} autoPlay playsInline muted={!!isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0)} controls={false}/>
       <span>{liveLabel}</span>
-      {!isPublisher && playbackState === 'audio_blocked' && (
+      {!isPublisher && (playbackState === 'audio_blocked' || gain.blocked) && (
         <div className="stream-audio-blocked-overlay">
           <span>Трансляция идёт без звука</span>
-          <button className="button button--primary" type="button" onClick={enableAudio}><Icon name="volume"/>Включить звук</button>
+          <button className="button button--primary" type="button" onClick={() => { gain.resume(); enableAudio() }}><Icon name="volume"/>Включить звук</button>
         </div>
       )}
     </div>}
     <StreamQualitySummary stats={quality}/>
-    {error && <div className="voice-error" role="alert">{error}</div>}
+    {(error || gain.error) && <div className="voice-error" role="alert">{error || gain.error}</div>}
 
     {stream && !isPublisher && watching && volumeControl()}
 

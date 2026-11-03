@@ -159,41 +159,23 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
 }
 
 export function CommunityNavigation() {
-  const context = useCommunity(), [open, setOpen] = useState(false)
-  const root = useRef<HTMLDivElement>(null), handle = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false) }
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); handle.current?.focus() } }
-    document.addEventListener('pointerdown', outside); document.addEventListener('keydown', escape)
-    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
-  }, [open])
-  useEffect(() => {
-    // A broad activation strip without an invisible overlay over channel clicks.
-    const nearEdge = (event: PointerEvent) => { if (event.pointerType !== 'touch' && event.clientX >= 0 && event.clientX <= 56) setOpen(true) }
-    window.addEventListener('pointermove', nearEdge, { passive: true })
-    return () => window.removeEventListener('pointermove', nearEdge)
-  }, [])
+  const context = useCommunity()
   if (!context) return null
-  const navigate = (view: View) => { context.setView(view); setOpen(false) }
-  const total = context.inboxCount + context.directCount
-  const nav = (view: View, icon: IconName, label: string, count = 0) => <button type="button" className={`personal-rail__item ${context.view === view ? 'is-active' : ''}`} title={label} aria-label={label} aria-pressed={context.view === view} onClick={() => navigate(view)}><Icon name={icon} size={22}/>{count > 0 && <b className="personal-badge">{badge(count)}</b>}<span className="personal-rail__tooltip">{label}</span></button>
+  const nav = (view: View, icon: IconName, label: string, count = 0, desktopOnly = false) => <button type="button" data-section={view} className={`personal-rail__item ${desktopOnly ? 'personal-rail__desktop' : ''} ${context.view === view ? 'is-active' : ''}`} title={label} aria-label={label} aria-pressed={context.view === view} onClick={() => context.setView(view)}><Icon name={icon} size={22}/>{count > 0 && <b className="personal-badge" aria-label={`${count} непрочитанных`}>{badge(count)}</b>}<span className="personal-rail__tooltip">{label}</span><span className="personal-rail__label" aria-hidden="true">{view === 'privacy' ? 'Настройки' : label}</span></button>
 
-  return <div ref={root} className={`personal-rail-edge ${open ? 'is-open' : ''}`} onPointerEnter={(event) => { if (event.pointerType !== 'touch') setOpen(true) }} onPointerLeave={() => { if (!root.current?.contains(document.activeElement)) setOpen(false) }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
-    <button ref={handle} type="button" className="personal-rail-handle" aria-label="Личная панель" title="Личная панель" aria-expanded={open} aria-controls="personal-rail" onClick={() => setOpen(true)}><Icon name="chevron" size={15}/>{total > 0 && <i/>}</button>
-    <nav id="personal-rail" className="personal-rail" aria-label="Личное пространство" aria-hidden={!open} inert={!open}>
-      <button className={`personal-rail__home ${context.view === null ? 'is-active' : ''}`} title="К каналам" aria-label="К каналам" onClick={() => navigate(null)}>V</button>
+  return <nav id="personal-rail" className="personal-rail" aria-label="Личное пространство">
+      <button type="button" className={`personal-rail__home ${context.view === null ? 'is-active' : ''}`} title="К каналам" aria-label="К каналам" aria-pressed={context.view === null} onClick={() => context.setView(null)}>V<span className="personal-rail__label" aria-hidden="true">Каналы</span></button>
       <div className="personal-rail__divider"/>
       {nav('inbox', 'inbox', 'Входящие', context.inboxCount)}
-      {nav('favorites', 'pin', 'Избранное')}
-      {context.serverId && nav('events', 'people', 'События сервера')}
-      {context.serverId && (context.owner || context.members.some((m) => m.user_id === context.userId && m.role === 'admin')) && nav('audit', 'audit', 'Журнал администрации')}
+      {nav('messages', 'message', 'Сообщения', context.directCount)}
+      {nav('favorites', 'bookmark', 'Избранное')}
+      {context.serverId && nav('events', 'calendar', 'События сервера', 0, true)}
+      {context.serverId && (context.owner || context.members.some((m) => m.user_id === context.userId && m.role === 'admin')) && nav('audit', 'audit', 'Журнал администрации', 0, true)}
       <div className="personal-rail__divider"/>
-      <button type="button" className="personal-rail__item" aria-label="Новый разговор" title="Новый разговор" onClick={() => { context.startChat(); setOpen(false) }}><Icon name="add" size={22}/><span className="personal-rail__tooltip">Новый разговор</span></button>
-      <div className="personal-rail__recents">{context.conversations.filter((c) => !c.saved).map((chat) => { const person = chat.members.find((m) => m.user_id !== context.userId), name = conversationName(chat, context.userId); return <button key={chat.id} className={`personal-rail__item ${context.view === 'messages' && context.selected === chat.id ? 'is-active' : ''}`} title={name} aria-label={`${chat.direct ? 'Диалог' : 'Беседа'}: ${name}`} onClick={() => { context.selectChat(chat); setOpen(false) }}>{chat.direct ? <Avatar name={name} userId={person?.user_id}/> : <Icon name="people" size={22}/>}{chat.unread_count > 0 && <b className="personal-badge">{badge(chat.unread_count)}</b>}<span className="personal-rail__tooltip">{name}</span></button> })}</div>
+      <button type="button" className="personal-rail__item personal-rail__desktop" aria-label="Новый разговор" title="Новый разговор" onClick={() => context.startChat()}><Icon name="add" size={22}/><span className="personal-rail__tooltip">Новый разговор</span></button>
+      <div className="personal-rail__recents">{context.conversations.filter((c) => !c.saved).slice(0, 12).map((chat) => { const person = chat.members.find((m) => m.user_id !== context.userId), name = conversationName(chat, context.userId), active = context.view === 'messages' && context.selected === chat.id; return <button key={chat.id} type="button" className={`personal-rail__item ${active ? 'is-active' : ''}`} title={name} aria-label={`${chat.direct ? 'Диалог' : 'Беседа'}: ${name}`} aria-pressed={active} onClick={() => context.selectChat(chat)}>{chat.direct ? <Avatar name={name} userId={person?.user_id}/> : <Icon name="people" size={22}/>}{chat.unread_count > 0 && <b className="personal-badge">{badge(chat.unread_count)}</b>}</button> })}</div>
       <div className="personal-rail__bottom">{nav('privacy', 'settings', 'Личные настройки')}</div>
     </nav>
-  </div>
 }
 
 export function CommunitySidebar({ children }: { children: ReactNode }) {
@@ -202,8 +184,8 @@ export function CommunitySidebar({ children }: { children: ReactNode }) {
   const chats = c.conversations.filter((chat) => !chat.saved && conversationName(chat, c.userId).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
   const admin = c.owner || c.members.some((member) => member.user_id === c.userId && member.role === 'admin')
   const sections = [
-    ['inbox', 'inbox', 'Входящие'], ['favorites', 'pin', 'Избранное'],
-    ...(c.serverId ? [['events', 'people', 'События сервера']] : []),
+    ['inbox', 'inbox', 'Входящие'], ['favorites', 'bookmark', 'Избранное'],
+    ...(c.serverId ? [['events', 'calendar', 'События сервера']] : []),
     ...(c.serverId && admin ? [['audit', 'audit', 'Журнал администрации']] : []),
     ['privacy', 'settings', 'Личные настройки'],
   ] as Array<[Exclude<View, null>, IconName, string]>
@@ -236,7 +218,7 @@ export function CommunityContent({ children, onMenu }: { children: ReactNode; on
   return <>
     <div className="community-channel-content" hidden={c.view !== null} inert={c.view !== null}>{children}</div>
     {c.view && <section className="personal-content" aria-label="Личное пространство">
-      <header className="personal-content__header"><button className="icon-button mobile-menu" aria-label="Список разговоров" onClick={onMenu}><Icon name="menu"/></button><span className="personal-content__icon"><Icon name={c.view === 'favorites' ? 'pin' : c.view === 'events' ? 'people' : c.view === 'audit' ? 'audit' : c.view === 'inbox' ? 'inbox' : c.view === 'privacy' ? 'settings' : 'message'} size={22}/></span><div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{subtitle}</p></div><button className="icon-button personal-content__close" aria-label="Вернуться к каналам" title="Вернуться к каналам" onClick={() => c.setView(null)}><Icon name="close"/></button></header>
+      <header className="personal-content__header"><button className="icon-button mobile-menu" aria-label="Список разговоров" onClick={onMenu}><Icon name="menu"/></button><span className="personal-content__icon"><Icon name={c.view === 'favorites' ? 'bookmark' : c.view === 'events' ? 'calendar' : c.view === 'audit' ? 'audit' : c.view === 'inbox' ? 'inbox' : c.view === 'privacy' ? 'settings' : 'message'} size={22}/></span><div><h1 ref={heading} tabIndex={-1}>{title}</h1><p>{subtitle}</p></div><button className="icon-button personal-content__close" aria-label="Вернуться к каналам" title="Вернуться к каналам" onClick={() => c.setView(null)}><Icon name="close"/></button></header>
       {c.error && <div role="alert" className="personal-error">{c.error}<button className="button button--small button--secondary" disabled={c.busy} onClick={c.refresh}>Повторить</button></div>}
       {c.view === 'inbox' && <div className="personal-scroll"><div className="personal-page"><div className="personal-page__heading"><h2>Требует внимания</h2><span>{c.inboxCount ? `${c.inboxCount}${c.moreInbox ? '+' : ''} уведомлений` : 'Вы в курсе всего'}</span></div><div className="inbox-list">{c.items.map((item) => <button className="inbox-item" key={item.message_id} onClick={() => { c.onNavigate(item); c.setView(null); void c.action(() => c.api.community.request(c.token, `/me/inbox/${item.message_id}`, 'PUT')) }}><span className="inbox-item__icon"><Icon name={item.reason === 'thread' ? 'chat' : 'reply'} size={19}/></span><span className="inbox-item__body"><small>{item.channel_name} · {item.reason === 'thread' ? 'Обсуждение' : item.reason === 'reply' ? 'Ответ вам' : 'Упоминание'}</small><b>{item.author}</b><span>{item.content || 'Вложение'}</span></span><Icon name="chevron" size={16}/></button>)}</div>{!c.items.length && !c.error && <PersonalEmpty icon="check" title={c.loading ? 'Загружаем входящие…' : 'Всё прочитано'}>Новые упоминания, ответы и обсуждения появятся здесь.</PersonalEmpty>}{c.moreInbox && <button className="button button--secondary" disabled={c.busy} onClick={() => void c.loadInbox()}>Ещё уведомления</button>}</div></div>}
       {c.view === 'privacy' && <PrivacySettings/>}

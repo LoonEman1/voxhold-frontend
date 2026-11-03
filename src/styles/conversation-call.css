@@ -1,2 +1,39 @@
-.direct-call-dock{position:fixed;right:20px;bottom:20px;z-index:100;max-width:min(520px,calc(100vw - 40px));padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);box-shadow:0 10px 40px #0005}.direct-call-dock video{width:100%;max-height:45vh;background:#111;border-radius:8px}.direct-call-dock__members{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.direct-call-dock audio{display:none}.direct-call-dock button{padding:6px 10px}.direct-call-dock p{margin:8px 0;overflow-wrap:anywhere}.direct-call-dock .call-error{color:#ff9c9c}.direct-call-dock .feature-actions button{color:var(--text);background:var(--surface-3);border:1px solid var(--line-strong);border-radius:7px}.direct-call-dock .feature-actions .button--danger{color:var(--danger)}
-.direct-call-dock .feature-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.direct-call-dock { position: fixed; right: 20px; bottom: 20px; z-index: 29; width: min(360px, calc(100vw - 40px)); max-height: min(680px, calc(100dvh - 40px)); padding: 16px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface-2); box-shadow: 0 16px 48px #0004; animation: call-dock-in .16s ease-out; }
+.direct-call-dock__header { display: flex; align-items: center; gap: 11px; }
+.direct-call-dock__symbol { display: grid; width: 38px; height: 38px; flex: none; place-items: center; border: 1px solid color-mix(in srgb, var(--lime) 20%, transparent); border-radius: 12px; color: var(--lime); background: var(--lime-soft); }
+.direct-call-dock__header > div { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.direct-call-dock__header b { font-size: var(--font-sm); }
+.direct-call-dock__header small { color: var(--muted); font-size: var(--font-2xs); line-height: 1.4; }
+.direct-call-dock__body[hidden] { display: none; }
+.direct-call-dock video { width: 100%; max-height: 35dvh; border-radius: 10px; background: #111; }
+.direct-call-dock__members { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.direct-call-dock__members > span { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 5px 8px 5px 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.direct-call-dock__members > span > span { display: flex; min-width: 0; align-items: center; gap: 5px; overflow-wrap: anywhere; font-size: var(--font-xs); }
+.direct-call-dock__members small { color: var(--muted); font-size: 10px; }
+.direct-call-dock__members > .direct-call-dock__waiting { border: 0; color: var(--muted); background: transparent; font-size: var(--font-2xs); }
+.direct-call-dock audio { display: none; }
+.direct-call-dock p { margin: 10px 0; overflow-wrap: anywhere; font-size: var(--font-2xs); line-height: 1.6; }
+.direct-call-dock__e2ee { display: flex; align-items: flex-start; gap: 7px; color: var(--muted); }
+.direct-call-dock__e2ee svg { flex: none; margin-top: 2px; color: var(--lime); }
+.direct-call-dock__controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.direct-call-dock__controls > button { display: grid; min-height: 44px; place-items: center; padding: 8px; border: 1px solid var(--line-strong); border-radius: 12px; color: var(--text); background: var(--surface-3); cursor: pointer; transition: background .15s, border-color .15s, transform .15s; }
+.direct-call-dock__controls > button:hover:not(:disabled) { border-color: var(--muted); }
+.direct-call-dock__controls > button:active:not(:disabled) { transform: scale(.95); }
+.direct-call-dock__controls > button.is-muted { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 25%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.direct-call-dock__controls > button.is-sharing { color: var(--lime); border-color: var(--lime); background: var(--lime-soft); }
+.direct-call-dock__controls > .direct-call-dock__leave { border-color: transparent; color: #fff; background: #c83e42; }
+.direct-call-dock__controls > .direct-call-dock__leave:hover:not(:disabled) { border-color: transparent; background: #ae3034; }
+.direct-call-dock .call-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--danger); }
+.direct-call-dock .call-error > button { min-height: 34px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface-3); cursor: pointer; }
+[data-theme="light"] .direct-call-dock__symbol, [data-theme="light"] .direct-call-dock__e2ee svg, [data-theme="light"] .direct-call-dock__controls > button.is-sharing { color: #4e6000; }
+@keyframes call-dock-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (max-width: 760px) { .direct-call-dock { right: 12px; bottom: calc(75px + env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 24px)); max-height: calc(100dvh - 100px - env(safe-area-inset-bottom)); padding: 14px; } }
+
+@media (prefers-reduced-motion: reduce) { .direct-call-dock { animation: none; } .direct-call-dock__controls > button { transition: none; } }
+
+.direct-call-dock.floating-window { display: flex; max-height: none; flex-direction: column; overflow: hidden; padding: 16px 16px 24px; }
+.direct-call-dock.floating-window .direct-call-dock__header, .direct-call-dock.floating-window .direct-call-dock__controls { flex: none; }
+.direct-call-dock.floating-window .direct-call-dock__header { gap: 8px; }
+.direct-call-dock.floating-window .direct-call-dock__body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.direct-call-dock.floating-window.is-collapsed { height: auto; }
+.direct-call-dock.floating-window .direct-call-dock__header .icon-button { flex: none; }

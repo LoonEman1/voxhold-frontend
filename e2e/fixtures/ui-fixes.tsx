@@ -8,6 +8,7 @@ import { AvatarProvider } from '../../src/components/AvatarProvider'
 import { CallControls } from '../../src/components/CallControls'
 import { RecordingsDialog } from '../../src/components/RecordingsDialog'
 import { ProfileDialog } from '../../src/components/WorkspaceDialogs'
+import type { SecurityActions } from '../../src/components/SecuritySettings'
 import { createApi } from '../../src/services/api'
 import { createFetchTransport } from '../../src/platform/transport'
 import type { ChannelRecording, Profile } from '../../src/domain/types'
@@ -18,6 +19,18 @@ const fixtureApi = { ...api, profile: { ...api.profile, avatar: async () => new 
 const now = Math.floor(Date.now() / 1000)
 const record: ChannelRecording = { id: 'fixture', server_id: 1, channel_id: 7, owner_user_id: 1, owner_username: 'Александр', status: 'uploading', mime_type: 'video/webm', size_bytes: 4600000, duration_ms: 38000, created_at: now, updated_at: now, expires_at: now + 86400 }
 const profile = { user_id: 1, username: 'Александр', about: '', country_code: '', created_at: now } as Profile
+let sessions = [
+  { id: 1, user_agent: '', client_ip: '', current: true, created_at: now - 86400, last_used_at: now, expires_at: now + 86400 },
+  { id: 2, user_agent: 'Firefox · Windows', client_ip: '192.0.2.12', current: false, created_at: now - 86400, last_used_at: null, expires_at: now + 86400 },
+  { id: 3, user_agent: `Очень длинное название устройства ${'безпробелов'.repeat(30)}`, client_ip: '2001:db8:1234:5678:abcd:ef12:3456:7890', current: false, created_at: now - 86400, last_used_at: now - 3600, expires_at: now + 86400 },
+]
+const security: SecurityActions = {
+  loadSessions: async () => [...sessions],
+  changePassword: async () => { sessions = sessions.filter((item) => item.current) },
+  revokeSession: async (id) => { sessions = sessions.filter((item) => item.id !== id) },
+  revokeOthers: async () => { sessions = sessions.filter((item) => item.current) },
+}
+const showSecurity = new URLSearchParams(location.search).has('security')
 function Fixture() {
   const [dialog, setDialog] = useState('')
   const [version, setVersion] = useState('fixture')
@@ -31,7 +44,7 @@ function Fixture() {
     </main>
     <Modal open={dialog === 'roles'} onClose={() => setDialog('')} title="Настройки ролей"><RoleManager api={api} token="fixture" serverId={1} members={[]}/></Modal>
     <RecordingsDialog open={dialog === 'records'} onClose={() => setDialog('')} records={[record]} locals={[{ key: 'scope:fixture', scope: 'scope', record, bytes: record.size_bytes, chunks: 1, duration: 38000, finished: true }]} serverId={1} progress={{}} voiceActive onDownload={async () => {}} onRemoveLocal={async () => {}} onRetry={() => {}} channels={[{ id: 7, name: 'первый-голосовой' } as never]}/>
-    <ProfileDialog open={dialog === 'profile'} profile={profile} hasAvatar={!!version} onClose={() => setDialog('')} onSubmit={async () => {}} onAvatar={async (file, crop) => { if (file) setVersion((await api.profile.uploadAvatar('fixture', file, crop)).etag); else { await api.profile.removeAvatar('fixture'); setVersion('') } }}/>
+    <ProfileDialog security={showSecurity ? security : undefined} onDeleteAccount={showSecurity ? async () => undefined : undefined} open={dialog === 'profile'} profile={profile} hasAvatar={!!version} onClose={() => setDialog('')} onSubmit={async () => {}} onAvatar={async (file, crop) => { if (file) setVersion((await api.profile.uploadAvatar('fixture', file, crop)).etag); else { await api.profile.removeAvatar('fixture'); setVersion('') } }}/>
   </AvatarProvider>
 }
 createRoot(document.getElementById('root')!).render(<ThemeProvider><Fixture/></ThemeProvider>)

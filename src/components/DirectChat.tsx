@@ -24,11 +24,18 @@ const problem = (error: unknown) => error instanceof Error ? error.message : 'Н
 export function DirectChat({ api, token, id, saved = false, currentUserId, revision, onRefresh, onLeave, onCreateGroup }: { api: VoxholdApi; token: string; id: number; saved?: boolean; currentUserId: number; revision: number; onRefresh: () => void; onLeave: () => void; onCreateGroup?: () => void }) {
   const community = useCommunity()
   const [menu, setMenu] = useState<{ message: DirectMessage; x: number; y: number } | null>(null), [reactionBusy, setReactionBusy] = useState<Record<string, boolean>>({})
-  const [search, setSearch] = useState(''), [muted, setMuted] = useState(false)
-  useEffect(() => { if (saved) return; const c = new AbortController(); void api.community.request<{ muted: boolean }>(token, `/conversations/${id}/notifications`, 'GET', undefined, c.signal).then((v) => { if (!c.signal.aborted) setMuted(v.muted) }).catch(() => undefined); return () => c.abort() }, [api,token,id,saved,revision])
+  const [searchInput, setSearchInput] = useState(''), [search, setSearch] = useState(''), [muted, setMuted] = useState(false), [mutePending, setMutePending] = useState(false)
+  const sendBusy = useRef(false), notificationBusy = useRef(false), notificationGeneration = useRef(0)
+  useEffect(() => { if (saved || notificationBusy.current) return; const c = new AbortController(), request = ++notificationGeneration.current; void api.community.request<{ muted: boolean }>(token, `/conversations/${id}/notifications`, 'GET', undefined, c.signal).then((v) => { if (!c.signal.aborted && request === notificationGeneration.current) setMuted(v.muted) }).catch(() => undefined); return () => c.abort() }, [api,token,id,saved,revision])
   const [loadError, setLoadError] = useState('')
   const deletedIds=useRef(new Set<number>())
-  const initialized = useRef(false), olderBusy = useRef(false), draftInput = useRef<HTMLTextAreaElement>(null)
+  const initialized = useRef(false), olderRequest = useRef<AbortController | null>(null), draftInput = useRef<HTMLTextAreaElement>(null)
+  const [olderPending, setOlderPending] = useState(false)
+  useEffect(() => {
+    if (searchInput.trim() === search) return
+    const timer = window.setTimeout(() => { initialized.current = false; setSearch(searchInput.trim()) }, 200)
+    return () => window.clearTimeout(timer)
+  }, [searchInput, search])
   const [draft, setDraft] = useDraft(`${api.storageScope}:${currentUserId}:conversation:${id}`)
   const [messages, setMessages] = useState<DirectMessage[]>([]), [error, setError] = useState(''), [pending, setPending] = useState(false), [more, setMore] = useState(false), [loading, setLoading] = useState(true)
   const retry = useRef<{ content: string; key: string } | null>(null), generation = useRef(0), visible = useRef<HTMLDivElement>(null)
@@ -41,6 +48,7 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
   const lastHistoryRevision = useRef(revision)
   useEffect(() => {
     let alive = true, running = false, dirty = false
+    olderRequest.current?.abort(); olderRequest.current = null; setOlderPending(false)
     let request: AbortController | null = null
     const refresh = async () => {
       dirty = true
@@ -64,7 +72,10 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
               }
               return [...reconciled.values()].filter((m) => !deletedIds.current.has(m.id)).sort((a,b) => a.id-b.id)
             })
-            setMore(page.has_more); initialized.current = true; setLoading(false); setLoadError('')
+            // A prepend may complete while this catch-up request is in flight.
+            // Its exhausted cursor belongs to the now-earlier history window.
+            if (oldest === undefined || (loadedMessages.current[0]?.id ?? oldest) >= oldest) setMore(page.has_more)
+            initialized.current = true; setLoading(false); setLoadError('')
           } catch (caught) {
             if (alive && !controller.signal.aborted && current === generation.current) { setLoading(false); setLoadError(problem(caught)) }
             break
@@ -74,7 +85,7 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
     }
     refreshHistory.current = () => { void refresh() }
     void refresh()
-    return () => { alive = false; request?.abort(); refreshHistory.current = () => undefined }
+    return () => { alive = false; request?.abort(); olderRequest.current?.abort(); refreshHistory.current = () => undefined }
   }, [api, token, id, search])
   // Do not cancel a multi-page catch-up on every incoming event. Finish the
   // current window, then coalesce those events into one more reconciliation.
@@ -89,8 +100,8 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
     readLatest.current = mark; mark(); window.addEventListener('focus', mark); document.addEventListener('visibilitychange', mark); return () => { window.removeEventListener('focus', mark); document.removeEventListener('visibilitychange', mark) }
   }, [api, token, id, messages])
   const send = async () => {
-    const content = draft.trim(); if ((!content && !upload.hasItems) || pending) return
-    setPending(true); setError('')
+    const content = draft.trim(); if ((!content && !upload.hasItems) || sendBusy.current) return
+    sendBusy.current = true; setPending(true); setError('')
     try {
       const attachmentIds = await upload.prepare()
       const fingerprint = JSON.stringify([content, attachmentIds])
@@ -100,33 +111,39 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
       setMessages((values) => [...values.filter((m) => m.id !== sent.id), sent].sort((a, b) => a.id - b.id))
       setDraft((v) => v.trim() === content ? '' : v); retry.current = null; upload.commit(attachmentIds); onRefresh()
       requestAnimationFrame(() => { const list = visible.current; if (list) list.scrollTop = list.scrollHeight })
-    } catch (caught) { setError(problem(caught)) } finally { upload.release(); setPending(false) }
+    } catch (caught) { setError(problem(caught)) } finally { upload.release(); sendBusy.current = false; setPending(false) }
   }
   useLayoutEffect(() => { const input = draftInput.current; if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(140, Math.max(37, input.scrollHeight))}px` } }, [draft])
   const loadOlder = async () => {
-    if (olderBusy.current || !messages.length) return
-    olderBusy.current = true
-    const expected = ++generation.current
+    if (olderRequest.current || !messages.length) return
+    const controller = new AbortController()
+    olderRequest.current = controller; setOlderPending(true)
     const list = visible.current
-    if (list) preserveDistance.current = list.scrollHeight - list.scrollTop
     try {
-      const page = await api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]!.id}${search ? `&q=${encodeURIComponent(search)}` : ''}`)
-      if (expected !== generation.current) { preserveDistance.current = null; return }
+      const page = await api.community.request<{ messages: DirectMessage[]; has_more: boolean }>(token, `/conversations/${id}/messages?before=${messages[0]!.id}${search ? `&q=${encodeURIComponent(search)}` : ''}`, 'GET', undefined, controller.signal)
+      if (controller.signal.aborted) return
+      if (list) preserveDistance.current = list.scrollHeight - list.scrollTop
       setMessages((v) => [...new Map([...page.messages, ...v].filter((m)=>!deletedIds.current.has(m.id)).map((m) => [m.id, m])).values()].sort((a, b) => a.id - b.id)); setMore(page.has_more)
-    } catch (caught) { preserveDistance.current = null; setError(problem(caught)) }
-    finally { olderBusy.current = false }
+    } catch (caught) { if (!controller.signal.aborted) { preserveDistance.current = null; setError(problem(caught)) } }
+    finally { if (olderRequest.current === controller) { olderRequest.current = null; setOlderPending(false) } }
   }
   const asMessage = (m: DirectMessage): Message => ({...m, channel_id:0, edited_at:null})
   const react = async (m: DirectMessage, emoji: string) => {
     const key = `${m.id}:${emoji}`; if (reactionBusy[key]) return; setReactionBusy((v) => ({...v,[key]:true}))
     try { const active=m.reactions?.some((r)=>r.emoji===emoji&&r.me); const result=await api.community.request<{reactions: Message['reactions']; revision:number}>(token,`/conversations/${id}/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`,active?'DELETE':'PUT');setMessages((v)=>v.map((value)=>value.id===m.id?{...value,reactions:result.reactions,revision:result.revision,reactions_revision:result.revision}:value));onRefresh() } catch(e){setError(problem(e))} finally{setReactionBusy((v)=>({...v,[key]:false}))}
   }
-  const toggleMute = async () => { try{const v=await api.community.request<{muted:boolean}>(token,`/conversations/${id}/notifications`,'PUT',{muted:!muted});setMuted(v.muted);onRefresh()}catch(e){setError(problem(e))} }
+  const toggleMute = async () => {
+    if (notificationBusy.current) return
+    notificationBusy.current = true; ++notificationGeneration.current; setMutePending(true); setError('')
+    try { const value = await api.community.request<{muted: boolean}>(token, `/conversations/${id}/notifications`, 'PUT', { muted: !muted }); setMuted(value.muted); onRefresh() }
+    catch (caught) { setError(problem(caught)) }
+    finally { notificationBusy.current = false; setMutePending(false) }
+  }
   return <section className="direct-chat" onPaste={upload.onPaste} onDrop={upload.onDrop} onDragOver={upload.onDragOver}>
-    <div className="direct-chat__tools">{onCreateGroup && <button type="button" onClick={onCreateGroup}><Icon name="people" size={16}/>Создать беседу</button>}{saved ? <label>Поиск в избранном <input type="search" value={search} onChange={(e)=>{setSearch(e.target.value);initialized.current=false}} placeholder="Текст, ссылка или заметка"/></label> : <><button onClick={()=>window.dispatchEvent(new CustomEvent('voxhold:start-conversation-call',{detail:id}))}>Позвонить / присоединиться</button><button aria-pressed={muted} onClick={()=>void toggleMute()}>{muted?'Включить уведомления':'Отключить уведомления'}</button></>}</div>
+    <div className="direct-chat__tools" role="toolbar" aria-label={saved ? 'Инструменты избранного' : 'Действия в разговоре'}>{saved ? <label className="direct-chat__search"><Icon name="search" size={18}/><input type="search" aria-label="Поиск в избранном" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Найти заметку, ссылку или файл"/></label> : <><button type="button" className="direct-chat__call" aria-label="Позвонить / присоединиться" title="Начать звонок или присоединиться к участникам" onClick={() => window.dispatchEvent(new CustomEvent('voxhold:start-conversation-call', { detail: id }))}><Icon name="phone" size={18}/><span>Позвонить</span></button>{onCreateGroup && <button type="button" onClick={onCreateGroup}><Icon name="userPlus" size={18}/><span>Создать беседу</span></button>}<button type="button" className="direct-chat__notification" aria-label={muted ? 'Включить уведомления' : 'Отключить уведомления'} title={muted ? 'Включить уведомления' : 'Отключить уведомления'} aria-pressed={muted} disabled={mutePending} onClick={() => void toggleMute()}>{mutePending ? <span className="spinner"/> : <Icon name={muted ? 'bellOff' : 'bell'} size={18}/>}<span>{muted ? 'Без звука' : 'Уведомления'}</span></button></>}</div>
     <div className="direct-chat__messages messages" ref={visible} onScroll={() => { const list = visible.current; followingBottom.current = !!list && list.scrollHeight - list.scrollTop - list.clientHeight < 60; readLatest.current() }} aria-live="polite">
-      {!messages.length && !error && !loadError && <PersonalEmpty icon="message" title={loading ? 'Загружаем сообщения…' : saved ? 'Сохраните важное' : 'Начните разговор'}>{saved ? 'Перешлите сюда сообщение или добавьте свою заметку, ссылку или файл.' : 'Сообщения видны только участникам этого разговора.'}</PersonalEmpty>}
-      {more && <button className="button button--ghost" onClick={() => void loadOlder()}>Раньше</button>}
+      {!messages.length && !error && !loadError && <PersonalEmpty icon={saved ? 'bookmark' : 'message'} title={loading ? 'Загружаем сообщения…' : saved ? search ? 'Ничего не найдено' : 'Сохраните важное' : 'Начните разговор'}>{saved ? search ? 'Попробуйте другую фразу или очистите поиск.' : 'Ваше личное место для заметок, ссылок и файлов. Перешлите сообщение сюда или напишите себе.' : 'Сообщения видны только участникам этого разговора.'}</PersonalEmpty>}
+      {more && <button className="button button--ghost" disabled={olderPending} onClick={() => void loadOlder()}>{olderPending ? <><span className="spinner"/>Загружаем историю…</> : 'Раньше'}</button>}
       {messages.map((m, index) => {
         const previous = messages[index - 1], sameDay = !!previous && new Date(previous.created_at * 1000).toDateString() === new Date(m.created_at * 1000).toDateString()
         const grouped = sameDay && previous.author.user_id === m.author.user_id && m.created_at - previous.created_at < 300
@@ -143,14 +160,14 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
               {saved && <SavedNote key={`${m.id}:${m.note}`} value={m.note??''} onSave={async(note)=>{await api.community.request(token,`/conversations/${id}/messages/${m.id}/note`,'PATCH',{note});setMessages((v)=>v.map((value)=>value.id===m.id?{...value,note}:value));onRefresh()}}/>}
             </div>
             {grouped && <time className="message__hover-time" dateTime={new Date(m.created_at * 1000).toISOString()}>{formatTime(m.created_at)}</time>}
-            <div className="message__actions"><button aria-label="Действия с сообщением" onClick={(e)=>setMenu({message:m,x:e.clientX,y:e.clientY})}><Icon name="more" size={14}/></button>{!mine && <button aria-label={`Заблокировать ${m.author.username}`} title={`Заблокировать ${m.author.username}`} onClick={() => void api.community.request(token, `/me/blocks/${m.author.user_id}`, 'PUT').then(onRefresh).catch((caught) => setError(problem(caught)))}><Icon name="lock" size={14}/></button>}</div>
+            <div className="message__actions"><button type="button" aria-label="Действия с сообщением" title="Действия с сообщением" onClick={(e)=>setMenu({message:m,x:e.clientX,y:e.clientY})}><Icon name="more" size={16}/></button></div>
           </article>
         </Fragment>
       })}
     </div>
     {upload.control}
     <ComposerTools api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft((current)=>current===draft?'':current);onRefresh()}}/>
-    {menu && <MessageContextMenu message={asMessage(messages.find((m)=>m.id===menu.message.id)??menu.message)} x={menu.x} y={menu.y} canEdit={false} canDelete={saved} canPin={false} canReply={false} pinned={false} pending={{}} onClose={()=>setMenu(null)} onReact={(emoji)=>void react(messages.find((m)=>m.id===menu.message.id)??menu.message,emoji)} onReply={()=>undefined} onEdit={()=>undefined} onPin={()=>undefined} onCopy={()=>{void navigator.clipboard.writeText(menu.message.content)}} onForward={()=>openForward({kind:'conversation',id:menu.message.id})} onSave={()=>saveFavorite({kind:'conversation',id:menu.message.id})} onDelete={()=>{const mid=menu.message.id;void api.community.request(token,`/conversations/${id}/messages/${mid}`,'DELETE').then(()=>{deletedIds.current.add(mid);setMessages((v)=>v.filter((m)=>m.id!==mid));onRefresh()}).catch((e)=>setError(problem(e)))}}/>}
+    {menu && <MessageContextMenu message={asMessage(messages.find((m)=>m.id===menu.message.id)??menu.message)} x={menu.x} y={menu.y} canEdit={false} canDelete={saved} canPin={false} canReply={false} pinned={false} pending={{}} onClose={()=>setMenu(null)} onReact={(emoji)=>void react(messages.find((m)=>m.id===menu.message.id)??menu.message,emoji)} onReply={()=>undefined} onEdit={()=>undefined} onPin={()=>undefined} onCopy={()=>{void navigator.clipboard.writeText(menu.message.content)}} onForward={()=>openForward({kind:'conversation',id:menu.message.id})} onSave={saved ? undefined : () => saveFavorite({kind:'conversation',id:menu.message.id})} onBlock={menu.message.author.user_id !== currentUserId ? () => { void api.community.request(token, `/me/blocks/${menu.message.author.user_id}`, 'PUT').then(onRefresh).catch((caught) => setError(problem(caught))) } : undefined} onDelete={()=>{const mid=menu.message.id;void api.community.request(token,`/conversations/${id}/messages/${mid}`,'DELETE').then(()=>{deletedIds.current.add(mid);setMessages((v)=>v.filter((m)=>m.id!==mid));onRefresh()}).catch((e)=>setError(problem(e)))}}/>}
     <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
       <label className="sr-only" htmlFor={`direct-draft-${id}`}>Сообщение в беседу</label>
       <textarea ref={draftInput} id={`direct-draft-${id}`} rows={1} value={draft} maxLength={5120} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} placeholder={saved ? "Добавьте заметку, ссылку или файл…" : "Напишите сообщение…"}/>

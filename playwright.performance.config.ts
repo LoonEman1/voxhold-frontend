@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
+const baseURL = `http://127.0.0.1:${process.env.VOXHOLD_PERFORMANCE_PORT || '4189'}`
+
 export default defineConfig({
   testDir: './e2e',
   testMatch: ['client-performance.spec.ts', 'client-reliability.spec.ts', 'media-recovery.spec.ts'],
@@ -7,7 +9,7 @@ export default defineConfig({
   workers: 1,
   outputDir: 'node_modules/.cache/playwright-performance',
   use: {
-    baseURL: 'http://127.0.0.1:4189',
+    baseURL,
     headless: true,
     viewport: { width: 1000, height: 900 },
     permissions: ['microphone'],
@@ -15,8 +17,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `"${process.execPath}" node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4189 --strictPort`,
-    url: 'http://127.0.0.1:4189/e2e/fixtures/performance.html',
+    command: `"${process.execPath}" node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${new URL(baseURL).port} --strictPort`,
+    url: `${baseURL}/e2e/fixtures/performance.html`,
     reuseExistingServer: false,
   },
 })
