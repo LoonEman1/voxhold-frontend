@@ -113,6 +113,13 @@ npm run dev
 
 Validation:
 
+Type checking and builds use the native TypeScript 7 compiler (`tsc`), installed
+as `@typescript/native`. The `typescript` dependency is an npm alias for
+`@typescript/typescript6`, which provides the compatible compiler API required
+by ESLint and a separate `tsc6` command. Keep these aliases when updating
+dependencies: TypeScript 7.0 does not expose that API. This speeds up development
+checks; Vite still produces the browser JavaScript bundle.
+
 ```bash
 npm run typecheck
 npm run lint
