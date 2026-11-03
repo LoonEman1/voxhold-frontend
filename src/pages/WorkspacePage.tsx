@@ -1473,7 +1473,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     const startedAt = performance.now()
     const encryptionPromise = channel.e2ee_required ? prepareVoiceE2EE(channel.id, startedAt) : Promise.resolve(null)
     const preparation = voicePreparationRef.current
-    let encryption: Awaited<ReturnType<typeof prepareVoiceE2EE>> | null = null
+    let encryption: Awaited<ReturnType<typeof prepareVoiceE2EE>> | null
     let input: BrowserVoiceInput | null
     let iceConfiguration: RTCConfiguration
     let voiceRuntime: typeof import('../services/voice')
@@ -2530,7 +2530,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       const event = await api.messages.setReaction(token, selectedServerId, selectedChannelId, messageId, emoji, active)
       historyStore.reactions(event)
       if (event.channel_id === activeChannelRef.current) setPinnedMessages((current) => current.map((pin) => pin.message.id === event.message_id ? { ...pin, message: withReactions(pin.message, event) } : pin))
-    } catch (caught) { throw new Error(humanError(caught)) }
+    } catch (caught) { throw new Error(humanError(caught), { cause: caught }) }
   }, [api, token, selectedServerId, selectedChannelId, historyStore])
   const loadMessageReactors = useCallback<ReactorLoader>((messageId, emoji, signal, after) => {
     if (!token || !selectedServerId || !selectedChannelId) return Promise.reject(new Error('Канал не выбран'))
@@ -2555,7 +2555,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       historyStore.receive(updated)
       setPinnedMessages((current) => current.map((pin) => pin.message.id === updated.id ? { ...pin, message: newerMessage(pin.message, updated) } : pin))
     } catch (error) {
-      throw new Error(humanError(error))
+      throw new Error(humanError(error), { cause: error })
     }
   }
 
@@ -2566,7 +2566,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       historyStore.remove(selectedChannelId, messageId)
       setPinnedMessages((current) => current.filter((pin) => pin.message.id !== messageId))
     } catch (error) {
-      throw new Error(humanError(error))
+      throw new Error(humanError(error), { cause: error })
     }
   }
 
@@ -2581,7 +2581,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         setPinnedMessages((current) => upsertPinnedMessage(current, pin))
       }
     } catch (error) {
-      throw new Error(humanError(error))
+      throw new Error(humanError(error), { cause: error })
     }
   }
 
