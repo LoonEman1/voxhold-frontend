@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   applyStreamPreset,
   matchingStreamPreset,
@@ -6,7 +6,10 @@ import {
   STREAM_FRAME_RATES,
   STREAM_PRESETS,
   STREAM_RESOLUTIONS,
-  STREAM_VIDEO_BITRATES,
+  MIN_STREAM_VIDEO_BITRATE_KBPS,
+  MAX_STREAM_VIDEO_BITRATE_KBPS,
+  STREAM_VIDEO_BITRATE_STEP_KBPS,
+  normalizeStreamVideoBitrate,
   type StreamPreferences,
 } from '../services/streamSettings'
 import { detectHDRCapabilities, type HDRCapabilities } from '../services/hdrCapabilities'
@@ -21,6 +24,25 @@ interface StreamSettingsDialogProps {
   onChange: (value: StreamPreferences) => void
   onClose: () => void
   onStart: () => void
+}
+
+function VideoBitrateField({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value / 1000))
+  const input = useRef<HTMLInputElement>(null), hint = useId()
+  useEffect(() => { if (document.activeElement !== input.current) setDraft(String(value / 1000)) }, [value])
+  const commit = () => {
+    const parsed = input.current?.valueAsNumber
+    const next = typeof parsed === 'number' && Number.isFinite(parsed) ? normalizeStreamVideoBitrate(parsed * 1000) : value
+    setDraft(String(next / 1000)); onChange(next)
+  }
+  return <label className="stream-bitrate-field"><span>Видео</span><div className="stream-bitrate-input">
+    <input ref={input} type="number" inputMode="decimal" min={MIN_STREAM_VIDEO_BITRATE_KBPS / 1000} max={MAX_STREAM_VIDEO_BITRATE_KBPS / 1000} step={STREAM_VIDEO_BITRATE_STEP_KBPS / 1000} value={draft} disabled={disabled} aria-label="Битрейт видео, Мбит/с" aria-describedby={hint} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit() } }} onChange={(event) => {
+      const raw = event.target.value, parsed = event.target.valueAsNumber
+      if (!Number.isFinite(parsed) || parsed * 1000 < MIN_STREAM_VIDEO_BITRATE_KBPS) { setDraft(raw); return }
+      const next = normalizeStreamVideoBitrate(parsed * 1000)
+      setDraft(Math.abs(next / 1000 - parsed) > 1e-9 ? String(next / 1000) : raw)
+      onChange(next)
+    }}/><span aria-hidden="true">Мбит/с</span></div><small id={hint}>0,5–16 Мбит/с · шаг 0,1</small></label>
 }
 
 export function StreamSettingsDialog({ open, busy, preferences, onChange, onClose, onStart }: StreamSettingsDialogProps) {
@@ -58,7 +80,7 @@ export function StreamSettingsDialog({ open, busy, preferences, onChange, onClos
       <label><span>Содержимое</span><select value={preferences.content} onChange={(event) => patch('content', event.target.value as StreamPreferences['content'])}><option value="detail">Текст и интерфейс (чёткость)</option><option value="motion">Игры и видео (плавность)</option></select></label>
       <label><span>Разрешение</span><select value={preferences.resolution} onChange={(event) => patch('resolution', event.target.value as StreamPreferences['resolution'])}>{STREAM_RESOLUTIONS.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
       <label><span>Кадры</span><select value={preferences.frameRate} onChange={(event) => patch('frameRate', Number(event.target.value) as StreamPreferences['frameRate'])}>{STREAM_FRAME_RATES.map((fps) => <option value={fps} key={fps}>{fps} FPS</option>)}</select></label>
-      <label><span>Видео</span><select value={preferences.videoBitrateKbps} onChange={(event) => patch('videoBitrateKbps', Number(event.target.value) as StreamPreferences['videoBitrateKbps'])}>{STREAM_VIDEO_BITRATES.map((rate) => <option value={rate} key={rate}>{rate >= 1000 ? `${rate / 1000} Мбит/с` : `${rate} Кбит/с`}</option>)}</select></label>
+      <VideoBitrateField value={preferences.videoBitrateKbps} disabled={busy} onChange={(value) => patch('videoBitrateKbps', value)}/>
       <label><span>Звук трансляции</span><select value={preferences.audioBitrateKbps} disabled={!preferences.includeAudio} onChange={(event) => patch('audioBitrateKbps', Number(event.target.value) as StreamPreferences['audioBitrateKbps'])}>{STREAM_AUDIO_BITRATES.map((rate) => <option value={rate} key={rate}>{rate} Кбит/с</option>)}</select></label>
       <label className="stream-audio-toggle"><input type="checkbox" checked={preferences.includeAudio} onChange={(event) => patch('includeAudio', event.target.checked)}/><span>Передавать системный звук</span></label>
     </div>

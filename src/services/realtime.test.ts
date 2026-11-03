@@ -338,6 +338,33 @@ describe('RealtimeClient', () => {
     client.close()
   })
 
+  it('batches full-room keys and ACKs only when the server advertises support', async () => {
+    vi.useFakeTimers()
+    try {
+      const client = new RealtimeClient({ token: 'secret', onMessage: vi.fn(), onStateChange: vi.fn(), onUnauthorized: vi.fn() })
+      client.connect()
+      const socket = FakeWebSocket.latest!
+      socket.open(); socket.serverEvent('ready', { user_id: 1, protocol_version: 6, e2ee_batch: true })
+      const before = socket.sent.length
+      for (let i = 0; i < 62; i++) client.sendE2EEKey(8, 2 + i % 31, 'b'.repeat(32), `key-${i}`)
+      await vi.advanceTimersByTimeAsync(10)
+      const batches = socket.sent.slice(before).map((value) => JSON.parse(value))
+      expect(batches.map((batch) => batch.type)).toEqual(['e2ee.keys', 'e2ee.keys'])
+      expect(batches.map((batch) => batch.data.keys.length)).toEqual([32, 30])
+      expect(batches.flatMap((batch) => batch.data.keys).map((key) => key.payload)).toEqual(Array.from({ length: 62 }, (_, i) => `key-${i}`))
+      expect(batches.every((batch) => batch.data.channel_id === 8)).toBe(true)
+      client.sendE2EEKey(8, 2, 'b'.repeat(32), 'cancel-on-leave')
+      client.leaveVoice()
+      await vi.advanceTimersByTimeAsync(10)
+      expect(socket.sent.at(-1)).toContain('voice.leave')
+      client.sendE2EEKey(8, 2, 'b'.repeat(32), 'cancel-on-close')
+      client.close()
+      const closedCount = socket.sent.length
+      await vi.advanceTimersByTimeAsync(10)
+      expect(socket.sent).toHaveLength(closedCount)
+    } finally { vi.useRealTimers() }
+  })
+
   it('routes channel activity and voice key relays, and sends the device with voice.join', () => {
     const onChannelActivity = vi.fn()
     const onE2EEKey = vi.fn()

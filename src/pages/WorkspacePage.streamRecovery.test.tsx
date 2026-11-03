@@ -9,7 +9,7 @@ import { WorkspacePage } from './WorkspacePage'
 const fixture = vi.hoisted(() => ({
   callbacks: {} as Record<string, (...args: never[]) => unknown>,
   viewers: [] as { onRequestRewatch: () => void; onICECandidate: (candidate: object) => void; close: () => void }[],
-  watch: vi.fn(), leave: vi.fn(), notify: vi.fn(), expire: vi.fn(),
+  watch: vi.fn(), leave: vi.fn(), joinVoice: vi.fn(), notify: vi.fn(), expire: vi.fn(),
   auth: { user: { id: 1, username: 'viewer', created_at: 1 }, token: 'fixture' },
 }))
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ ...fixture.auth, expire: fixture.expire }) }))
@@ -21,6 +21,7 @@ vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () =>
   <output data-testid="voice-state">{props.connectionStatus}</output><output data-testid="stream-state">{props.streamStatus}</output><output data-testid="stream-error">{props.streamError}</output>
 </> }))
 vi.mock('../services/voiceInput', () => ({ BrowserVoiceInput: class { isHealthy = true; close() {} } }))
+vi.mock('../services/voiceEnvironment', async (original) => ({ ...await original<object>(), voiceSupported: () => true }))
 vi.mock('../services/voice', async (original) => ({ ...await original<object>(), BrowserVoiceSession: class {
   static supported() { return true }
   constructor(private options: { onConnectionStateChange: (state: string) => void }) {}
@@ -36,7 +37,7 @@ vi.mock('../services/realtime', () => ({ RealtimeClient: class {
   constructor(options: typeof fixture.callbacks) { fixture.callbacks = options }
   connect() { (fixture.callbacks.onStateChange as unknown as (state: string) => void)('online') }
   close() {} subscribe() {} unsubscribe() {}
-  joinVoice() { return 'voice-join' }
+  joinVoice() { fixture.joinVoice(); return 'voice-join' }
   leaveVoice() { return 'voice-leave' }
   watchStream() { return fixture.watch() }
   leaveStream() { return fixture.leave() }
@@ -59,6 +60,7 @@ const api = createApi({ request: async <T,>(request: { path: string }) => {
 
 beforeEach(() => {
   localStorage.clear(); fixture.viewers.length = 0
+  fixture.joinVoice.mockClear()
   fixture.watch.mockReset().mockReturnValueOnce('watch-1').mockReturnValue('watch-2')
   fixture.leave.mockReset().mockReturnValue('rewatch-leave')
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
@@ -75,6 +77,14 @@ async function startViewer() {
   fireEvent.click(screen.getByRole('button', { name: 'Watch fixture' }))
   await waitFor(() => expect(fixture.watch).toHaveBeenCalledOnce())
 }
+
+it.each(['voice e2ee device was revoked', 'voice permission was revoked'])('does not automatically register/rejoin after %s', async (reason) => {
+  await startViewer()
+  expect(fixture.joinVoice).toHaveBeenCalledOnce()
+  act(() => emit('onVoiceWebRTCClosed', { reason }))
+  await waitFor(() => expect(screen.getByTestId('voice-state').textContent).toBe('idle'))
+  expect(fixture.joinVoice).toHaveBeenCalledOnce()
+})
 
 it.each(['acknowledged', 'already closed'] as const)('recreates the viewer after a leave that is %s', async (response) => {
   await startViewer()

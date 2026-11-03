@@ -9,6 +9,9 @@ import { pictureInPictureAvailable, togglePictureInPicture } from '../lib/pictur
 import { StreamVolumeControl } from './StreamVolumeControl'
 import { Icon } from './Icon'
 import { StreamQualitySummary } from './StreamQualitySummary'
+import { useFloatingWindow } from '../hooks/useFloatingWindow'
+import { useStreamPlaybackGain } from '../hooks/useStreamPlaybackGain'
+import { MAX_STREAM_VOLUME } from '../services/streamSettings'
 
 interface PersistentStreamPlayerProps {
   onPlaybackRecovery?: () => void
@@ -45,12 +48,14 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
     return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }) }
   }, [mode])
   const [uiHidden, setUIHidden] = useState(false)
+  const floating = useFloatingWindow({ storageKey: 'voxhold.window.channel-stream.v1', width: 780, height: 500, minWidth: 280, minHeight: 300, enabled: mode === 'expanded' && !uiHidden, elementRef: playerRef })
   const [idle, setIdle] = useState(false)
   const controlsHoveredRef = useRef(false)
   const isPublisher = role === 'publisher'
   const duration = useLiveDuration(stream?.started_at_ms)
   const canPictureInPicture = !isPublisher && pictureInPictureAvailable()
   const wantMuted = isPublisher || (preferences.playbackMuted || preferences.playbackVolume === 0)
+  const gain = useStreamPlaybackGain(media, preferences.playbackVolume, isPublisher)
   const { videoRef, state: playbackState, muted, attach, enableAudio } = useMediaPlayback({
     role,
     muted: wantMuted,
@@ -60,15 +65,15 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   })
 
   useEffect(() => {
-    attach(media)
+    attach(gain.media)
     return () => attach(null)
-  }, [media, attach])
+  }, [gain.media, attach])
 
   // Volume follows preferences without fighting the playback hook.
   useEffect(() => {
     const video = videoRef.current
-    if (video) video.volume = isPublisher ? 0 : preferences.playbackVolume / 100
-  }, [isPublisher, preferences.playbackVolume, videoRef])
+    if (video) video.volume = gain.elementVolume
+  }, [gain.elementVolume, videoRef])
 
   const enterCinemaMode = useCallback(async () => {
     setUIHidden(true)
@@ -83,12 +88,14 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
 
   const restoreUI = useCallback(async () => {
     setUIHidden(false)
+    playerRef.current?.focus({ preventScroll: true })
     if (document.fullscreenElement !== playerRef.current || !document.exitFullscreen) return
     try {
       await document.exitFullscreen()
     } catch {
       // The browser may already be leaving fullscreen after Escape.
     }
+    playerRef.current?.focus({ preventScroll: true })
   }, [])
 
   // "Полный экран" in the room panel mounts the player and goes fullscreen in
@@ -101,7 +108,8 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   useEffect(() => {
     if (mode !== 'expanded') return
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Tab') {
+      if (event.defaultPrevented || !uiHidden && !playerRef.current?.contains(document.activeElement)) return
+      if (event.key === 'Tab' && uiHidden) {
         const buttons = [...(playerRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])].filter((element) => element.getClientRects().length > 0)
         const first = buttons[0], last = buttons.at(-1)
         if (event.shiftKey && (document.activeElement === first || document.activeElement === playerRef.current)) { event.preventDefault(); last?.focus() }
@@ -117,7 +125,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         return
       }
       if (event.key !== 'Escape') return
-      if (uiHidden) setUIHidden(false)
+      if (uiHidden) void restoreUI()
       else onCollapse()
     }
     window.addEventListener('keydown', handleKey)
@@ -131,7 +139,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   useEffect(() => {
     if (mode !== 'expanded') return
     const syncFullscreenState = () => {
-      if (uiHidden && document.fullscreenElement !== playerRef.current) setUIHidden(false)
+      if (uiHidden && document.fullscreenElement !== playerRef.current) { setUIHidden(false); playerRef.current?.focus({ preventScroll: true }) }
     }
     document.addEventListener('fullscreenchange', syncFullscreenState)
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
@@ -165,7 +173,8 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   }, [uiHidden])
 
   const updateVolume = (value: number) => {
-    const volume = Math.max(0, Math.min(100, value))
+    gain.resume()
+    const volume = Math.max(0, Math.min(MAX_STREAM_VOLUME, value))
     if (isPublisher) {
       if (volume > 0) onPreferencesChange({ ...preferences, publishVolume: volume })
       if ((volume === 0) !== audioMuted) onToggleAudio?.()
@@ -173,7 +182,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
       onPreferencesChange({ ...preferences, playbackVolume: volume || preferences.playbackVolume, playbackMuted: volume === 0 })
     }
   }
-  const togglePlaybackAudio = () => onPreferencesChange({ ...preferences, playbackVolume: preferences.playbackVolume || 100, playbackMuted: !(preferences.playbackMuted || preferences.playbackVolume === 0) })
+  const togglePlaybackAudio = () => { gain.resume(); onPreferencesChange({ ...preferences, playbackVolume: preferences.playbackVolume || 100, playbackMuted: !(preferences.playbackMuted || preferences.playbackVolume === 0) }) }
   const volumeControl = (compact = false) => <StreamVolumeControl
     compact={compact} publisher={!!isPublisher}
     volume={isPublisher ? preferences.publishVolume : preferences.playbackVolume}
@@ -187,7 +196,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
       ? 'Прямой эфир'
       : status === 'connected' ? 'Ожидание первого кадра…' : 'Подключение…'
   const leaveLabel = isPublisher ? 'Завершить трансляцию' : 'Перестать смотреть'
-  const audioBlockedOverlay = !isPublisher && playbackState === 'audio_blocked'
+  const audioBlockedOverlay = !isPublisher && (playbackState === 'audio_blocked' || gain.blocked)
   const rangeLabel = quality?.dynamicRange === 'hdr10' ? 'HDR10' : quality?.dynamicRange === 'hlg' ? 'HLG' : quality?.dynamicRange === 'sdr' ? 'SDR' : ''
 
   const publisherAudioControl = isPublisher && stream?.has_audio && onToggleAudio && volumeControl(mode === 'mini')
@@ -210,14 +219,15 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
     </aside>
   }
 
-  return <section ref={playerRef} tabIndex={-1} className={`stream-expanded-player ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role="dialog" aria-modal="true" aria-label={`Трансляция в канале ${channelName}`}>
+  return <section ref={playerRef} style={floating.style} tabIndex={-1} className={`stream-expanded-player floating-window ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role="dialog" aria-modal={uiHidden || undefined} aria-label={`Трансляция в канале ${channelName}`}>
     <header>
+      <button type="button" className="floating-window__move" aria-label="Переместить окно трансляции" title="Переместить окно · стрелки или перетаскивание" onPointerDown={floating.beginMove} onKeyDown={floating.moveKey}><Icon name="grip" size={18}/></button>
       <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА{duration && ` · ${duration}`}</span><h2>{channelName}</h2></div>
       <div className="stream-expanded-player__meta">
         {stream && <><span className="stream-mode">{stream.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></>}
-        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Смотреть поверх других окон"><Icon name="pip"/><span>Картинка в картинке</span></button>}
-        <button type="button" onClick={() => void enterCinemaMode()} title="Открыть настоящий полноэкранный режим без интерфейса"><Icon name="maximize"/><span>Полный экран</span></button>
-        <button type="button" onClick={onCollapse} title="Свернуть трансляцию"><Icon name="minimize"/><span>Свернуть</span></button>
+        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} aria-label="Картинка в картинке" title="Смотреть поверх других окон"><Icon name="pip"/><span>Картинка в картинке</span></button>}
+        <button type="button" onClick={() => void enterCinemaMode()} aria-label="Полный экран" title="Открыть настоящий полноэкранный режим без интерфейса"><Icon name="maximize"/><span>Полный экран</span></button>
+        <button type="button" onClick={onCollapse} aria-label="Свернуть трансляцию" title="Свернуть трансляцию"><Icon name="minimize"/><span>Свернуть</span></button>
       </div>
     </header>
     <div className="stream-expanded-player__video" onDoubleClick={() => { if (uiHidden) void restoreUI(); else void enterCinemaMode() }}>
@@ -225,7 +235,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
       {audioBlockedOverlay && (
         <div className="stream-audio-blocked-overlay">
           <span>Трансляция идёт без звука: браузер заблокировал автовоспроизведение</span>
-          <button className="button button--primary" type="button" onClick={enableAudio}><Icon name="volume"/>Включить звук</button>
+          <button className="button button--primary" type="button" onClick={() => { gain.resume(); enableAudio() }}><Icon name="volume"/>Включить звук</button>
         </div>
       )}
       {!audioBlockedOverlay && playbackState === 'stalled' && (
@@ -245,6 +255,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
     </div>
     {participants && <div className="stream-focused-participants" aria-label="Участники звонка">{participants}</div>}
     <footer>
+      {gain.error && <span role="alert">{gain.error}</span>}
       {callControls}
       {publisherAudioControl}
       <StreamQualitySummary stats={quality}/>
@@ -254,5 +265,6 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         <button className="button button--danger" type="button" onClick={onLeave}>{leaveLabel}</button>
       </div>
     </footer>
+    {!uiHidden && <button type="button" className="floating-window__resize" aria-label="Изменить размер окна трансляции" title="Изменить размер · стрелки или перетаскивание" onPointerDown={floating.beginResize} onKeyDown={floating.resizeKey}><Icon name="more" size={17}/></button>}
   </section>
 }

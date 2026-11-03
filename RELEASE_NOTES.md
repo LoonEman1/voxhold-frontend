@@ -1,3 +1,56 @@
+# Voxhold Frontend 2.6.3
+
+Патч интерфейса и надёжности от 2 ноября 2026 года, подготовлен поверх dev 2.6.2.
+Порядок обновления: backend 2.6.3 → frontend 2.6.3. Новых миграций нет.
+
+- Постоянная личная навигация, учитываемая сеткой; отдельная нижняя панель на телефонах.
+- Обновлённые иконки, избранное, состояния действий и отзывчивая вёрстка обеих тем.
+- Вкладки профиля, оформления и безопасности; карточки сессий, проверка пароля и повторная загрузка.
+- Перетаскиваемые окна звонка и трансляции с участниками, показом экрана и сохранением размеров.
+- Ручной видеобитрейт в Мбит/с с шагом 0,1 и максимумом 16; пользовательское значение сохраняется.
+- Громкость принимаемой трансляции и исходящего звука экрана до 200%; читаемый регулятор.
+- Исправлены гонки поиска и истории, устаревшие ответы диалогов и списков, пересчёт очистки и открепление сообщений.
+- Сохранены ленивые модули и бюджет стартового JS. Новых зависимостей нет.
+
+Persistent navigation, accessible profile/security tabs, floating call/stream
+windows and 200% stream audio. Fixes stale async UI updates and preserves media
+sessions while windows move or resize. The matching backend fixes Firefox AV1
+negotiation. See [behavior](docs/ui-refresh.md) and [detailed review](docs/ui-audit-2.6.3.md).
+
+# Voxhold Frontend 2.6.2
+
+Общий патч проекта от 2 ноября 2026 года. Сначала backend 2.6.2, затем frontend.
+Новых миграций поверх 000040 нет.
+
+- Личные диалоги и группы в одном списке; создание беседы из ЛС через выбор людей.
+- Отложенные сообщения внутри своего чата; журнал администрации с именами и причинами.
+- Workspace JS уменьшен примерно с 300 до 207 kB raw, статический граф — с 651 до 597 kB.
+- Пакетирование activity и ключей/ACK; старые ответы счётчиков не возвращают прочитанные бейджи.
+- Исправлено удаление worker-ключей; ошибки E2EE останавливают вход; отзыв прав/устройства завершает сессию.
+
+- Быстрый вход в E2EE-каналы: немедленная раздача первого ключа после
+  подтверждения входа, подтверждения установки ключей в worker, предварительная
+  подготовка и параллельный запуск с микрофоном/ICE.
+- Новый ключ активируется по аутентифицированным ACK; ожидание старых клиентов
+  и недоставленных подтверждений ограничено одной секундой.
+- Fast E2EE onboarding retains the v2 key/frame formats and existing backend
+  relay. Browser regressions measure the first decrypted and audible frame with
+  real key distribution. See [design, measurements and compatibility](docs/e2ee-fast-join.md).
+
+# Voxhold Frontend 2.6.1
+
+Патч от 2 ноября 2026 года. Устранён шум вместо голоса при включённом E2EE:
+расшифровщик подключается до первого SDP-согласования, а идентификатор приёмника
+сохраняется при назначении mid и смене участника. При отсутствии или неверном
+ключе аудиокадры отбрасываются без воспроизведения шифротекста.
+
+Fixes encrypted voice playback after an initially receive-only SFU m-line starts
+sending. Receivers attach before negotiation and keep stable worker identities
+across SDP changes. Real browser tests verify a decoded 440 Hz tone and silence
+with missing or incorrect keys for both script transforms and insertable streams.
+Compatible with backend 2.6.0 and schema 000040; no backend or deploy upgrade is
+required for this frontend-only patch.
+
 # Voxhold Frontend 2.6.0
 
 Релиз от 2 ноября 2026 года. Нужен backend **2.6.0** (миграции 000034–000040).

@@ -5,10 +5,10 @@ import { QUICK_REACTIONS, REACTION_CATALOG, reactionLabel, recentReactions, type
 import { Icon, type IconName } from './Icon'
 
 interface Action { key: string; label: string; icon: IconName; danger?: boolean; run: () => void }
-export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onDiscuss, onReply, onEdit, onPin, onCopy, onForward, onSave, onDelete }: {
+export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded = false, canEdit, canDelete, canPin, canReply = true, pinned, pending, onClose, onReact, onDiscuss, onReply, onEdit, onPin, onCopy, onForward, onSave, onDelete, onBlock }: {
   message: Message; x: number; y: number; expanded?: boolean; canEdit: boolean; canDelete: boolean; canPin: boolean; canReply?: boolean; pinned: boolean
   pending: Readonly<Record<string, boolean>>; onClose: () => void; onReact?: (emoji: string) => void
-  onDiscuss?: () => void; onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onSave?: () => void; onDelete: () => void
+  onDiscuss?: () => void; onReply: () => void; onEdit: () => void; onPin: () => void; onCopy: () => void; onForward?: () => void; onSave?: () => void; onDelete: () => void; onBlock?: () => void
 }) {
   const root = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null)
   const [expanded, setExpanded] = useState(initiallyExpanded), [query, setQuery] = useState('')
@@ -24,9 +24,10 @@ export function MessageContextMenu({ message, x, y, expanded: initiallyExpanded 
     ...(canEdit ? [{ key: 'edit', label: 'Изменить', icon: 'edit' as const, run: onEdit }] : []),
     ...(canPin ? [{ key: 'pin', label: pinned ? 'Открепить' : 'Закрепить', icon: 'pin' as const, run: onPin }] : []),
     { key: 'copy', label: 'Копировать текст', icon: 'copy', run: onCopy },
-    ...(onSave ? [{ key: 'save', label: 'В избранное', icon: 'pin' as const, run: onSave }] : []),
+    ...(onSave ? [{ key: 'save', label: 'В избранное', icon: 'bookmark' as const, run: onSave }] : []),
     ...(onForward ? [{ key: 'forward', label: 'Переслать', icon: 'forward' as const, run: onForward }] : []),
     ...(canDelete ? [{ key: 'delete', label: 'Удалить', icon: 'trash' as const, run: onDelete, danger: true }] : []),
+    ...(onBlock ? [{ key: 'block', label: `Заблокировать ${message.author.username}`, icon: 'lock' as const, run: onBlock, danger: true }] : []),
   ]
   useLayoutEffect(() => {
     const box = root.current?.getBoundingClientRect()

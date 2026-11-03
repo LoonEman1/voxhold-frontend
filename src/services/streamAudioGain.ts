@@ -1,4 +1,6 @@
-/** Adjust the outgoing screen audio without renegotiation or local monitoring. */
+import { MAX_STREAM_VOLUME } from './streamSettings'
+
+/** Adjust stream audio without renegotiation or local monitoring. */
 export class StreamAudioGain {
   readonly stream: MediaStream
   private context: AudioContext | null = null
@@ -28,9 +30,10 @@ export class StreamAudioGain {
 
   setVolume(volume: number) {
     if (!this.context || !this.gain) return
-    this.gain.gain.setTargetAtTime(Math.max(0, Math.min(100, volume)) / 100, this.context.currentTime, 0.01)
+    this.gain.gain.setTargetAtTime(Math.max(0, Math.min(MAX_STREAM_VOLUME, Number.isFinite(volume) ? volume : 100)) / 100, this.context.currentTime, 0.01)
   }
 
+  get suspended() { return this.context?.state === 'suspended' }
   async resume() { if (this.context?.state === 'suspended') await this.context.resume() }
 
   close() {

@@ -1,0 +1,21 @@
+.audit-log { max-width: 900px; }
+.audit-log__intro { display: flex; align-items: flex-start; gap: 15px; margin-bottom: 28px; }
+.audit-log__intro > span { display: grid; flex: 0 0 48px; height: 48px; place-items: center; border: 1px solid var(--line-strong); border-radius: 14px; color: var(--lime); background: var(--surface-2); }
+.audit-log__intro h2 { margin: 0 0 8px; }
+.audit-log__intro p, .audit-log__hint { margin: 0; color: var(--muted); font-size: var(--font-sm); line-height: 1.6; }
+.audit-log__filters { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.audit-log__filters label { display: grid; flex: 1 1 210px; gap: 8px; font-size: var(--font-xs); }
+.audit-log__filters select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.audit-log__hint { margin: 12px 0 24px; font-size: var(--font-xs); }
+.audit-log__entry { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 22px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.audit-log__entry > .avatar { width: 36px; height: 36px; }
+.audit-log__entry-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; }
+.audit-log__entry-heading .feature-link { padding: 0; border: 0; background: none; font-weight: 700; color: var(--text); cursor: pointer; }
+.audit-log__entry-heading time { color: var(--muted); font-size: var(--font-xs); }
+.audit-log__action { margin: 8px 0 5px; font-weight: 650; }
+.audit-log__target { margin: 0; color: var(--muted); font-size: var(--font-sm); }
+.audit-log__details { display: grid; gap: 8px; margin: 14px 0 0; padding: 12px 14px; border-radius: 8px; background: var(--surface-2); font-size: var(--font-xs); }
+.audit-log__details > div { display: grid; grid-template-columns: minmax(90px, 125px) minmax(0, 1fr); gap: 12px; }
+.audit-log__details dt { color: var(--muted); }.audit-log__details dd { margin: 0; white-space: pre-wrap; }
+.audit-log__empty { padding: 38px 18px; text-align: center; color: var(--muted); }
+.audit-log__empty h3 { color: var(--text); }.audit-log__empty p { font-size: var(--font-sm); }

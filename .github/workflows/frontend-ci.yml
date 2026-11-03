@@ -145,6 +145,8 @@ jobs:
         run: npm ci
       - name: Test media, chat and recording regressions
         run: npm run test:e2e:performance
+      - name: Test encrypted voice playback and fail-closed receivers
+        run: npm run test:e2e:e2ee
       - name: Test themes, recording UI and avatar crop
         run: npm run test:e2e:ui
 

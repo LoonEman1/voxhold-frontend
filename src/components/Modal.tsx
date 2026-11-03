@@ -8,6 +8,7 @@ interface ModalProps {
   children: ReactNode
   onClose: () => void
   size?: 'small' | 'medium'
+  className?: string
 }
 
 const stack: { token: symbol; card: HTMLElement }[] = []
@@ -22,7 +23,7 @@ function focusable(card: HTMLElement) {
   })
 }
 
-export function Modal({ open, title, eyebrow, children, onClose, size = 'small' }: ModalProps) {
+export function Modal({ open, title, eyebrow, children, onClose, size = 'small', className = '' }: ModalProps) {
   const titleId = useId()
   const cardRef = useRef<HTMLElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -69,7 +70,7 @@ export function Modal({ open, title, eyebrow, children, onClose, size = 'small' 
   if (!open) return null
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && stack.at(-1)?.card === cardRef.current && onClose()}>
-      <section ref={cardRef} tabIndex={-1} className={`modal-card modal-card--${size}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <section ref={cardRef} tabIndex={-1} className={`modal-card modal-card--${size} ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="modal-head">
           <div>
             {eyebrow && <div className="eyebrow">{eyebrow}</div>}

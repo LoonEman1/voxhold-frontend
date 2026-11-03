@@ -22,16 +22,16 @@ it.each(['publisher', 'viewer'] as const)('preserves %s volume across mute and p
       onExpand={() => {}} onCollapse={() => {}} onLeave={() => {}}/></>
   }
   render(<Fixture/>)
-  fireEvent.change(screen.getByRole('slider'), { target: { value: '37' } })
-  expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('37')
+  fireEvent.change(screen.getByRole('slider'), { target: { value: '175' } })
+  expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('175')
   fireEvent.click(screen.getByRole('button', { name: 'Выключить звук трансляции' }))
   expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('0')
   fireEvent.click(screen.getByRole('button', { name: 'Режим' }))
   fireEvent.click(screen.getByRole('button', { name: 'Включить звук трансляции' }))
-  expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('37')
+  expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('175')
   fireEvent.change(screen.getByRole('slider'), { target: { value: '0' } })
   fireEvent.click(screen.getByRole('button', { name: 'Включить звук трансляции' }))
-  expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('37')
+  expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('175')
 })
 
 it.each([true, false])('exposes the viewer mixer on a stream panel (tile=%s)', (tile) => {
