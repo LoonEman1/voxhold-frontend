@@ -132,7 +132,7 @@ describe('PersistentStreamPlayer cinema mode', () => {
     Reflect.deleteProperty(HTMLElement.prototype, 'requestFullscreen')
   })
 
-  function renderExpanded(startInCinema: boolean) {
+  function renderExpanded(startInCinema: boolean, onCollapse = vi.fn()) {
     render(<PersistentStreamPlayer
       mode="expanded"
       stream={stream}
@@ -144,7 +144,7 @@ describe('PersistentStreamPlayer cinema mode', () => {
       startInCinema={startInCinema}
       onPreferencesChange={vi.fn()}
       onExpand={vi.fn()}
-      onCollapse={vi.fn()}
+      onCollapse={onCollapse}
       onLeave={vi.fn()}
     />)
     return screen.getByRole('dialog')
@@ -184,6 +184,23 @@ describe('PersistentStreamPlayer cinema mode', () => {
 
     fireEvent.keyDown(window, { code: 'KeyF', key: 'f' })
     expect(dialog.classList.contains('is-ui-hidden')).toBe(false)
+  })
+
+  it('leaves shortcuts and tab navigation to controls outside the floating player', () => {
+    const collapse = vi.fn()
+    const dialog = renderExpanded(false, collapse)
+    const outside = document.createElement('button'); document.body.append(outside); outside.focus()
+    fireEvent.keyDown(outside, { key: 'Escape' })
+    fireEvent.keyDown(outside, { key: 'f', code: 'KeyF' })
+    expect(collapse).not.toHaveBeenCalled()
+    expect(HTMLElement.prototype.requestFullscreen).not.toHaveBeenCalled()
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    outside.dispatchEvent(tab)
+    expect(tab.defaultPrevented).toBe(false)
+    dialog.focus()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(collapse).toHaveBeenCalledOnce()
+    outside.remove()
   })
 })
 

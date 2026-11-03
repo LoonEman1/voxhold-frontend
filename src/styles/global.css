@@ -1,10 +1,10 @@
 @import url('./workspace.css');
 
 :root {
-  --font-2xs: 11px;
-  --font-xs: 12px;
-  --font-sm: 13px;
-  --font-md: 14px;
+  --font-2xs: 12px;
+  --font-xs: 13px;
+  --font-sm: 14px;
+  --font-md: 15px;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -122,7 +122,7 @@ input::placeholder, textarea::placeholder { color: #66665f; }
 
 .modal-open { overflow: hidden; }
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(5,5,4,.72); animation: fade-in .16s ease-out; backdrop-filter: blur(8px); }
-.modal-card { width: min(100%, 470px); max-height: min(90vh, 760px); overflow: auto; border: 1px solid var(--line-strong); border-radius: 17px; background: #1c1c19; box-shadow: var(--shadow); animation: modal-in .2s ease-out; }
+.modal-card { width: min(100%, 470px); max-height: min(90dvh, 820px); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--line-strong); border-radius: 17px; background: #1c1c19; box-shadow: var(--shadow); animation: modal-in .2s ease-out; }
 .modal-card--medium { width: min(100%, 570px); }
 .modal-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 25px 25px 18px; }
 .modal-head h2 { margin: 7px 0 0; font-size: 23px; letter-spacing: -.6px; }
@@ -285,6 +285,13 @@ input::placeholder, textarea::placeholder { color: #66665f; }
    after component-specific font rules, including dynamically loaded dialogs. */
 @media (max-width: 760px) {
   input, textarea, select, .composer textarea { font-size: 16px !important; }
+}
+
+/* Keep saved-password autofill consistent with the selected theme. */
+input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  box-shadow: 0 0 0 1000px var(--surface-2) inset;
+  caret-color: var(--text);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -283,7 +283,8 @@ test('outgoing stream volume changes actual audio amplitude and keeps capture al
     await context.resume()
     const oscillator = context.createOscillator(), raw = context.createMediaStreamDestination()
     oscillator.frequency.value = 440
-    oscillator.connect(raw); oscillator.start()
+    const inputGain = context.createGain(); inputGain.gain.value = 0.2
+    oscillator.connect(inputGain).connect(raw); oscillator.start()
     const mixer = new StreamAudioGain(raw.stream, 100)
     await mixer.resume()
     const analyser = context.createAnalyser(); analyser.fftSize = 4096
@@ -296,16 +297,20 @@ test('outgoing stream volume changes actual audio amplitude and keeps capture al
       const values = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(values)
       return Math.sqrt(values.reduce((total, value) => total + value * value, 0) / values.length)
     }
+    // Let both real-time AudioContexts fill their buffers before comparing RMS.
+    await new Promise((resolve) => setTimeout(resolve, 750))
     const full = await sample()
+    mixer.setVolume(200); const boosted = await sample()
     mixer.setVolume(37); const reduced = await sample()
     const track = raw.stream.getAudioTracks()[0]!
     track.enabled = false; const muted = await sample()
     track.enabled = true; const restored = await sample()
     mixer.close(); const captureAlive = track.readyState === 'live'
     oscillator.stop(); track.stop(); await context.close()
-    return { full, reduced, muted, restored, captureAlive }
+    return { full, boosted, reduced, muted, restored, captureAlive }
   })
-  expect(samples.full).toBeGreaterThan(0.3)
+  expect(samples.full).toBeGreaterThan(0.1)
+  expect(samples.boosted / samples.full).toBeCloseTo(2, 1)
   expect(samples.reduced / samples.full).toBeCloseTo(0.37, 1)
   expect(samples.muted).toBeLessThan(0.001)
   expect(samples.restored / samples.full).toBeCloseTo(0.37, 1)
