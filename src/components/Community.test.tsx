@@ -6,12 +6,14 @@ import { CommunityContent, CommunityNavigation, CommunityProvider } from './Comm
 import { StorageManager } from './CommunitySettings'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function fixture(request: (input: { path: string; method?: string; body?: unknown; rawBody?: BodyInit; onUploadProgress?: (n: number) => void; signal?: AbortSignal }) => unknown) {
   return createApi({ request: async <T,>(input: Parameters<typeof request>[0]) => ({ status: 200, data: await request(input) as T }) })
 }
 const defaults = (path: string) => path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
 it('opens a direct conversation from a member action and retains the same retry key after failure', async () => {
+  let now = Date.now()
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
   let historyLoads = 0
   const sends: { content: string; client_message_id: string }[] = []
   const api = fixture(async ({ path, method, body }) => {
@@ -27,6 +29,8 @@ it('opens a direct conversation from a member action and retains the same retry 
   fireEvent.change(input, { target: { value: 'hello' } }); fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
   await screen.findByRole('alert')
   const beforeRefresh = historyLoads
+  // Focus reloads only stale history; keep this independent of CI wall time.
+  now += 60_001
   act(() => window.dispatchEvent(new Event('focus')))
   await waitFor(() => expect(historyLoads).toBeGreaterThan(beforeRefresh))
   expect(screen.getByRole('alert')).toBeTruthy()
