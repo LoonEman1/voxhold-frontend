@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_VOICE_PREFERENCES } from '../services/voiceSettings'
 import { VoiceSettingsDialog } from './VoiceSettingsDialog'
@@ -10,6 +10,15 @@ afterEach(() => {
 })
 
 describe('VoiceSettingsDialog microphone meter', () => {
+  it('allows 200% output volume inside the shared settings without nesting another dialog', () => {
+    const change = vi.fn()
+    render(<VoiceSettingsDialog embedded open preferences={DEFAULT_VOICE_PREFERENCES} devices={[]} getInputLevel={() => 0} voiceActive loadingDevices={false} onClose={() => undefined} onChange={change} onRefreshDevices={async () => undefined}/>)
+    const slider = screen.getByRole('slider', { name: 'Громкость собеседников' })
+    expect(slider.getAttribute('max')).toBe('200')
+    fireEvent.change(slider, { target: { value: '200' } })
+    expect(change).toHaveBeenCalledWith(expect.objectContaining({ outputVolume: 200 }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
   it('updates inside the dialog without rerendering the workspace, and stops sampling when closed', () => {
     vi.useFakeTimers()
     let level = 0.2

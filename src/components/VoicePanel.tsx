@@ -99,7 +99,7 @@ export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeCh
       {playbackBlocked && onEnablePlayback && <button className="button button--primary" onClick={onEnablePlayback}>Включить звук</button>}
       <div className="voice-stage-content">
 
-      {availableStreams.length > 0 && <div className="voice-streams-heading"><span><Icon name="monitor" size={16}/>Трансляции <b>{availableStreams.length}</b></span>{activeHere && connectionStatus === 'connected' && !streamRole && multipleStreams && availableStreams.length < 8 && <button type="button" className="button button--secondary button--small" onClick={onOpenStreamSettings}><Icon name="add" size={15}/>Показать свой экран</button>}</div>}
+      {availableStreams.length > 0 && <div className="voice-streams-heading"><span><Icon name="monitor" size={16}/>Трансляции <b>{availableStreams.length}</b></span>{activeHere && connectionStatus === 'connected' && streamRole !== 'publisher' && streamStatus !== 'requesting' && multipleStreams && availableStreams.length < 8 && <button type="button" className="button button--secondary button--small" onClick={onOpenStreamSettings}><Icon name="add" size={15}/>Показать свой экран</button>}</div>}
       <section className={`voice-participants ${!participants.length && !availableStreams.length && !streamMedia && !streamError ? 'is-empty' : ''}`}>
         {participants.length || availableStreams.length || streamMedia || streamError ? <div className="voice-participant-grid">{availableStreams.map((item) => {
           const selected = item.publisher_connection_id === stream?.publisher_connection_id

@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import type { Conversation, CustomRole } from '../domain/community'
 import type { Profile, ServerMember } from '../domain/types'
 import { createApi } from '../services/api'
-import { CommunityContent, CommunityNavigation, CommunityProvider, CommunitySidebar } from './Community'
+import { CommunityContent, CommunityNavigation, CommunityProvider, CommunitySidebar, PrivacySettings } from './Community'
 import { MemberCard } from './MemberCard'
 
 afterEach(cleanup)
@@ -55,6 +55,18 @@ it('keeps privacy in its own page and removes an unblocked user immediately', as
   await waitFor(() => expect(calls).toEqual([{ mode: 'none' }]))
   fireEvent.click(await screen.findByRole('button', { name: 'Разблокировать' }))
   await screen.findByText('Вы никого не заблокировали')
+})
+
+it('shows privacy-save errors in settings without mixing in conversation-list failures', async () => {
+  setup((path, method) => {
+    if (path.split('?')[0]!.endsWith('/conversations')) return {}
+    if (path.endsWith('/message-privacy') && method === 'PUT') throw new Error('Не удалось сохранить приватность')
+  }, <PrivacySettings embedded/>)
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  expect(screen.queryByRole('alert')).toBeNull()
+  fireEvent.click(screen.getByRole('radio', { name: /Никто/ }))
+  expect((await screen.findByRole('alert')).textContent).toBe('Не удалось связаться с сервером')
+  expect(screen.queryByText('Некорректный ответ списка')).toBeNull()
 })
 it('retains selected recipients and the form when conversation creation fails', async () => {
   setup((path, method) => { if (path.split('?')[0]!.endsWith('/conversations') && method === 'POST') throw new Error('Участник запретил сообщения') })

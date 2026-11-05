@@ -39,6 +39,13 @@ describe('voice preferences', () => {
     })
   })
 
+  it('persists 200% speaker volume and caps larger or invalid values', () => {
+    saveVoicePreferences({ ...DEFAULT_VOICE_PREFERENCES, outputVolume: 200 })
+    expect(loadVoicePreferences().outputVolume).toBe(200)
+    expect(normalizeVoicePreferences({ outputVolume: 500 }).outputVolume).toBe(200)
+    expect(normalizeVoicePreferences({ outputVolume: Number.NaN }).outputVolume).toBe(100)
+  })
+
   it('keeps interface sounds on by default and validates their volume', () => {
     expect(normalizeVoicePreferences(null)).toMatchObject({ uiSounds: true, uiSoundVolume: 60 })
     expect(normalizeVoicePreferences({ uiSounds: false, uiSoundVolume: 250 })).toMatchObject({ uiSounds: false, uiSoundVolume: 100 })

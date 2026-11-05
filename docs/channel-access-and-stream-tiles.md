@@ -10,11 +10,13 @@ Both member tabs remain available; channel roster changes are refreshed live.
 
 An active screen share starts as a square tile alongside voice participants.
 Clicking a live preview opens focused viewing; clicking an unwatched tile starts
-watching and opens it when media arrives. A speaking participant strip preserves
-room context. Fullscreen hides the surrounding UI, fades controls after inactivity
-and restores them on input. Escape/F return from cinema; collapse returns to the
-call grid. Layout changes reattach the same MediaStream without stopping tracks.
-Existing mini-player behavior while browsing other channels is preserved.
+watching and opens a compact, movable preview at the bottom right when media
+arrives. Its overlays show the channel, publisher, volume, fullscreen and stop
+controls. Fullscreen hides the surrounding UI, fades controls after inactivity
+and restores them on input. Escape/F return directly to the compact preview;
+the back arrow returns to the call grid. The same video element remains attached
+through fullscreen transitions. The preview remembers its position/size and fits
+inside narrow viewports above the mobile navigation.
 
 ## Как пользоваться
 
@@ -23,8 +25,14 @@ Existing mini-player behavior while browsing other channels is preserved.
   канал всем обычным участникам, в том числе будущим.
 - Для канала только владельца и администраторов оставьте списки пустыми.
 - Нажмите «Сохранить доступ»: изменения действуют сразу, в том числе в звонках.
-- Трансляция отображается плиткой в сетке звонка. Нажмите на неё для крупного
-  просмотра; «Полный экран» скрывает интерфейс. Esc/F возвращают управление.
+- Трансляция отображается плиткой в сетке звонка. Нажатие открывает компактный
+  предпросмотр справа снизу. Его можно двигать за название канала, менять размер
+  за нижний угол и раскрывать на полный экран. Esc/F возвращают маленькое окно;
+  стрелка слева сверху возвращает видео в сетку канала.
+- При поддержке мультитрансляций кнопка «Показать свой экран» остаётся доступной
+  во время просмотра чужого стрима. Просмотр завершится только после выбора
+  источника для своей трансляции; отмена выбора сохраняет просмотр. Чужие эфиры
+  продолжаются. Одна сессия публикует или смотрит один поток, лимит канала — восемь.
 
 Validation: TypeScript, ESLint, unit tests, Chromium browser UI/reliability suites,
 and screenshots in dark/light/mobile layouts. Browser stream layout tests use a

@@ -5,6 +5,68 @@ async function chooseWorkspaceAccountAction(page: Page, label: string) {
   await page.getByRole('menuitem', { name: label, exact: true }).click()
 }
 
+for (const theme of ['dark', 'light']) for (const width of [1280, 390, 320]) {
+  test(`unified settings keep three tabs and 200% volume at ${width}px in ${theme}`, async ({ page }, info) => {
+    const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message))
+    await page.setViewportSize({ width, height: 900 })
+    await openCallWorkspace(page, { role: 'member' })
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; document.documentElement.style.colorScheme = value }, theme)
+    if (width > 760) await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+    else {
+      await page.getByRole('button', { name: 'Аккаунт: Александр', exact: true }).click()
+      await expect(page.getByRole('menuitem', { name: 'Настройки профиля' })).toHaveCount(0)
+      await expect(page.getByRole('menuitem', { name: 'Настройки голоса' })).toHaveCount(0)
+      await page.getByRole('menuitem', { name: 'Настройки', exact: true }).click()
+    }
+    const dialog = page.getByRole('dialog', { name: 'Настройки', exact: true })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('tab')).toHaveText(['Профиль', 'Голос и звук', 'Приватность'])
+    await expect(page.getByRole('dialog')).toHaveCount(1)
+    const draft = dialog.getByRole('textbox', { name: /О себе/ })
+    await draft.fill('Черновик сохраняется при переключении вкладок')
+    for (const tab of ['Профиль', 'Голос и звук', 'Приватность']) {
+      await dialog.getByRole('tab', { name: tab, exact: true }).click()
+      if (tab === 'Голос и звук') {
+        const volume = dialog.getByRole('slider', { name: 'Громкость собеседников', exact: true })
+        await volume.fill('200')
+        await expect(volume).toHaveAttribute('aria-valuetext', '200%, усиление')
+        expect(await page.evaluate(() => JSON.parse(localStorage.getItem('voxhold.voice.preferences.v1')!).outputVolume)).toBe(200)
+      }
+      if (tab === 'Приватность') {
+        await dialog.getByText('Никто', { exact: true }).click()
+        await expect(dialog.getByRole('radio', { name: /^Никто/ })).toBeChecked()
+        await expect(dialog.getByRole('heading', { name: 'Системные уведомления' })).toBeVisible()
+        await expect(dialog.getByRole('heading', { name: 'Заблокированные пользователи' })).toBeVisible()
+      }
+      expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+      expect(await dialog.getByRole('tabpanel').evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+      await dialog.getByRole('tabpanel').evaluate((node) => { node.scrollTop = 0 })
+      if (width !== 320) await dialog.screenshot({ path: info.outputPath(`settings-${tab}-${theme}-${width}.png`), animations: 'disabled' })
+    }
+    await dialog.getByRole('tab', { name: 'Профиль', exact: true }).click()
+    await expect(draft).toHaveValue('Черновик сохраняется при переключении вкладок')
+    await dialog.getByRole('button', { name: 'Закрыть', exact: true }).click()
+    await page.reload()
+    await chooseWorkspaceAccountAction(page, 'Настройки')
+    await dialog.getByRole('tab', { name: 'Голос и звук', exact: true }).click()
+    await expect(dialog.getByRole('slider', { name: 'Громкость собеседников', exact: true })).toHaveValue('200')
+    expect(errors).toEqual([])
+  })
+}
+
+test('speaker volume doubles the actual audio samples above 100%', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/audio-playback.html')
+  await page.getByRole('button', { name: 'Проверить усиление' }).click()
+  const values = await page.evaluate(async () => (window as unknown as { volumeProbe: Promise<{ normal: number; boosted: number; quiet: number; elementVolume: number }> }).volumeProbe)
+  await info.attach('audio-gain-measurements', { body: JSON.stringify(values), contentType: 'application/json' })
+  expect(values.normal).toBeGreaterThan(.01)
+  expect(values.boosted / values.normal).toBeGreaterThan(1.8)
+  expect(values.boosted / values.normal).toBeLessThan(2.2)
+  expect(values.quiet / values.normal).toBeGreaterThan(.4)
+  expect(values.quiet / values.normal).toBeLessThan(.6)
+  expect(values.elementVolume).toBeLessThanOrEqual(1)
+})
+
 async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
@@ -40,6 +102,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
     })
   })
   const now = Math.floor(Date.now() / 1000)
+  let privacyMode = 'shared'
   let nextInviteId = 105
   let inviteLinks = [
     { id: 101, server_id: 1, created_by: 1, creator_username: 'Александр', created_at: now - 600, expires_at: now + 3600, max_uses: 25 as number | null, use_count: 3, allow_registration: true },
@@ -54,6 +117,12 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
     if (path.endsWith('/me/servers')) json = [{ id: 1, name: 'FirstInstance', role: options.role ?? 'owner', created_by: 1, created_at: 1, joined_at: 1 }]
     else if (path.endsWith('/instance')) json = { instance_id: 'fixture', name: 'FirstInstance', initialized: true, registration: 'invite_only', protocol_version: 1, created_at: 1 }
     else if (path.endsWith('/me/profile')) json = { user_id: 1, username: 'Александр', about: '', country_code: null, created_at: 1 }
+    else if (path.endsWith('/message-privacy')) {
+      if (route.request().method() === 'PUT') privacyMode = route.request().postDataJSON().mode
+      json = { mode: privacyMode, blocked_user_ids: [] }
+    }
+    else if (path.endsWith('/me/inbox')) json = { items: [], has_more: false }
+    else if (path.endsWith('/me/conversations')) json = []
     else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
     else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: options.channelMemberIds ?? [1, 2, 3] }
     else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: now - 5 * 60 }))
@@ -333,12 +402,16 @@ test('a stream starts in the call grid, focuses on click, and hides interface in
   await expect(player.locator('video')).toBeVisible()
   await player.getByRole('button', { name: 'Включить звук трансляции' }).click()
   await expect(player.getByRole('button', { name: 'Выключить звук трансляции' })).toHaveAttribute('aria-pressed', 'false')
-  await expect(page.locator('.stream-focused-participants')).toBeVisible()
+  await expect(player).toHaveClass(/stream-preview-player/)
+  const preview = await player.boundingBox()
+  expect(preview!.width).toBeLessThanOrEqual(362)
+  expect(preview!.height).toBeLessThanOrEqual(227)
   await page.screenshot({ path: 'node_modules/.cache/call-stream-focus.png', animations: 'disabled' })
   await player.getByRole('button', { name: 'Полный экран', exact: true }).click()
   await expect(player).toHaveClass(/is-ui-hidden/)
+  await page.mouse.move(400, 300)
   await expect(player).toHaveClass(/is-idle/, { timeout: 6000 })
-  await expect(page.locator('.stream-focused-participants')).toBeHidden()
+  await expect(page.locator('.stream-focused-participants')).toHaveCount(0)
   await page.mouse.move(400,300)
   await expect(player).not.toHaveClass(/is-idle/)
   await player.getByRole('button', { name: 'Выйти из полного экрана' }).click()
@@ -348,6 +421,7 @@ test('a stream starts in the call grid, focuses on click, and hides interface in
   await expect(player).toHaveClass(/is-idle/, { timeout: 6000 })
   await page.keyboard.press('Escape')
   await expect(player).not.toHaveClass(/is-ui-hidden/)
+  await expect.poll(async () => (await player.boundingBox())!.width).toBeLessThanOrEqual(362)
   await expect(player).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(player).toHaveCount(0)
@@ -885,11 +959,11 @@ test('ban action describes instance-wide scope before confirmation', async ({ pa
 
 test('native context menus remain available in inputs and with Shift', async ({ page }) => {
   await openCallWorkspace(page, { withPeers: true })
-  await chooseWorkspaceAccountAction(page, 'Настройки профиля')
-  const input = page.getByRole('dialog', { name: 'Ваш профиль' }).locator('textarea')
+  await chooseWorkspaceAccountAction(page, 'Настройки')
+  const input = page.getByRole('dialog', { name: 'Настройки', exact: true }).locator('textarea')
   await expect(input).toBeVisible()
   expect(await input.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))).toBe(true)
-  await page.getByRole('dialog', { name: 'Ваш профиль' }).getByRole('button', { name: 'Отмена', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Настройки', exact: true }).getByRole('button', { name: 'Отмена', exact: true }).click()
   const member = page.locator('.voice-participant').filter({ hasText: 'Мария' })
   expect(await member.evaluate((element) => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })))).toBe(true)
   await expect(page.getByRole('menu')).toHaveCount(0)
@@ -915,9 +989,9 @@ test('mobile controls use readable type and muted text meets contrast in both th
     }, theme)
     ratios.forEach((ratio) => expect(ratio).toBeGreaterThanOrEqual(4.5))
   }
-  await chooseWorkspaceAccountAction(page, 'Настройки профиля')
+  await chooseWorkspaceAccountAction(page, 'Настройки')
   await page.setViewportSize({ width: 375, height: 812 })
-  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  const dialog = page.getByRole('dialog', { name: 'Настройки', exact: true })
   await expect(dialog.locator('textarea')).toBeVisible()
   expect(await dialog.locator('textarea').evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16)
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
@@ -931,9 +1005,9 @@ test('account deletion belongs to the profile and requires a typed username', as
     if (route.request().method() === 'DELETE') { deletes++; await route.fulfill({ status: 409, json: { error: 'try later' } }) }
     else await route.fallback()
   })
-  await chooseWorkspaceAccountAction(page, 'Настройки профиля')
-  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
-  await dialog.getByRole('tab', { name: 'Безопасность', exact: true }).click()
+  await chooseWorkspaceAccountAction(page, 'Настройки')
+  const dialog = page.getByRole('dialog', { name: 'Настройки', exact: true })
+  await dialog.getByRole('tab', { name: 'Профиль', exact: true }).click()
   await dialog.getByRole('button', { name: 'Удалить аккаунт', exact: true }).click()
   const confirmation = dialog.getByRole('button', { name: 'Удалить аккаунт навсегда' })
   await expect(confirmation).toBeDisabled()
@@ -1024,7 +1098,7 @@ test('profile modal traps Tab, supports reverse Tab and restores its trigger on 
   await page.goto('/e2e/fixtures/ui-fixes.html')
   const trigger = page.getByRole('button', { name: 'Профиль', exact: true })
   await trigger.click()
-  const dialog = page.getByRole('dialog', { name: 'Ваш профиль' })
+  const dialog = page.getByRole('dialog', { name: 'Ваш профиль', exact: true })
   const first = dialog.getByRole('button', { name: 'Закрыть', exact: true })
   const last = dialog.getByRole('button', { name: 'Сохранить', exact: true })
   await last.focus(); await page.keyboard.press('Tab'); await expect(first).toBeFocused()

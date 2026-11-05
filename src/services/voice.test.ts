@@ -4,6 +4,7 @@ import { BrowserVoiceSession, voiceCloseMessage } from './voice'
 import { BrowserVoiceInput } from './voiceInput'
 import { DEFAULT_VOICE_PREFERENCES } from './voiceSettings'
 import type { E2EEMediaTransform } from './e2ee/mediaTransform'
+import { AudioPlaybackMixer } from './audioPlaybackMixer'
 
 class FakeTrack extends EventTarget {
   readonly id = crypto.randomUUID()
@@ -86,6 +87,27 @@ describe('BrowserVoiceSession', () => {
     await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
     return session
   }
+
+  it('composes the shared 200% volume with participant overrides without changing deafen or the received track', async () => {
+    const mix = vi.spyOn(AudioPlaybackMixer.prototype, 'setVolume').mockImplementation((audio, stream, gain) => { audio.srcObject = stream; audio.volume = Math.min(1, gain) })
+    const input = new BrowserVoiceInput(); await input.start(DEFAULT_VOICE_PREFERENCES)
+    const session = await startSession(input)
+    try {
+      await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, outputVolume: 200 })
+      await session.acceptOffer('v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=msid:voice audio-peer\r\n')
+      const track = new FakeTrack()
+      FakePeerConnection.latest!.ontrack?.({ track, transceiver: { mid: '0' } } as unknown as RTCTrackEvent)
+      const audio = document.querySelector<HTMLAudioElement>('.voice-audio-output')!
+      expect(mix).toHaveBeenLastCalledWith(audio, expect.any(FakeMediaStream), 2)
+      session.setRemoteGain('peer', 2)
+      expect(mix).toHaveBeenLastCalledWith(audio, expect.any(FakeMediaStream), 4)
+      session.setState(false, true)
+      await session.applyPreferences({ ...DEFAULT_VOICE_PREFERENCES, outputVolume: 50 })
+      expect(mix).toHaveBeenLastCalledWith(audio, expect.any(FakeMediaStream), 1)
+      expect(audio.muted).toBe(true)
+      expect(track.stop).not.toHaveBeenCalled()
+    } finally { session.close(); input.close() }
+  })
 
   it('answers offers, queues ICE and keeps the microphone alive across sessions', async () => {
     const input = new BrowserVoiceInput()

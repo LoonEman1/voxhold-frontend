@@ -1,6 +1,8 @@
 export type VoiceInputMode = 'voice_activity' | 'push_to_talk'
 export type VoiceNoiseMode = 'auto' | 'threshold'
 export const VOICE_BITRATES = [24, 32, 48, 64, 96, 128] as const
+export const MAX_VOICE_VOLUME = 200
+export const VOICE_PREFERENCES_EVENT = 'voxhold:voice-preferences'
 export type VoiceBitrate = typeof VOICE_BITRATES[number]
 
 export interface VoicePreferences {
@@ -60,7 +62,7 @@ export function normalizeVoicePreferences(value: unknown): VoicePreferences {
     inputDeviceId: typeof source.inputDeviceId === 'string' ? source.inputDeviceId : '',
     outputDeviceId: typeof source.outputDeviceId === 'string' ? source.outputDeviceId : '',
     inputVolume: numberInRange(source.inputVolume, DEFAULT_VOICE_PREFERENCES.inputVolume, 0, 200),
-    outputVolume: numberInRange(source.outputVolume, DEFAULT_VOICE_PREFERENCES.outputVolume, 0, 100),
+    outputVolume: numberInRange(source.outputVolume, DEFAULT_VOICE_PREFERENCES.outputVolume, 0, MAX_VOICE_VOLUME),
     bitrateKbps: VOICE_BITRATES.includes(source.bitrateKbps as VoiceBitrate) ? source.bitrateKbps as VoiceBitrate : DEFAULT_VOICE_PREFERENCES.bitrateKbps,
     echoCancellation: typeof source.echoCancellation === 'boolean' ? source.echoCancellation : true,
     noiseSuppression: typeof source.noiseSuppression === 'boolean' ? source.noiseSuppression : true,
@@ -90,11 +92,13 @@ export function loadVoicePreferences(): VoicePreferences {
 }
 
 export function saveVoicePreferences(preferences: VoicePreferences) {
+  const normalized = normalizeVoicePreferences(preferences)
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeVoicePreferences(preferences)))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
   } catch {
     // Voice remains usable when storage is unavailable (private mode or Wails policy).
   }
+  window.dispatchEvent(new CustomEvent<VoicePreferences>(VOICE_PREFERENCES_EVENT, { detail: normalized }))
 }
 
 const modifierCodes = new Set(['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'])
