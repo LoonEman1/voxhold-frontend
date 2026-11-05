@@ -26,6 +26,7 @@ function AttachmentView({ attachment, channelId, conversationId }: { attachment:
   const [visible, setVisible] = useState(false), [previewURL, setPreviewURL] = useState(''), [url, setURL] = useState('')
   const [error, setError] = useState(''), [removed, setRemoved] = useState(attachment.deleted), [expanded, setExpanded] = useState(false)
   const [requested, setRequested] = useState(false), [revision, setRevision] = useState(0)
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null)
   const media = inlineMediaType(attachment.mime_type)
   const image = media?.startsWith('image/') ?? false, video = media?.startsWith('video/') ?? false
   useEffect(() => {
@@ -84,13 +85,15 @@ function AttachmentView({ attachment, channelId, conversationId }: { attachment:
   }, [api, userId, attachment.id, attachment.mime_type, attachment.deleted, removed, requested, revision])
   if (attachment.deleted || removed) return <div className="attachment-deleted">Вложение удалено сервером · {attachment.filename}</div>
   const sized = image && Number.isFinite(attachment.width) && Number.isFinite(attachment.height) && attachment.width! > 0 && attachment.height! > 0
-  const box = sized ? { aspectRatio: `${attachment.width} / ${attachment.height}`, maxHeight: 320, width: `min(100%, ${Math.max(1, Math.round(320 * attachment.width! / attachment.height!))}px)` } : undefined
-  return <figure ref={figure} className="attachment-card">
-    {image && (previewURL || url) ? <button type="button" className={`attachment-image ${sized ? 'attachment-image--sized' : ''}`} style={box} onClick={() => { setExpanded(true); setRequested(true) }} aria-label={`Открыть изображение ${attachment.filename}`}><img src={previewURL || url} alt={attachment.filename} loading="lazy"/></button>
-      : image && sized ? <button type="button" className="attachment-image attachment-image--sized attachment-image--placeholder" style={box} onClick={() => setRequested(true)}><span role="status">Загрузка изображения… · {attachment.filename}</span></button>
+  const dimensions = sized ? { width: attachment.width!, height: attachment.height! } : naturalSize
+  const cardWidth = image && dimensions ? Math.max(1, Math.round(Math.min(1, 440 / dimensions.width, 320 / dimensions.height) * dimensions.width)) : undefined
+  const box = dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined
+  return <figure ref={figure} className={`attachment-card${image ? ' attachment-card--image' : ''}`} style={cardWidth ? { width: cardWidth } : undefined}>
+    {image && (previewURL || url) ? <button type="button" className={`attachment-image ${dimensions ? 'attachment-image--sized' : ''}`} style={box} onClick={() => { setExpanded(true); setRequested(true) }} aria-label={`Открыть изображение ${attachment.filename}`}><img src={previewURL || url} alt={attachment.filename} loading="lazy" onLoad={(event) => { if (!sized) { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width > 0 && height > 0) setNaturalSize({ width, height }) } }}/></button>
+      : image && dimensions ? <button type="button" className="attachment-image attachment-image--sized attachment-image--placeholder" style={box} onClick={() => setRequested(true)}><span role="status">Загрузка изображения… · {attachment.filename}</span></button>
       : video && url ? <video controls preload="metadata" src={url}/>
       : <button type="button" onClick={() => setRequested(true)}>{image ? 'Загрузка изображения…' : video ? 'Посмотреть видео' : 'Загрузить файл'} · {attachment.filename}</button>}
-    <figcaption>{attachment.filename} · {bytes(attachment.size_bytes)}{url ? <a href={url} download={attachment.filename}>Скачать</a> : image && <button type="button" onClick={() => setRequested(true)}>Скачать оригинал</button>}</figcaption>
+    <figcaption><span title={attachment.filename}>{attachment.filename} · {bytes(attachment.size_bytes)}</span>{url ? <a href={url} download={attachment.filename}>Скачать</a> : image && <button type="button" onClick={() => setRequested(true)}>Скачать оригинал</button>}</figcaption>
     {error && <p role="alert">{error}<button type="button" onClick={() => { setError(''); setRevision((v) => v + 1) }}>Повторить</button></p>}
     <Modal open={expanded} title={attachment.filename} onClose={() => setExpanded(false)} size="medium">{url ? <img className="attachment-lightbox" src={url} alt={attachment.filename}/> : <p role="status">Загружаем оригинал…</p>}</Modal>
   </figure>

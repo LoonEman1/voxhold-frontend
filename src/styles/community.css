@@ -38,3 +38,16 @@
 .attachment-image--sized img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain }
 .attachment-image--placeholder { background:var(--line) !important; border-radius:6px }
 .attachment-image--placeholder span { position:absolute; inset:0; display:grid; place-items:center; padding:8px }
+
+/* Media cards follow the media width; captions wrap without widening them. */
+.message-attachments { grid-template-columns: minmax(0, 1fr); justify-items: start; min-width: 0; max-width: 440px; width: 100%; }
+.attachment-card { min-width: 0; }
+.attachment-card--image { padding: 0; max-width: 100%; }
+.attachment-card .attachment-image { padding: 0; border: 0; border-radius: 0; background: transparent; width: 100%; }
+.attachment-card .attachment-image img { width: 100%; border-radius: 0; }
+.attachment-card--image figcaption { padding: 8px; flex-wrap: wrap; align-items: center; }
+.attachment-card figcaption > span { min-width: 0; flex: 1 1 100%; }
+.attachment-card--image figcaption a { margin-left: 0; }
+.attachment-card--image > p { padding: 0 8px; overflow-wrap: anywhere; }
+.chat-composer-slot { display: contents; }
+.messages[hidden], .personal-content .direct-chat__messages[hidden], .direct-chat__tools[hidden], .chat-composer-slot[hidden] { display: none; }

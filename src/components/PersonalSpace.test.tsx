@@ -15,7 +15,7 @@ const profile = { user_id: 2, username: 'Лера', about: 'Люблю горы'
 function setup(request?: (path: string, method?: string, body?: unknown) => unknown, children?: ReactNode, owner = true) {
   const api = createApi({ request: async <T,>({ path, method, body }: { path: string; method?: string; body?: unknown }) => {
     const custom = await request?.(path, method, body)
-    return { status: 200, data: (custom ?? (path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : path.endsWith('/inbox') ? { items: [], has_more: false } : path.split('?')[0]!.endsWith('/conversations') ? chats : path.endsWith('/messages') ? { messages: [], has_more: false } : [])) as T }
+    return { status: 200, data: (custom ?? (path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : path.endsWith('/inbox') ? { items: [], has_more: false } : path.split('?')[0]!.endsWith('/conversations') ? chats : /\/conversations\/\d+$/.test(path) ? chats.find((chat) => chat.id === Number(path.split('/').at(-1))) : path.endsWith('/messages') ? { messages: [], has_more: false } : [])) as T }
   } })
   return render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner={owner} members={members} onMessage={() => undefined} onNavigate={() => undefined}><CommunityNavigation/><CommunitySidebar><div>Каналы сервера</div></CommunitySidebar><CommunityContent><div>Сообщения канала</div></CommunityContent>{children}</CommunityProvider>)
 }
@@ -42,6 +42,16 @@ it('does not reopen a direct chat when its request finishes after navigating awa
   await act(async () => resolve(chats[0]))
   expect(screen.queryByLabelText('Сообщение в беседу')).toBeNull()
   expect(screen.getByText('Каналы сервера')).toBeTruthy()
+})
+
+it('opens a direct chat from a profile when creation returns only its ID', async () => {
+  setup((path, method) => {
+    if (path.endsWith('/me/conversations') && method === 'POST') return { id: 7 }
+    if (path.endsWith('/conversations/7')) return chats[0]
+  })
+  act(() => window.dispatchEvent(new CustomEvent('voxhold:open-direct', { detail: 2 })))
+  expect(await screen.findByLabelText('Сообщение в беседу')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Диалог: Лера' })).toBeTruthy()
 })
 it('keeps privacy in its own page and removes an unblocked user immediately', async () => {
   const calls: unknown[] = []

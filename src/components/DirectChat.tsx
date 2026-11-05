@@ -12,7 +12,7 @@ import { PersonalEmpty } from './PersonalEmpty'
 import { Icon } from './Icon'
 import { ComposerSendButton } from './ComposerActions'
 import { MessageLinkPreviews } from './LazyMessageLinks'
-import { ComposerTools, PollCard, openForward, saveFavorite } from './LazyCommunityFeatures'
+import { ComposerTools, PollCard, ScheduledHistory, openForward, saveFavorite } from './LazyCommunityFeatures'
 import { MessageReactions } from './MessageReactions'
 import { MessageMentions } from './MessageMentions'
 import { MessageContextMenu } from './MessageContextMenu'
@@ -24,6 +24,7 @@ const problem = (error: unknown) => error instanceof Error ? error.message : 'Н
 
 export function DirectChat({ api, token, id, saved = false, currentUserId, revision, onRefresh, onLeave, onCreateGroup }: { api: VoxholdApi; token: string; id: number; saved?: boolean; currentUserId: number; revision: number; onRefresh: () => void; onLeave: () => void; onCreateGroup?: () => void }) {
   const community = useCommunity()
+  const [scheduled, setScheduled] = useState(false)
   const [menu, setMenu] = useState<{ message: DirectMessage; x: number; y: number } | null>(null), [reactionBusy, setReactionBusy] = useState<Record<string, boolean>>({})
   const [searchInput, setSearchInput] = useState(''), [search, setSearch] = useState(''), [muted, setMuted] = useState(false), [mutePending, setMutePending] = useState(false)
   const sendBusy = useRef(false), notificationBusy = useRef(false), notificationGeneration = useRef(0)
@@ -97,7 +98,7 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
   useEffect(() => {
     const latest = messages.at(-1)?.id
     if (!latest || latest <= readCursor.current) return
-    const mark = () => { if (document.visibilityState === 'visible' && document.hasFocus() && followingBottom.current && latest > readCursor.current) { readCursor.current = latest; void api.community.request(token, `/conversations/${id}/read`, 'PUT', { message_id: latest }).catch(() => { readCursor.current = 0 }) } }
+    const mark = () => { if (!visible.current?.hidden && document.visibilityState === 'visible' && document.hasFocus() && followingBottom.current && latest > readCursor.current) { readCursor.current = latest; void api.community.request(token, `/conversations/${id}/read`, 'PUT', { message_id: latest }).catch(() => { readCursor.current = 0 }) } }
     readLatest.current = mark; mark(); window.addEventListener('focus', mark); document.addEventListener('visibilitychange', mark); return () => { window.removeEventListener('focus', mark); document.removeEventListener('visibilitychange', mark) }
   }, [api, token, id, messages])
   const send = async () => {
@@ -141,8 +142,8 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
     finally { notificationBusy.current = false; setMutePending(false) }
   }
   return <section className="direct-chat" onPaste={upload.onPaste} onDrop={upload.onDrop} onDragOver={upload.onDragOver}>
-    <div className="direct-chat__tools" role="toolbar" aria-label={saved ? 'Инструменты избранного' : 'Действия в разговоре'}>{saved ? <label className="direct-chat__search"><Icon name="search" size={18}/><input type="search" aria-label="Поиск в избранном" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Найти заметку, ссылку или файл"/></label> : <><button type="button" className="direct-chat__call" aria-label="Позвонить / присоединиться" title="Начать звонок или присоединиться к участникам" onClick={() => window.dispatchEvent(new CustomEvent('voxhold:start-conversation-call', { detail: id }))}><Icon name="phone" size={18}/><span>Позвонить</span></button>{onCreateGroup && <button type="button" onClick={onCreateGroup}><Icon name="userPlus" size={18}/><span>Создать беседу</span></button>}<button type="button" className="direct-chat__notification" aria-label={muted ? 'Включить уведомления' : 'Отключить уведомления'} title={muted ? 'Включить уведомления' : 'Отключить уведомления'} aria-pressed={muted} disabled={mutePending} onClick={() => void toggleMute()}>{mutePending ? <span className="spinner"/> : <Icon name={muted ? 'bellOff' : 'bell'} size={18}/>}<span>{muted ? 'Без звука' : 'Уведомления'}</span></button></>}</div>
-    <div className="direct-chat__messages messages" ref={visible} onScroll={() => { const list = visible.current; followingBottom.current = !!list && list.scrollHeight - list.scrollTop - list.clientHeight < 60; readLatest.current() }} aria-live="polite">
+    <div className="direct-chat__tools" hidden={scheduled} role="toolbar" aria-label={saved ? 'Инструменты избранного' : 'Действия в разговоре'}>{saved ? <label className="direct-chat__search"><Icon name="search" size={18}/><input type="search" aria-label="Поиск в избранном" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Найти заметку, ссылку или файл"/></label> : <><button type="button" className="direct-chat__call" aria-label="Позвонить / присоединиться" title="Начать звонок или присоединиться к участникам" onClick={() => window.dispatchEvent(new CustomEvent('voxhold:start-conversation-call', { detail: id }))}><Icon name="phone" size={18}/><span>Позвонить</span></button>{onCreateGroup && <button type="button" onClick={onCreateGroup}><Icon name="userPlus" size={18}/><span>Создать беседу</span></button>}<button type="button" className="direct-chat__notification" aria-label={muted ? 'Включить уведомления' : 'Отключить уведомления'} title={muted ? 'Включить уведомления' : 'Отключить уведомления'} aria-pressed={muted} disabled={mutePending} onClick={() => void toggleMute()}>{mutePending ? <span className="spinner"/> : <Icon name={muted ? 'bellOff' : 'bell'} size={18}/>}<span>{muted ? 'Без звука' : 'Уведомления'}</span></button></>}</div>
+    <div className="direct-chat__messages messages" hidden={scheduled} ref={visible} onScroll={() => { const list = visible.current; followingBottom.current = !!list && list.scrollHeight - list.scrollTop - list.clientHeight < 60; readLatest.current() }} aria-live="polite">
       {!messages.length && !error && !loadError && <PersonalEmpty icon={saved ? 'bookmark' : 'message'} title={loading ? 'Загружаем сообщения…' : saved ? search ? 'Ничего не найдено' : 'Сохраните важное' : 'Начните разговор'}>{saved ? search ? 'Попробуйте другую фразу или очистите поиск.' : 'Ваше личное место для заметок, ссылок и файлов. Перешлите сообщение сюда или напишите себе.' : 'Сообщения видны только участникам этого разговора.'}</PersonalEmpty>}
       {more && <button className="button button--ghost" disabled={olderPending} onClick={() => void loadOlder()}>{olderPending ? <><span className="spinner"/>Загружаем историю…</> : 'Раньше'}</button>}
       {messages.map((m, index) => {
@@ -166,16 +167,17 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
         </Fragment>
       })}
     </div>
-    {upload.control}
+    {scheduled && <ScheduledHistory api={api} token={token} destination={{ kind: 'conversation', id }} onClose={() => setScheduled(false)}/>}
+    <div className="chat-composer-slot" hidden={scheduled}>{upload.control}
     {menu && <MessageContextMenu message={asMessage(messages.find((m)=>m.id===menu.message.id)??menu.message)} x={menu.x} y={menu.y} canEdit={false} canDelete={saved} canPin={false} canReply={false} pinned={false} pending={{}} onClose={()=>setMenu(null)} onReact={(emoji)=>void react(messages.find((m)=>m.id===menu.message.id)??menu.message,emoji)} onReply={()=>undefined} onEdit={()=>undefined} onPin={()=>undefined} onCopy={()=>{void navigator.clipboard.writeText(menu.message.content)}} onForward={()=>openForward({kind:'conversation',id:menu.message.id})} onSave={saved ? undefined : () => saveFavorite({kind:'conversation',id:menu.message.id})} onBlock={menu.message.author.user_id !== currentUserId ? () => { void api.community.request(token, `/me/blocks/${menu.message.author.user_id}`, 'PUT').then(onRefresh).catch((caught) => setError(problem(caught))) } : undefined} onDelete={()=>{const mid=menu.message.id;void api.community.request(token,`/conversations/${id}/messages/${mid}`,'DELETE').then(()=>{deletedIds.current.add(mid);setMessages((v)=>v.filter((m)=>m.id!==mid));onRefresh()}).catch((e)=>setError(problem(e)))}}/>}
-    <ComposerTools api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft((current)=>current===draft?'':current);onRefresh()}} onAttach={upload.pickFiles} attachmentDisabled={upload.attachmentDisabled} disabled={pending}>{({ attachmentButton, onSchedule }) => <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
+    <ComposerTools onScheduled={() => { setMenu(null); setScheduled(true) }} api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft((current)=>current===draft?'':current);onRefresh()}} onAttach={upload.pickFiles} attachmentDisabled={upload.attachmentDisabled} disabled={pending}>{({ attachmentButton, onSchedule }) => <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
       {attachmentButton}
       <label className="sr-only" htmlFor={`direct-draft-${id}`}>Сообщение в беседу</label>
       <textarea ref={draftInput} id={`direct-draft-${id}`} rows={1} value={draft} maxLength={5120} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} placeholder={saved ? "Добавьте заметку, ссылку или файл…" : "Напишите сообщение…"}/>
       <ComposerSendButton label={pending ? 'Отправляем…' : retry.current ? 'Повторить отправку' : 'Отправить'} disabled={pending || (!draft.trim() && !upload.hasItems)} onSchedule={onSchedule}><Icon name="send" size={18}/></ComposerSendButton>
-    </form>}</ComposerTools>
+    </form>}</ComposerTools></div>
     {(error || loadError) && <p className="form-error" role="alert">{error || loadError}</p>}
-    {!saved && <button className="button button--ghost" onClick={() => void api.community.request(token, `/conversations/${id}/members/me`, 'DELETE').then(onLeave).catch((caught) => setError(problem(caught)))}>Покинуть беседу</button>}
+    {!saved && !scheduled && <button className="button button--ghost" onClick={() => void api.community.request(token, `/conversations/${id}/members/me`, 'DELETE').then(onLeave).catch((caught) => setError(problem(caught)))}>Покинуть беседу</button>}
   </section>
 }
 

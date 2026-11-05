@@ -1,7 +1,7 @@
 import { MessageLinkPreviews } from './LazyMessageLinks'
 import { useDraft } from '../hooks/useDraft'
 import { CustomRoleBadges, useCommunity } from './Community'
-import { ComposerTools, PollCard, saveFavorite } from './LazyCommunityFeatures'
+import { ComposerTools, PollCard, ScheduledHistory, saveFavorite } from './LazyCommunityFeatures'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
@@ -85,6 +85,8 @@ function readViewport(container: HTMLDivElement): ChatViewport | undefined {
 
 export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin = true, readOnlyLabel, emptyLabel, renderComments, onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
  const channelId = channel?.id ?? null
+  const [scheduled, setScheduled] = useState(false)
+  useEffect(() => { setScheduled(false) }, [channelId])
   const canModerate = canManage || !!((channel?.permissions ?? 0) & 16)
   const canCompose = composeOverride ?? (channel?.can_publish !== false && (channel?.kind !== 'news' || channel.can_publish === true || canManage))
   const attachmentUpload = useAttachmentUpload(channel, canCompose, threadRootId)
@@ -169,7 +171,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     readFrameRef.current = window.requestAnimationFrame(() => {
       readFrameRef.current = null
       const container = scrollRef.current
-      if (!container || document.visibilityState !== 'visible' || !document.hasFocus()) return
+      if (!container || container.hidden || document.visibilityState !== 'visible' || !document.hasFocus()) return
       const rootRect = container.getBoundingClientRect()
       let latestVisibleMessageId = 0
       container.querySelectorAll<HTMLElement>('[data-message-id]').forEach((element) => {
@@ -474,7 +476,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
 
   return (
     <section className="chat-panel" onPaste={attachmentUpload.onPaste} onDrop={attachmentUpload.onDrop} onDragOver={attachmentUpload.onDragOver}>
-      <div className="messages" ref={scrollRef} onScroll={() => { updateReturnVisibility(); scheduleReadCheck() }}>
+      <div className="messages" hidden={scheduled} ref={scrollRef} onScroll={() => { updateReturnVisibility(); scheduleReadCheck() }}>
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
         {loading && displayMessages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
           <div className="channel-start"><span><Icon name="hash" size={30}/></span><h2>{emptyLabel ?? (channel.kind === 'news' ? `Новости «${channel.name}»` : `Начало канала #${channel.name}`)}</h2><p>{channel.kind === 'news' ? 'Здесь появятся публикации авторов канала.' : 'Первое сообщение задаёт настроение. Сделайте его хорошим.'}</p></div>
@@ -496,13 +498,14 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
         {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} membersById={membersById} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
-      {showReturnToLatest && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
+      {showReturnToLatest && !scheduled && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
 
       {menuMessage && messageMenu && <MessageContextMenu key={`menu:${menuMessage.id}`} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canModerate} canPin={canModerate && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
       <TypingIndicator channelId={channel.id} currentUserId={currentUserId} membersById={membersById}/>
-      <ChatComposer canMentionRoles={ownRole === 'owner' || ownRole === 'admin'} draftScope={threadRootId} key={`composer:${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
+      {scheduled && featureContext && <ScheduledHistory api={featureContext.api} token={featureContext.token} destination={{ kind: 'channel', id: channel.id }} onClose={() => setScheduled(false)}/>}
+      <div className="chat-composer-slot" hidden={scheduled}><ChatComposer onScheduled={() => { setMessageMenu(null); setScheduled(true) }} canMentionRoles={ownRole === 'owner' || ownRole === 'admin'} draftScope={threadRootId} key={`composer:${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
         upload={attachmentUpload} composerFocus={composerFocus} setReplyTarget={setReplyTarget} onSend={onSend}
-        onFocus={() => setComposerFocus((value) => value + 1)} readOnlyLabel={readOnlyLabel}/>
+        onFocus={() => setComposerFocus((value) => value + 1)} readOnlyLabel={readOnlyLabel}/></div>
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
     </section>
   )
@@ -573,7 +576,8 @@ const ChatMessageRow = memo(function ChatMessageRow({ message, previous, context
   </>
 })
 
-function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel, canMentionRoles }: {
+function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upload, composerFocus, setReplyTarget, onSend, onFocus, readOnlyLabel, canMentionRoles, onScheduled }: {
+  onScheduled: () => void
   draftScope?: number; canMentionRoles: boolean; channel: Channel; canCompose: boolean; reply: MessageReply | null; membersById: ReadonlyMap<number, ServerMember>
   upload: ReturnType<typeof useAttachmentUpload>; composerFocus: number; onFocus: () => void; readOnlyLabel?: string
   setReplyTarget: (value: MessageReply | null | ((current: MessageReply | null) => MessageReply | null)) => void
@@ -602,6 +606,6 @@ function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upl
   return <>
       {reply && <aside className={`composer-reply ${reply.deleted ? 'is-deleted' : ''}`}><Icon name="reply" size={19}/><div><b>{reply.deleted ? 'Исходное сообщение удалено' : `Ответ ${reply.author.username}`}</b><p>{reply.deleted ? 'Уберите ответ, чтобы отправить текст' : readableMessage(reply.content, membersById)}</p></div><button className="icon-button" type="button" onClick={() => { setReplyTarget(null); setSendError(''); onFocus() }} aria-label="Отменить ответ"><Icon name="close" size={17}/></button></aside>}
       {upload.control}
-      {canCompose ? featureContext ? <ComposerTools api={featureContext.api} token={featureContext.token} destination={{kind:'channel',id:channel.id,server_id:channel.server_id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={() => setDraft((current) => current === draft ? '' : current)} onAttach={upload.pickFiles} attachmentDisabled={upload.attachmentDisabled} disabled={sending}>{composer}</ComposerTools> : composer() : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
+      {canCompose ? featureContext ? <ComposerTools onScheduled={onScheduled} api={featureContext.api} token={featureContext.token} destination={{kind:'channel',id:channel.id,server_id:channel.server_id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={() => setDraft((current) => current === draft ? '' : current)} onAttach={upload.pickFiles} attachmentDisabled={upload.attachmentDisabled} disabled={sending}>{composer}</ComposerTools> : composer() : <div className="news-readonly"><Icon name="news" size={19}/><p>{readOnlyLabel ?? 'Публикуют назначенные авторы. Вы можете читать новости и ставить реакции.'}</p></div>}
   </>
 }
