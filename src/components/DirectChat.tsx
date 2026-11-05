@@ -10,6 +10,7 @@ import { formatDate, formatTime } from '../lib/format'
 import { useCommunity } from './Community'
 import { PersonalEmpty } from './PersonalEmpty'
 import { Icon } from './Icon'
+import { ComposerSendButton } from './ComposerActions'
 import { MessageLinkPreviews } from './LazyMessageLinks'
 import { ComposerTools, PollCard, openForward, saveFavorite } from './LazyCommunityFeatures'
 import { MessageReactions } from './MessageReactions'
@@ -166,13 +167,13 @@ export function DirectChat({ api, token, id, saved = false, currentUserId, revis
       })}
     </div>
     {upload.control}
-    <ComposerTools api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft((current)=>current===draft?'':current);onRefresh()}}/>
     {menu && <MessageContextMenu message={asMessage(messages.find((m)=>m.id===menu.message.id)??menu.message)} x={menu.x} y={menu.y} canEdit={false} canDelete={saved} canPin={false} canReply={false} pinned={false} pending={{}} onClose={()=>setMenu(null)} onReact={(emoji)=>void react(messages.find((m)=>m.id===menu.message.id)??menu.message,emoji)} onReply={()=>undefined} onEdit={()=>undefined} onPin={()=>undefined} onCopy={()=>{void navigator.clipboard.writeText(menu.message.content)}} onForward={()=>openForward({kind:'conversation',id:menu.message.id})} onSave={saved ? undefined : () => saveFavorite({kind:'conversation',id:menu.message.id})} onBlock={menu.message.author.user_id !== currentUserId ? () => { void api.community.request(token, `/me/blocks/${menu.message.author.user_id}`, 'PUT').then(onRefresh).catch((caught) => setError(problem(caught))) } : undefined} onDelete={()=>{const mid=menu.message.id;void api.community.request(token,`/conversations/${id}/messages/${mid}`,'DELETE').then(()=>{deletedIds.current.add(mid);setMessages((v)=>v.filter((m)=>m.id!==mid));onRefresh()}).catch((e)=>setError(problem(e)))}}/>}
-    <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
+    <ComposerTools api={api} token={token} destination={{kind:'conversation',id}} content={draft} prepare={upload.prepare} commit={upload.commit} release={upload.release} onSent={()=>{setDraft((current)=>current===draft?'':current);onRefresh()}} onAttach={upload.pickFiles} attachmentDisabled={upload.attachmentDisabled} disabled={pending}>{({ attachmentButton, onSchedule }) => <form className="composer direct-chat__composer" onSubmit={(e) => { e.preventDefault(); void send() }}>
+      {attachmentButton}
       <label className="sr-only" htmlFor={`direct-draft-${id}`}>Сообщение в беседу</label>
       <textarea ref={draftInput} id={`direct-draft-${id}`} rows={1} value={draft} maxLength={5120} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} placeholder={saved ? "Добавьте заметку, ссылку или файл…" : "Напишите сообщение…"}/>
-      <button className="composer__send" aria-label={pending ? 'Отправляем…' : retry.current ? 'Повторить отправку' : 'Отправить'} title="Отправить" disabled={pending || (!draft.trim() && !upload.hasItems)}><Icon name="send" size={18}/></button>
-    </form>
+      <ComposerSendButton label={pending ? 'Отправляем…' : retry.current ? 'Повторить отправку' : 'Отправить'} disabled={pending || (!draft.trim() && !upload.hasItems)} onSchedule={onSchedule}><Icon name="send" size={18}/></ComposerSendButton>
+    </form>}</ComposerTools>
     {(error || loadError) && <p className="form-error" role="alert">{error || loadError}</p>}
     {!saved && <button className="button button--ghost" onClick={() => void api.community.request(token, `/conversations/${id}/members/me`, 'DELETE').then(onLeave).catch((caught) => setError(problem(caught)))}>Покинуть беседу</button>}
   </section>

@@ -1,6 +1,6 @@
-import { Suspense, lazy, useState, type ComponentProps } from 'react'
+import { Suspense, lazy, useState, type ComponentProps, type ReactNode } from 'react'
 import type * as Features from './CommunityFeatures'
-import { Icon } from './Icon'
+import { ComposerAttachmentButton } from './ComposerActions'
 import '../styles/composer-tools.css'
 
 export { featuresChanged, openForward, saveFavorite } from '../services/communityEvents'
@@ -15,10 +15,13 @@ const LazyUniversalForward = lazy(() => import('./CommunityFeatures').then((modu
 const loading = <p role="status">Загружаем…</p>
 
 /** The plain chat needs only the launcher buttons, until a tool is opened. */
-export function ComposerTools(props: ComponentProps<typeof Features.ComposerTools>) {
+export function ComposerTools({ children, onAttach, attachmentDisabled, disabled, ...props }: ComponentProps<typeof Features.ComposerTools> & {
+  children: (controls: { attachmentButton: ReactNode; onSchedule: () => void }) => ReactNode
+  onAttach: () => void; attachmentDisabled?: boolean; disabled?: boolean
+}) {
   const [mode, setMode] = useState<'poll' | 'schedule' | null>(null)
   const [scheduled, setScheduled] = useState(false)
-  return <><div className="composer-tools"><button type="button" onClick={() => setMode('poll')}>Опрос</button><button type="button" onClick={() => setMode('schedule')}>Отложить сообщение</button><button type="button" aria-label="Отложенные сообщения этого чата" onClick={() => setScheduled(true)}><Icon name="clock" size={14}/>Отложенные</button></div>
+  return <>{children({ attachmentButton: <ComposerAttachmentButton onAttach={onAttach} attachmentDisabled={attachmentDisabled} disabled={disabled} onPoll={() => setMode('poll')} onSchedule={() => setMode('schedule')} onScheduled={() => setScheduled(true)}/>, onSchedule: () => setMode('schedule') })}
     {mode && <Suspense fallback={loading}><LazyComposerTools key={mode} {...props} initialMode={mode} onClose={() => setMode(null)}/></Suspense>}
     {scheduled && <Suspense fallback={loading}><ScheduledMessagesDialog api={props.api} token={props.token} destination={props.destination} onClose={() => setScheduled(false)}/></Suspense>}
   </>

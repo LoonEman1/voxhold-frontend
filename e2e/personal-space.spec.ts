@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test'
 test('scheduled messages stay inside their chat and can be cancelled', async ({ page }, info) => {
   await page.goto('/e2e/fixtures/personal-space.html')
   await page.getByRole('button', { name: 'Диалог: Лера', exact: true }).click()
-  await page.getByRole('button', { name: 'Отложенные сообщения этого чата', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить к сообщению', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Отложенные', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Отложенные сообщения', exact: true })
   await expect(dialog.getByText('Встречаемся в семь.', { exact: true })).toBeVisible()
   await expect(dialog.getByText('Сообщение для другой беседы', { exact: true })).toHaveCount(0)

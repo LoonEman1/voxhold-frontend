@@ -1,6 +1,8 @@
 import type { SVGProps } from 'react'
 
 export type IconName =
+  | 'paperclip'
+  | 'poll'
   | 'grip'
   | 'bookmark'
   | 'calendar'
@@ -58,6 +60,8 @@ export type IconName =
   | 'refresh'
 
 const paths: Record<IconName, React.ReactNode> = {
+  paperclip: <path d="m8 13 7-7a3 3 0 0 1 4.2 4.2l-9.3 9.3a5 5 0 0 1-7.1-7.1l9-9M6 15l8-8a1 1 0 0 1 1.4 1.4l-7 7"/>,
+  poll: <><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M7 16v-4m5 4V7m5 9v-6"/></>,
   refresh: <><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></>,
   grip: <><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" strokeWidth="3"/></>,
   bookmark: <><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/><path d="M9 7h6"/></>,
