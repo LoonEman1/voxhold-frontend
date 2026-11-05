@@ -1,13 +1,15 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { ServerMember, ServerRole } from '../domain/types'
 import { roleMeta } from '../lib/roles'
 import { mentionDirectory } from '../lib/mentions'
 import { MentionDraft } from '../services/mentionDraft'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
+import { ComposerSendButton } from './ComposerActions'
 
 interface Option { key: string; label: string; detail: string; token: string; userId?: number }
-export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members: providedMembers, membersById, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel, canMentionRoles = false }: {
+export function MentionComposer({ attachmentButton, onSchedule, hasAttachments = false, focusKey = 0, submitDisabled = false, draft, onChange, onSubmit, sending, channelName, members: providedMembers, membersById, error, submitLabel = 'Отправить', onCancel, submitOnEnter = true, inputLabel, canMentionRoles = false }: {
+  attachmentButton?: ReactNode; onSchedule?: () => void
   hasAttachments?: boolean; focusKey?: number; submitDisabled?: boolean; draft: string; onChange: (value: string) => void; onSubmit: (event?: FormEvent, content?: string) => void; submitLabel?: string; onCancel?: () => void; submitOnEnter?: boolean; inputLabel?: string; canMentionRoles?: boolean; sending: boolean; channelName: string; members?: ServerMember[]; membersById?: ReadonlyMap<number, ServerMember>; error: string
 }) {
   const members = useMemo(() => providedMembers ?? [...(membersById?.values() ?? [])], [providedMembers, membersById])
@@ -55,7 +57,7 @@ export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDi
   const selected = Math.min(active, options.length - 1)
   return <form className="composer" onSubmit={submit}>
     {options.length > 0 && <div className="mention-picker" id={id} role="listbox" aria-label="Упомянуть участника или роль"><header><b>Упомянуть</b><span>↑↓ выбрать · Enter вставить · Esc закрыть</span></header>{options.map((option, index) => <button id={`${id}-${index}`} key={option.key} type="button" role="option" aria-selected={index === selected} className={index === selected ? 'is-active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>{option.userId ? <Avatar userId={option.userId} name={option.label} size="small"/> : <span className="mention-picker__role"><Icon name="people" size={16}/></span>}<span><b>@{option.label}</b><small>{option.detail}</small></span>{!option.userId && <em>Роль</em>}</button>)}</div>}
-    <span className="composer__mention-hint" title="Введите @, чтобы упомянуть участника или роль" aria-hidden="true">@</span>
+    {attachmentButton ?? <span className="composer__mention-hint" title="Введите @, чтобы упомянуть участника или роль" aria-hidden="true">@</span>}
     <textarea ref={input} rows={editing ? 3 : 1} value={text} onChange={(event) => { model.current.change(event.target.value); onChange(event.target.value); if (!editing && event.target.value) window.dispatchEvent(new Event('voxhold:composing')); setLocalError(''); setCaret(event.target.selectionStart); setActive(0); setDismissed(null) }} onSelect={(event) => setCaret(event.currentTarget.selectionStart)} onKeyDown={(event) => {
       if (event.nativeEvent.isComposing) return
       if (!(event.key === 'Enter' && event.shiftKey) && options.length && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
@@ -66,7 +68,7 @@ export function MentionComposer({ hasAttachments = false, focusKey = 0, submitDi
       } else if (event.key === 'Escape' && onCancel) { event.preventDefault(); onCancel() }
       else if (event.key === 'Enter' && !event.shiftKey && (submitOnEnter || event.ctrlKey || event.metaKey)) { event.preventDefault(); submit() }
     }} placeholder={`Написать в #${channelName} · @ для упоминания`} maxLength={5120} aria-label={inputLabel ?? `Сообщение в ${channelName}`} aria-autocomplete="list" aria-controls={options.length ? id : undefined} aria-activedescendant={options.length ? `${id}-${selected}` : undefined}/>
-    <button type="submit" className="composer__send" disabled={(!draft.trim() && !hasAttachments) || sending || submitDisabled} aria-label={sending ? 'Отправляется' : submitLabel} title={submitLabel}>{sending ? <span className="spinner"/> : <Icon name={editing ? 'check' : 'send'}/> }</button>
+    <ComposerSendButton disabled={(!draft.trim() && !hasAttachments) || sending || submitDisabled} label={sending ? 'Отправляется' : submitLabel} onSchedule={onSchedule}>{sending ? <span className="spinner"/> : <Icon name={editing ? 'check' : 'send'}/>}</ComposerSendButton>
     {onCancel && <button className="button button--ghost button--small" type="button" onClick={onCancel}>Отмена</button>}
     {(localError || error) && <div className="composer__error" role="alert">{localError || error}</div>}
   </form>
