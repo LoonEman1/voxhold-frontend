@@ -94,7 +94,7 @@ export function CreateChannelDialog({ open, onClose, onSubmit }: AsyncDialogProp
 
 export { InviteUserDialog } from './InviteUserDialog'
 
-export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false, onDeleteAccount, security }: AsyncDialogProps & { profile: Profile | null; security?: SecurityActions; onDeleteAccount?: (password: string) => Promise<void>; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
+export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasAvatar = false, onDeleteAccount, security, embedded = false, onBusyChange }: AsyncDialogProps & { embedded?: boolean; onBusyChange?: (busy: boolean) => void; profile: Profile | null; security?: SecurityActions; onDeleteAccount?: (password: string) => Promise<void>; hasAvatar?: boolean; onAvatar?: (file: File | null, crop?: AvatarCrop) => Promise<void>; onSubmit(patch: { about: string; country_code: string }): Promise<void> }) {
   const { theme, toggleTheme } = useTheme()
   const tabsId = useId()
   const [tab, setTab] = useState('profile')
@@ -108,6 +108,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   const [deletePassword, setDeletePassword] = useState('')
   const [deletePending, setDeletePending] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  useEffect(() => { onBusyChange?.(open && (pending || avatarPending || deletePending)) }, [open, pending, avatarPending, deletePending, onBusyChange])
   useEffect(() => { if (open) { setTab('profile'); setConfirmingDelete(false); setDeleteName(''); setDeletePassword(''); setDeleteError('') } }, [open, profile?.user_id])
   const removeAccount = async () => {
     if (!onDeleteAccount || !profile?.username || deleteName !== profile.username || !deletePassword || deletePending || pending || avatarPending) return
@@ -117,18 +118,17 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   useEffect(() => { if (open) { setAbout(profile?.about ?? ''); setCountry(profile?.country_code ?? ''); setError('') } }, [open, profile, setError])
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (avatarPending || deletePending) return
-    await run(() => onSubmit({ about: about.trim(), country_code: country }), onClose)
+    await run(() => onSubmit({ about: about.trim(), country_code: country }), embedded ? () => undefined : onClose)
   }
-  return (
-    <Modal open={open} onClose={() => { if (!deletePending) onClose() }} title="Ваш профиль" eyebrow="ЛИЧНЫЕ НАСТРОЙКИ" size="medium" className="profile-dialog">
-      <div className="profile-tabs" role="tablist" aria-label="Настройки профиля" onKeyDown={(event) => {
+  const content = <>
+      {!embedded && <div className="profile-tabs" role="tablist" aria-label="Настройки профиля" onKeyDown={(event) => {
         const index = tabs.findIndex((item) => item.id === tab)
         const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
         if (next < 0) return
         event.preventDefault(); setTab(tabs[next]!.id)
         document.getElementById(`${tabsId}-tab-${tabs[next]!.id}`)?.focus()
-      }}>{tabs.map((item) => <button key={item.id} id={`${tabsId}-tab-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${tabsId}-panel-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)}><Icon name={item.icon} size={16}/>{item.label}</button>)}</div>
-      <div className="profile-panel" id={`${tabsId}-panel-profile`} role="tabpanel" aria-labelledby={`${tabsId}-tab-profile`} hidden={tab !== 'profile'}>
+      }}>{tabs.map((item) => <button key={item.id} id={`${tabsId}-tab-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${tabsId}-panel-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)}><Icon name={item.icon} size={16}/>{item.label}</button>)}</div>}
+      <div className="profile-panel" id={`${tabsId}-panel-profile`} role={embedded ? undefined : 'tabpanel'} aria-labelledby={embedded ? undefined : `${tabsId}-tab-profile`} hidden={!embedded && tab !== 'profile'}>
       <div className="profile-hero">{onAvatar ? open && <AvatarEditor key={profile?.user_id} userId={profile?.user_id} name={profile?.username ?? 'V'} hasAvatar={hasAvatar} disabled={pending || deletePending} onSave={onAvatar} onBusyChange={setAvatarPending}><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></AvatarEditor> : <><Avatar userId={profile?.user_id} name={profile?.username ?? 'V'} size="large"/><div><h3>@{profile?.username}</h3><p>В Voxhold с {profile ? formatDate(profile.created_at) : 'недавно'}</p></div></>}</div>
       <form className="dialog-form" onSubmit={submit}>
         <label><span>О себе <small>{about.length}/512</small></span><textarea value={about} onChange={(e) => setAbout(e.target.value)} maxLength={512} rows={4} placeholder="Пара слов о себе, интересах или текущем проекте…" /></label>
@@ -137,11 +137,11 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
         <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending || avatarPending || deletePending}>{pending ? <span className="spinner"/> : 'Сохранить'}</button></div>
       </form>
       </div>
-      <div className="profile-panel" id={`${tabsId}-panel-appearance`} role="tabpanel" aria-labelledby={`${tabsId}-tab-appearance`} hidden={tab !== 'appearance'}>
+      <div className="profile-panel" id={`${tabsId}-panel-appearance`} role={embedded ? undefined : 'tabpanel'} aria-labelledby={embedded ? undefined : `${tabsId}-tab-appearance`} hidden={!embedded && tab !== 'appearance'}>
         <section className="profile-appearance" aria-label="Оформление"><div><h3>Цветовая тема</h3><p>Выберите комфортный вид интерфейса. Настройка сохраняется на этом устройстве.</p></div><button type="button" className="button button--secondary theme-toggle" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}><Icon name={theme === 'dark' ? 'sun' : 'moon'}/>{theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}</button></section>
         <div className="appearance-preview" aria-hidden="true"><div><i/><i/><i/></div><section><b>Ваше пространство</b><span>Всё важное — здесь</span><p><i/><span>Место для хороших разговоров</span></p><div><span>Написать сообщение…</span><Icon name="send" size={16}/></div></section></div>
       </div>
-      {(security || onDeleteAccount) && <div className="profile-panel" id={`${tabsId}-panel-security`} role="tabpanel" aria-labelledby={`${tabsId}-tab-security`} hidden={tab !== 'security'}>
+      {(security || onDeleteAccount) && <div className="profile-panel" id={`${tabsId}-panel-security`} role={embedded ? undefined : 'tabpanel'} aria-labelledby={embedded ? undefined : `${tabsId}-tab-security`} hidden={!embedded && tab !== 'security'}>
       {security && <SecuritySettings actions={security}/>}
       {onDeleteAccount && <section className="danger-zone profile-danger" aria-label="Опасная зона">
         <div><h3>Опасная зона</h3><p>Удаление аккаунта удалит профиль, настройки и доступ к этому инстансу. Старые сообщения останутся обезличенными. Это действие нельзя отменить.</p></div>
@@ -154,8 +154,8 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
         {deleteError && <div className="form-error" role="alert">{deleteError}</div>}
       </section>}
       </div>}
-    </Modal>
-  )
+  </>
+  return embedded ? open && <div className="settings-profile">{content}</div> : <Modal open={open} onClose={() => { if (!deletePending) onClose() }} title="Ваш профиль" eyebrow="ЛИЧНЫЕ НАСТРОЙКИ" size="medium" className="profile-dialog">{content}</Modal>
 }
 
 export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout, safetyCode }: AsyncDialogProps & { safetyCode?: () => Promise<SafetyCodeResult>; onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {

@@ -17,6 +17,22 @@ it('keeps windows outside navigation and inside even a very small viewport', () 
   expect(desktop.x).toBe(88)
 })
 
+it('places previews above the mobile navigation and restores that position with Home', () => {
+  vi.stubGlobal('innerWidth', 390); vi.stubGlobal('innerHeight', 700)
+  function Fixture() {
+    const floating = useFloatingWindow({ storageKey: 'preview-test', width: 360, height: 225, minHeight: 175, placement: 'bottom-right' })
+    return <aside ref={floating.ref} style={floating.style} data-testid="preview"><button onKeyDown={floating.moveKey}>Move</button></aside>
+  }
+  render(<Fixture/>); act(() => vi.advanceTimersByTime(20))
+  const preview = screen.getByTestId('preview')
+  expect(Number.parseFloat(preview.style.top) + 225).toBe(700 - 63 - 12)
+  const original = preview.style.top
+  fireEvent.keyDown(screen.getByRole('button'), { key: 'ArrowUp' })
+  expect(preview.style.top).not.toBe(original)
+  fireEvent.keyDown(screen.getByRole('button'), { key: 'Home' })
+  expect(preview.style.top).toBe(original)
+})
+
 it('moves without React renders on every pointer event and saves only the final bounds', () => {
   let renders = 0
   function Fixture() {

@@ -17,6 +17,7 @@ const stream: ActiveStream = {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
 })
 
@@ -84,6 +85,65 @@ describe('PersistentStreamPlayer', () => {
     expect(handlers.onLeave).toHaveBeenCalledOnce()
   })
 
+  it('starts compact at the bottom right and returns to the channel without stopping the stream', () => {
+    const handlers = renderPlayer('expanded')
+    const player = screen.getByRole('dialog')
+    expect(player.style.width).toBe('360px')
+    expect(player.style.height).toBe('225px')
+    expect(Number.parseFloat(player.style.left) + 360).toBe(window.innerWidth - 12)
+    expect(Number.parseFloat(player.style.top) + 225).toBe(window.innerHeight - 12)
+    fireEvent.click(screen.getByRole('button', { name: 'Вернуться в голосовой канал' }))
+    expect(handlers.onCollapse).toHaveBeenCalledOnce()
+    expect(handlers.onLeave).not.toHaveBeenCalled()
+  })
+
+  it('keeps the same video when switching layouts and leaving native fullscreen with Escape', async () => {
+    const props = {
+      stream, role: 'viewer' as const, status: 'connected' as const, media: {} as MediaStream,
+      channelName: 'Общий', preferences: DEFAULT_STREAM_PREFERENCES,
+      onPreferencesChange: vi.fn(), onExpand: vi.fn(), onCollapse: vi.fn(), onLeave: vi.fn(),
+    }
+    const { container, rerender } = render(<PersistentStreamPlayer {...props} mode="mini"/>)
+    const video = container.querySelector('video')
+    fireEvent.click(screen.getByRole('button', { name: 'Полный экран' }))
+    rerender(<PersistentStreamPlayer {...props} mode="expanded"/>)
+    expect(container.querySelector('video')).toBe(video)
+    const player = screen.getByRole('dialog')
+    expect(player.classList.contains('is-ui-hidden')).toBe(true)
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+    fireEvent(document, new Event('fullscreenchange'))
+    expect(player.classList.contains('is-ui-hidden')).toBe(false)
+    expect(player.style.width).toBe('360px')
+    expect(container.querySelector('video')).toBe(video)
+    expect(props.onLeave).not.toHaveBeenCalled()
+    Reflect.deleteProperty(document, 'fullscreenElement')
+  })
+
+  it('exits a late native fullscreen request when Escape is pressed before it completes', async () => {
+    renderPlayer('expanded')
+    const player = screen.getByRole('dialog')
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => { finish = resolve })
+    Object.defineProperty(player, 'requestFullscreen', { configurable: true, value: vi.fn(() => pending) })
+    const exit = vi.fn(async () => {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exit })
+    fireEvent.click(screen.getByRole('button', { name: 'Полный экран' }))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await act(async () => {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: player })
+      finish()
+      await pending
+    })
+    expect(exit).toHaveBeenCalledOnce()
+    expect(player.classList.contains('is-ui-hidden')).toBe(false)
+    expect(player.style.width).toBe('360px')
+    Reflect.deleteProperty(document, 'fullscreenElement')
+    Reflect.deleteProperty(document, 'exitFullscreen')
+  })
+
   it('collapses on Escape and changes playback volume', () => {
     const handlers = renderPlayer('expanded')
 
@@ -98,7 +158,7 @@ describe('PersistentStreamPlayer', () => {
     })
   })
 
-  it('hides the interface and restores it before collapsing on Escape', () => {
+  it('hides the interface and restores it before collapsing on Escape', async () => {
     const handlers = renderPlayer('expanded')
     const requestFullscreen = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(screen.getByRole('dialog'), 'requestFullscreen', {
@@ -110,7 +170,7 @@ describe('PersistentStreamPlayer', () => {
     expect(screen.getByRole('dialog').classList.contains('is-ui-hidden')).toBe(true)
     expect(requestFullscreen).toHaveBeenCalledOnce()
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }) })
     expect(screen.getByRole('dialog').classList.contains('is-ui-hidden')).toBe(false)
     expect(handlers.onCollapse).not.toHaveBeenCalled()
 
@@ -166,23 +226,23 @@ describe('PersistentStreamPlayer cinema mode', () => {
     expect(dialog.classList.contains('is-idle')).toBe(false)
   })
 
-  it('resets the hover guard when cinema controls are unmounted', () => {
+  it('resets the hover guard when cinema controls are unmounted', async () => {
     vi.useFakeTimers()
     const dialog = renderExpanded(true)
     fireEvent.pointerEnter(dialog.querySelector('.stream-cinema-controls')!)
-    fireEvent.click(screen.getByRole('button', { name: 'Выйти из полного экрана' }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Выйти из полного экрана' })) })
     fireEvent.click(screen.getByRole('button', { name: 'Полный экран' }))
     act(() => { vi.advanceTimersByTime(CINEMA_IDLE_MS + 100) })
     expect(dialog.classList.contains('is-idle')).toBe(true)
   })
 
-  it('toggles fullscreen with the F key', () => {
+  it('toggles fullscreen with the F key', async () => {
     const dialog = renderExpanded(false)
 
-    fireEvent.keyDown(window, { code: 'KeyF', key: 'f' })
+    await act(async () => { fireEvent.keyDown(window, { code: 'KeyF', key: 'f' }) })
     expect(dialog.classList.contains('is-ui-hidden')).toBe(true)
 
-    fireEvent.keyDown(window, { code: 'KeyF', key: 'f' })
+    await act(async () => { fireEvent.keyDown(window, { code: 'KeyF', key: 'f' }) })
     expect(dialog.classList.contains('is-ui-hidden')).toBe(false)
   })
 

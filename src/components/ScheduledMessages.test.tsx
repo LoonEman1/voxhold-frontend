@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ScheduledMessage } from '../domain/community'
 import type { VoxholdApi } from '../services/api'
@@ -17,6 +17,19 @@ it('keeps the list in the selected chat when an older server ignores destination
   expect(screen.queryByText('Другой тип с тем же ID')).not.toBeInTheDocument()
   expect(screen.queryByText('Другой канал')).not.toBeInTheDocument()
   expect(request.mock.calls[0]![1]).toContain('destination_kind=channel&destination_id=2')
+})
+
+it('places the send date below the message and removes it as soon as it is sent', async () => {
+  const scheduled = item(1, 'channel', 2, 'Сообщение на потом')
+  const request = vi.fn().mockResolvedValueOnce([scheduled]).mockReturnValue(new Promise(() => undefined))
+  const api = { community: { request } } as unknown as VoxholdApi
+  const { container } = render(<ScheduledMessages api={api} token="test" destination={{ kind: 'channel', id: 2 }}/>)
+  await screen.findByText('Сообщение на потом')
+  const article = container.querySelector('article')!
+  expect(article.querySelector('p')!.compareDocumentPosition(article.querySelector('time')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  act(() => window.dispatchEvent(new CustomEvent('voxhold:community', { detail: { type: 'conversation.scheduled', data: { id: 1, status: 'sent' } } })))
+  expect(screen.queryByText('Сообщение на потом')).not.toBeInTheDocument()
+  await screen.findByText('В этом чате нет отложенных сообщений')
 })
 
 it('preserves attachments and poll options while updating its question and schedule', async () => {

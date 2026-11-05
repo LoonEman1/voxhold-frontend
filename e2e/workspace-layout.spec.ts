@@ -1,5 +1,41 @@
 import { expect, test } from '@playwright/test'
 
+test('compact stream preview moves, survives fullscreen and fits narrow viewports', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/channel-access.html?viewer&window')
+  const player = page.getByRole('dialog', { name: 'Трансляция в канале дизайн-комната' })
+  await expect(player.locator('video')).toBeVisible()
+  const initial = await player.boundingBox()
+  expect(initial!.width).toBeLessThanOrEqual(362)
+  expect(initial!.height).toBeLessThanOrEqual(227)
+  const handle = await player.getByRole('button', { name: 'Переместить окно трансляции' }).boundingBox()
+  await page.mouse.move(handle!.x + 60, handle!.y + 12)
+  await page.mouse.down(); await page.mouse.move(650, 430, { steps: 8 }); await page.mouse.up()
+  const moved = await player.boundingBox()
+  expect(moved!.x).toBeLessThan(initial!.x - 100)
+  await player.locator('video').evaluate((video) => { Object.assign(window, { previewVideo: video }) })
+  await player.getByRole('button', { name: 'Полный экран', exact: true }).click()
+  await expect(player).toHaveClass(/is-ui-hidden/)
+  await page.keyboard.press('Escape')
+  await expect(player).not.toHaveClass(/is-ui-hidden/)
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true)
+  await expect.poll(async () => (await player.boundingBox())!.x).toBeCloseTo(moved!.x, 0)
+  const restored = await player.boundingBox()
+  expect(restored!.x).toBeCloseTo(moved!.x, 0)
+  expect(restored!.y).toBeCloseTo(moved!.y, 0)
+  expect(await player.locator('video').evaluate((video) => video === (window as unknown as { previewVideo: HTMLVideoElement }).previewVideo)).toBe(true)
+  await page.mouse.move(20, 20)
+  await player.screenshot({ path: info.outputPath('stream-preview-desktop.png'), animations: 'disabled' })
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 700 })
+    await expect.poll(async () => { const box = await player.boundingBox(); return box!.x + box!.width }).toBeLessThanOrEqual(width - 10)
+    const box = await player.boundingBox()
+    expect(box!.x).toBeGreaterThanOrEqual(10)
+    expect(box!.y + box!.height).toBeLessThanOrEqual(700 - 63 - 10)
+    await expect(player.getByRole('button', { name: 'Перестать смотреть', exact: true })).toBeInViewport()
+    await player.screenshot({ path: info.outputPath(`stream-preview-${width}.png`), animations: 'disabled' })
+  }
+})
+
 test('channel stream cards select a publisher and preserve the other screen after stop', async ({ page }, info) => {
   await page.goto('/e2e/fixtures/channel-streams.html')
   const first = page.getByRole('region', { name: 'Лера показывает экран' }), second = page.getByRole('region', { name: 'Миша показывает экран' })
@@ -66,7 +102,7 @@ test('personal pages reclaim the duplicate column and events stay usable on mobi
     expect(await page.locator('.personal-content').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
     if (width === 1280 || width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath(`server-events-${theme}-${width}.png`) })
     await navigation.getByRole('button', { name: 'Аккаунт: Александр' }).click()
-    await expect(page.getByRole('menuitem', { name: 'Настройки профиля' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Настройки', exact: true })).toBeVisible()
     await expect(page.getByRole('menuitem', { name: 'Выйти', exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await navigation.getByRole('button', { name: 'Сообщения', exact: true }).click()
@@ -298,7 +334,7 @@ test('stream window moves and resizes without replacing video; 200% mixer fits b
   await expect(player.locator('video')).toHaveAttribute('data-identity', 'original')
   for (const theme of ['dark', 'light']) {
     await page.evaluate((theme) => { document.documentElement.dataset.theme = theme }, theme)
-    await expect(player.locator('h2')).toHaveCSS('color', theme === 'light' ? 'rgb(32, 33, 29)' : 'rgb(245, 243, 236)')
+    await expect(player.locator('.stream-preview-player__move')).toHaveCSS('color', 'rgb(232, 233, 238)')
     for (const width of [1280, 600, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
       await expect.poll(async () => { const box = await player.boundingBox(); return box!.x + box!.width <= width }).toBe(true)

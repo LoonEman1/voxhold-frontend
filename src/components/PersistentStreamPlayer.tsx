@@ -8,15 +8,14 @@ import { useMediaPlayback } from '../hooks/useMediaPlayback'
 import { pictureInPictureAvailable, togglePictureInPicture } from '../lib/pictureInPicture'
 import { StreamVolumeControl } from './StreamVolumeControl'
 import { Icon } from './Icon'
-import { StreamQualitySummary } from './StreamQualitySummary'
 import { useFloatingWindow } from '../hooks/useFloatingWindow'
 import { useStreamPlaybackGain } from '../hooks/useStreamPlaybackGain'
 import { MAX_STREAM_VOLUME } from '../services/streamSettings'
+import '../styles/stream-preview.css'
 
 interface PersistentStreamPlayerProps {
   onPlaybackRecovery?: () => void
   callControls?: ReactNode
-  participants?: ReactNode
   mode: 'mini' | 'expanded'
   stream: ActiveStream | null
   role: 'publisher' | 'viewer'
@@ -25,6 +24,7 @@ interface PersistentStreamPlayerProps {
   status: 'idle' | 'requesting' | 'signaling' | 'connected'
   media: MediaStream
   channelName: string
+  publisherName?: string
   preferences: StreamPreferences
   quality?: StreamQualityStats | null
   onPreferencesChange: (value: StreamPreferences) => void
@@ -39,7 +39,7 @@ interface PersistentStreamPlayerProps {
 /** Cinema controls fade out after this long without input. */
 export const CINEMA_IDLE_MS = 2_500
 
-export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, onOpenSettings, startInCinema = false, callControls, participants, audioMuted = false, onToggleAudio }: PersistentStreamPlayerProps) {
+export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role, status, media, channelName, publisherName, preferences, quality: qualityOverride, onPreferencesChange, onExpand, onCollapse, onLeave, onOpenSettings, startInCinema = false, callControls, audioMuted = false, onToggleAudio }: PersistentStreamPlayerProps) {
   const quality = useStreamQuality(qualityOverride)
   const playerRef = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -49,7 +49,9 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
     return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }) }
   }, [mode])
   const [uiHidden, setUIHidden] = useState(false)
-  const floating = useFloatingWindow({ storageKey: 'voxhold.window.channel-stream.v1', width: 780, height: 500, minWidth: 280, minHeight: 300, enabled: mode === 'expanded' && !uiHidden, elementRef: playerRef })
+  const cinemaRequestedRef = useRef(false)
+  const fullscreenRequestRef = useRef<Promise<void> | null>(null)
+  const floating = useFloatingWindow({ storageKey: 'voxhold.window.channel-stream-preview.v1', width: 360, height: 225, minWidth: 280, minHeight: 175, placement: 'bottom-right', enabled: !uiHidden, elementRef: playerRef })
   const [idle, setIdle] = useState(false)
   const controlsHoveredRef = useRef(false)
   const isPublisher = role === 'publisher'
@@ -77,25 +79,40 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   }, [gain.elementVolume, videoRef])
 
   const enterCinemaMode = useCallback(async () => {
+    cinemaRequestedRef.current = true
     setUIHidden(true)
     const player = playerRef.current
-    if (!player?.requestFullscreen || document.fullscreenElement) return
+    if (!player?.requestFullscreen || document.fullscreenElement || fullscreenRequestRef.current) return
+    let pending: Promise<void> | null = null
     try {
-      await player.requestFullscreen()
+      pending = player.requestFullscreen()
+      fullscreenRequestRef.current = pending
+      await pending
     } catch {
       // CSS fullscreen remains available when the browser denies the native API.
+    } finally {
+      if (fullscreenRequestRef.current === pending) fullscreenRequestRef.current = null
     }
   }, [])
 
   const restoreUI = useCallback(async () => {
-    setUIHidden(false)
-    playerRef.current?.focus({ preventScroll: true })
-    if (document.fullscreenElement !== playerRef.current || !document.exitFullscreen) return
-    try {
-      await document.exitFullscreen()
-    } catch {
-      // The browser may already be leaving fullscreen after Escape.
+    cinemaRequestedRef.current = false
+    // Escape can arrive while requestFullscreen is still pending. Wait for it
+    // before exiting so a late native entry cannot enlarge the restored preview.
+    const pending = fullscreenRequestRef.current
+    if (pending) {
+      try { await pending } catch { /* CSS fallback has no native fullscreen to exit. */ }
     }
+    if (cinemaRequestedRef.current) return
+    if (playerRef.current && document.fullscreenElement === playerRef.current && document.exitFullscreen) {
+      try {
+        await document.exitFullscreen()
+      } catch {
+        // The browser may already be leaving fullscreen after Escape.
+      }
+    }
+    if (cinemaRequestedRef.current) return
+    setUIHidden(false)
     playerRef.current?.focus({ preventScroll: true })
   }, [])
 
@@ -103,11 +120,13 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   // the same click, while the browser still honours the user gesture.
   const startInCinemaRef = useRef(startInCinema)
   useEffect(() => {
-    if (mode === 'expanded' && startInCinemaRef.current) void enterCinemaMode()
+    if (mode === 'expanded' && startInCinemaRef.current) {
+      startInCinemaRef.current = false
+      void enterCinemaMode()
+    }
   }, [mode, enterCinemaMode])
 
   useEffect(() => {
-    if (mode !== 'expanded') return
     const handleKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !uiHidden && !playerRef.current?.contains(document.activeElement)) return
       if (event.key === 'Tab' && uiHidden) {
@@ -134,13 +153,8 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   }, [mode, onCollapse, uiHidden, enterCinemaMode, restoreUI])
 
   useEffect(() => {
-    if (mode === 'mini') setUIHidden(false)
-  }, [mode])
-
-  useEffect(() => {
-    if (mode !== 'expanded') return
     const syncFullscreenState = () => {
-      if (uiHidden && document.fullscreenElement !== playerRef.current) { setUIHidden(false); playerRef.current?.focus({ preventScroll: true }) }
+      if (uiHidden && document.fullscreenElement !== playerRef.current) { cinemaRequestedRef.current = false; setUIHidden(false); playerRef.current?.focus({ preventScroll: true }) }
     }
     document.addEventListener('fullscreenchange', syncFullscreenState)
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
@@ -200,38 +214,15 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   const audioBlockedOverlay = !isPublisher && (playbackState === 'audio_blocked' || gain.blocked)
   const rangeLabel = quality?.dynamicRange === 'hdr10' ? 'HDR10' : quality?.dynamicRange === 'hlg' ? 'HLG' : quality?.dynamicRange === 'sdr' ? 'SDR' : ''
 
-  const publisherAudioControl = isPublisher && stream?.has_audio && onToggleAudio && volumeControl(mode === 'mini')
+  const expand = () => { onExpand(); void enterCinemaMode() }
+  const sourceName = isPublisher ? 'Ваш экран' : publisherName ?? 'Трансляция экрана'
+  const qualityLabel = [quality?.height ? `${quality.height}p` : '', quality?.framesPerSecond ? `${quality.framesPerSecond} FPS` : '', rangeLabel].filter(Boolean).join(' · ')
 
-  if (mode === 'mini') {
-    return <aside className="stream-mini-player" aria-label={`Трансляция в канале ${channelName}`}>
-      <button className="stream-mini-player__preview" type="button" onClick={onExpand} title="Открыть трансляцию на весь экран">
-        <video ref={videoRef} autoPlay playsInline muted={muted}/>
-        {audioBlockedOverlay
-          ? <span className="stream-mini-player__live"><i/>Без звука</span>
-          : <span className="stream-mini-player__live"><i/>{liveLabel}</span>}
-        <span className="stream-mini-player__channel"><Icon name="volume" size={13}/>{channelName}</span>
-      </button>
-      <div className="stream-mini-player__actions">
-        {isPublisher && onOpenSettings && <button type="button" onClick={onOpenSettings} aria-label="Настройки трансляции" title="Изменить качество без остановки"><Icon name="settings" size={17}/></button>}
-        {isPublisher ? publisherAudioControl : stream?.has_audio && volumeControl(true)}
-        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} title="Картинка в картинке" aria-label="Смотреть поверх других окон"><Icon name="pip" size={17}/></button>}
-        <button type="button" onClick={onExpand} title="На весь экран" aria-label="Открыть трансляцию на весь экран"><Icon name="maximize" size={17}/></button>
-        <button className="is-danger" type="button" onClick={onLeave} title={leaveLabel} aria-label={leaveLabel}><Icon name="logout" size={17}/></button>
-      </div>
-    </aside>
-  }
-
-  return <section ref={playerRef} style={floating.style} tabIndex={-1} className={`stream-expanded-player floating-window ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role="dialog" aria-modal={uiHidden || undefined} aria-label={`Трансляция в канале ${channelName}`}>
-    <header>
-      <button type="button" className="floating-window__move" aria-label="Переместить окно трансляции" title="Переместить окно · стрелки или перетаскивание" onPointerDown={floating.beginMove} onKeyDown={floating.moveKey}><Icon name="grip" size={18}/></button>
-      <div><span className="eyebrow">ТРАНСЛЯЦИЯ ЭКРАНА{duration && ` · ${duration}`}</span><h2>{channelName}</h2></div>
-      <div className="stream-expanded-player__meta">
-        {isPublisher && onOpenSettings && <button type="button" onClick={onOpenSettings} aria-label="Настройки трансляции" title="Изменить качество без остановки"><Icon name="settings"/><span>Качество</span></button>}
-        {stream && <><span className="stream-mode">{stream.codec.toUpperCase()}</span>{rangeLabel && <span className="stream-mode">{rangeLabel}</span>}<span className="stream-mode">{stream.mode === 'p2p' ? 'P2P' : 'ЧЕРЕЗ СЕРВЕР'}</span></>}
-        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} aria-label="Картинка в картинке" title="Смотреть поверх других окон"><Icon name="pip"/><span>Картинка в картинке</span></button>}
-        <button type="button" onClick={() => void enterCinemaMode()} aria-label="Полный экран" title="Открыть настоящий полноэкранный режим без интерфейса"><Icon name="maximize"/><span>Полный экран</span></button>
-        <button type="button" onClick={onCollapse} aria-label="Свернуть трансляцию" title="Свернуть трансляцию"><Icon name="minimize"/><span>Свернуть</span></button>
-      </div>
+  return <section ref={playerRef} style={floating.style} tabIndex={-1} className={`stream-expanded-player stream-preview-player floating-window ${uiHidden ? 'is-ui-hidden' : ''} ${uiHidden && idle ? 'is-idle' : ''}`} role={mode === 'expanded' || uiHidden ? 'dialog' : 'complementary'} aria-modal={uiHidden || undefined} aria-label={`Трансляция в канале ${channelName}`}>
+    <header className="stream-preview-player__header">
+      <button type="button" className="stream-preview-player__back" onClick={onCollapse} aria-label="Вернуться в голосовой канал" title="Вернуться в голосовой канал"><Icon name="chevron" size={18}/></button>
+      <button type="button" className="stream-preview-player__move" aria-label="Переместить окно трансляции" title="Перетащите окно · стрелки для перемещения · Home для сброса" onPointerDown={floating.beginMove} onKeyDown={floating.moveKey}><span>{channelName}</span><Icon name="grip" size={14}/></button>
+      <span className="stream-preview-player__live" title={liveLabel}><i/>LIVE</span>
     </header>
     <div className="stream-expanded-player__video" onDoubleClick={() => { if (uiHidden) void restoreUI(); else void enterCinemaMode() }}>
       <video ref={videoRef} autoPlay playsInline muted={muted}/>
@@ -244,7 +235,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
       {!audioBlockedOverlay && playbackState === 'stalled' && (
         <div className="stream-audio-blocked-overlay"><span>Восстанавливаем соединение…</span></div>
       )}
-      {!audioBlockedOverlay && playbackState !== 'stalled' && <span><i/>{liveLabel}</span>}
+      {!uiHidden && !audioBlockedOverlay && playbackState !== 'playing' && playbackState !== 'stalled' && !isPublisher && <span className="stream-preview-player__status">{liveLabel}</span>}
       {uiHidden && <div
         className="stream-cinema-controls"
         onDoubleClick={(event) => event.stopPropagation()}
@@ -256,16 +247,15 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
         {callControls}
       </div>}
     </div>
-    {participants && <div className="stream-focused-participants" aria-label="Участники звонка">{participants}</div>}
-    <footer>
+    <footer className="stream-preview-player__footer">
       {gain.error && <span role="alert">{gain.error}</span>}
-      {callControls}
-      {publisherAudioControl}
-      <StreamQualitySummary stats={quality}/>
-      {!isPublisher && stream?.has_audio && volumeControl()}
-      <div>
-        <button className="button button--ghost" type="button" onClick={onCollapse}><Icon name="minimize"/>Свернуть</button>
-        <button className="button button--danger" type="button" onClick={onLeave}>{leaveLabel}</button>
+      <div className="stream-preview-player__source"><b title={sourceName}>{sourceName}</b><small>{[duration, qualityLabel].filter(Boolean).join(' · ') || liveLabel}</small></div>
+      <div className="stream-preview-player__actions">
+        {isPublisher && onOpenSettings && <button type="button" onClick={onOpenSettings} aria-label="Настройки трансляции" title="Настройки трансляции"><Icon name="settings" size={18}/></button>}
+        {stream?.has_audio && (!isPublisher || onToggleAudio) && volumeControl(true)}
+        {canPictureInPicture && <button type="button" onClick={() => void togglePictureInPicture(videoRef.current)} aria-label="Картинка в картинке" title="Смотреть поверх других окон"><Icon name="pip" size={18}/></button>}
+        <button type="button" onClick={expand} title="Открыть трансляцию на весь экран" aria-label="Полный экран"><Icon name="maximize" size={18}/></button>
+        <button type="button" className="is-danger" onClick={onLeave} title={leaveLabel} aria-label={leaveLabel}><Icon name="close" size={18}/></button>
       </div>
     </footer>
     {!uiHidden && <button type="button" className="floating-window__resize" aria-label="Изменить размер окна трансляции" title="Изменить размер · стрелки или перетаскивание" onPointerDown={floating.beginResize} onKeyDown={floating.resizeKey}><Icon name="more" size={17}/></button>}

@@ -4,7 +4,7 @@ export interface MessageLink { start: number; end: number; href: string; label: 
 export function messageLinks(content: string): MessageLink[] {
   const ignored = codeRanges(content)
   const links: MessageLink[] = []
-  for (const match of content.matchAll(/\bhttps?:\/\/[^\s<>`"'\p{Cc}]+/giu)) {
+  for (const match of content.matchAll(/\bhttps?:\/\/[^\s<>`"'\p{Cc}]+|(?<![\p{L}\p{N}_@./:\\-])(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+(?:[\p{L}]{2,63}|xn--[a-z0-9-]{2,59})(?::\d{1,5})?(?:[/?#][^\s<>`"'\p{Cc}]*)?/giu)) {
     const start = match.index
     if (ignored.some(([a, b]) => start >= a && start < b)) continue
     let href = match[0]
@@ -16,9 +16,10 @@ export function messageLinks(content: string): MessageLink[] {
       break
     }
     try {
-      const parsed = new URL(href)
+      const target = /^https?:\/\//i.test(href) ? href : `https://${href}`
+      const parsed = new URL(target)
       if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) continue
-      links.push({ start, end: start + href.length, href, label: href.length > 80 ? `${href.slice(0, 77)}…` : href })
+      links.push({ start, end: start + href.length, href: target, label: href.length > 80 ? `${href.slice(0, 77)}…` : href })
     } catch { /* Invalid URL remains ordinary text. */ }
   }
   return links

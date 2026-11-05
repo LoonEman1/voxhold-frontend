@@ -3,6 +3,8 @@ import type * as DialogTypes from './WorkspaceDialogs'
 import type { VoiceSettingsDialog as VoiceDialog } from './VoiceSettingsDialog'
 import type { MemberCard as LoadedMemberCard } from './MemberCard'
 import { ModalLoading } from './ModalLoading'
+const LazySettingsDialog = lazy(() => import('./SettingsDialog').then((module) => ({ default: module.SettingsDialog })))
+export function SettingsDialog(props: ComponentProps<typeof import('./SettingsDialog').SettingsDialog>) { return props.open ? <Suspense fallback={<ModalLoading title="Настройки" onClose={props.onClose}/>}><LazySettingsDialog {...props}/></Suspense> : null }
 
 const LazyChannelSettingsDialog = lazy(() => import('./WorkspaceDialogs').then((module) => ({ default: module.ChannelSettingsDialog })))
 export function ChannelSettingsDialog(props: ComponentProps<typeof DialogTypes.ChannelSettingsDialog>) { return props.open ? <Suspense fallback={<ModalLoading title="Загружаем…" onClose={props.onClose}/>}><LazyChannelSettingsDialog {...props}/></Suspense> : null }
@@ -23,13 +25,13 @@ const LazyMemberProfileDialog = lazy(() => import('./WorkspaceDialogs').then((mo
 export function MemberProfileDialog(props: ComponentProps<typeof DialogTypes.MemberProfileDialog>) { return props.open ? <Suspense fallback={<ModalLoading title="Загружаем…" onClose={props.onClose}/>}><LazyMemberProfileDialog {...props}/></Suspense> : null }
 
 const LazyProfileDialog = lazy(() => import('./WorkspaceDialogs').then((module) => ({ default: module.ProfileDialog })))
-export function ProfileDialog(props: ComponentProps<typeof DialogTypes.ProfileDialog>) { return props.open ? <Suspense fallback={<ModalLoading title="Загружаем…" onClose={props.onClose}/>}><LazyProfileDialog {...props}/></Suspense> : null }
+export function ProfileDialog(props: ComponentProps<typeof DialogTypes.ProfileDialog>) { return props.open ? <Suspense fallback={props.embedded ? <p role="status">Загружаем профиль…</p> : <ModalLoading title="Загружаем…" onClose={props.onClose}/>}><LazyProfileDialog {...props}/></Suspense> : null }
 
 const LazyServerSettingsDialog = lazy(() => import('./WorkspaceDialogs').then((module) => ({ default: module.ServerSettingsDialog })))
 export function ServerSettingsDialog(props: ComponentProps<typeof DialogTypes.ServerSettingsDialog>) { return props.open ? <Suspense fallback={<ModalLoading title="Загружаем…" onClose={props.onClose}/>}><LazyServerSettingsDialog {...props}/></Suspense> : null }
 
 const LazyVoiceDialog = lazy(() => import('./VoiceSettingsDialog').then((module) => ({ default: module.VoiceSettingsDialog })))
-export function VoiceSettingsDialog(props: ComponentProps<typeof VoiceDialog>) { return props.open ? <Suspense fallback={<ModalLoading title="Настройки голоса" onClose={props.onClose}/>}><LazyVoiceDialog {...props}/></Suspense> : null }
+export function VoiceSettingsDialog(props: ComponentProps<typeof VoiceDialog>) { return props.open ? <Suspense fallback={props.embedded ? <p role="status">Загружаем настройки звука…</p> : <ModalLoading title="Настройки голоса" onClose={props.onClose}/>}><LazyVoiceDialog {...props}/></Suspense> : null }
 const LazyMemberCard = lazy(() => import('./MemberCard').then((module) => ({ default: module.MemberCard })))
 export function MemberCard(props: ComponentProps<typeof LoadedMemberCard>) { return <Suspense fallback={null}><LazyMemberCard {...props}/></Suspense> }
 

@@ -13,7 +13,7 @@ function visit(key) {
   if (seen.has(key)) return
   seen.add(key)
   const chunk = manifest[key]
-  assert(!/(?:^|\/)(?:stream|voice|voiceInput|hdrPipeline|recording|PersistentStreamPlayer|DirectChat|NewsComments|NewsChannelSettings|ConversationCreator|AuditView|ScheduledMessages|CommunityFeatures)-[^/]+\.js$/.test(chunk.file), `An optional feature is eagerly imported: ${chunk.file}`)
+  assert(!/(?:^|\/)(?:stream|voice|voiceInput|hdrPipeline|recording|PersistentStreamPlayer|DirectChat|NewsComments|NewsChannelSettings|ConversationCreator|ComposerActionMenu|AuditView|ScheduledMessages|CommunityFeatures)-[^/]+\.js$/.test(chunk.file), `An optional feature is eagerly imported: ${chunk.file}`)
   for (const dependency of chunk.imports ?? []) visit(dependency)
 }
 visit(entry)

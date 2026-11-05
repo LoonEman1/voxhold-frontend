@@ -70,9 +70,18 @@ it('reserves identical image geometry before and after the thumbnail loads', asy
   const { container } = render(<MessageAttachments attachments={[{ id: 'sized', filename: 'sized.jpg', mime_type: 'image/jpeg', size_bytes: 10, deleted: false, width: 800, height: 400 }]}/>)
   const before = container.querySelector<HTMLButtonElement>('.attachment-image')!
   expect(before.style.aspectRatio).toBe('800 / 400')
-  expect(before.style.width).toBe('min(100%, 640px)')
+  expect((container.querySelector('.attachment-card') as HTMLElement).style.width).toBe('440px')
   const style = before.getAttribute('style')
   finish(new Blob(['jpeg'], { type: 'image/jpeg' }))
   await screen.findByAltText('sized.jpg')
   expect(container.querySelector('.attachment-image')!.getAttribute('style')).toBe(style)
+})
+
+it('uses a portrait width for the outer card and wraps a long caption inside it', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:portrait'), revokeObjectURL: vi.fn() })
+  context.api.community.thumbnail.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
+  const { container } = render(<MessageAttachments attachments={[{ id: 'portrait', filename: 'a-very-long-original-filename.jpg', mime_type: 'image/jpeg', size_bytes: 10, deleted: false, width: 400, height: 800 }]}/>)
+  await screen.findByAltText('a-very-long-original-filename.jpg')
+  expect((container.querySelector('.attachment-card') as HTMLElement).style.width).toBe('160px')
 })

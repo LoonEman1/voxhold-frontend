@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { Icon } from './Icon'
+import '../styles/modal-layout.css'
 
 interface ModalProps {
   open: boolean
@@ -80,7 +81,7 @@ export function Modal({ open, title, eyebrow, children, onClose, size = 'small',
             <Icon name="close" />
           </button>
         </div>
-        {children}
+        <div className="modal-body">{children}</div>
       </section>
     </div>
   )

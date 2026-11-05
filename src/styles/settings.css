@@ -1,0 +1,32 @@
+.settings-dialog.modal-card { display: flex; flex-direction: column; width: min(100%, 680px); overflow: hidden; }
+.settings-dialog > .modal-head { flex: none; align-items: center; }
+.settings-dialog .modal-head h2 { margin: 0; }
+.settings-dialog > .modal-body { display: contents; }
+.settings-tabs { display: flex; flex: none; gap: 5px; padding: 0 var(--modal-padding) 14px; border-bottom: 1px solid var(--line); }
+.settings-tabs > button { display: flex; min-width: 0; min-height: 42px; flex: 1; align-items: center; justify-content: center; gap: 7px; padding: 9px 6px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); background: transparent; font: inherit; font-size: var(--font-xs); font-weight: 700; cursor: pointer; white-space: nowrap; }
+.settings-tabs > button:hover { color: var(--text); background: var(--surface-3); }
+.settings-tabs > button[aria-selected="true"] { color: var(--text); border-color: var(--line-strong); background: var(--surface-3); }
+.settings-tabs > button[aria-selected="true"] svg { color: var(--lime); }
+.settings-tabs > button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.settings-panel { min-width: 0; min-height: 0; padding: 24px var(--modal-padding); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; }
+.settings-panel[hidden] { display: none; }
+.settings-profile { display: grid; gap: 28px; }
+.settings-profile > .profile-panel { min-width: 0; padding: 0; overflow: visible; }
+.settings-profile > .profile-panel + .profile-panel { padding-top: 24px; border-top: 1px solid var(--line); }
+.settings-profile .profile-appearance { margin: 0; padding: 0; border: 0; }
+.settings-panel > .voice-settings { padding: 0; }
+.settings-privacy .personal-scroll { overflow: visible; }
+.settings-privacy .personal-page { width: 100%; margin: 0; padding: 0; }
+.settings-privacy .feature-form { margin-top: 24px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.settings-privacy .feature-form > h3 { margin: 0; font-size: 16px; }
+.settings-privacy .feature-form > p { margin: 0; color: var(--muted); font-size: var(--font-xs); line-height: 1.6; }
+.settings-privacy .personal-blocked { margin-top: 28px; padding-top: 24px; }
+.settings-privacy .personal-privacy > label { min-width: 0; gap: 12px; padding: 15px; }
+.settings-privacy .personal-privacy > label > span:not(.personal-radio) { min-width: 0; overflow-wrap: anywhere; }
+.settings-panel .voice-settings__footer { position: static; }
+@media (max-width: 480px) {
+  .settings-tabs { gap: 3px; }
+  .settings-tabs > button { font-size: 12px; }
+  .settings-tabs > button svg { display: none; }
+  .settings-panel { padding-top: 20px; }
+}

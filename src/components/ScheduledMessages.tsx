@@ -3,7 +3,6 @@ import type { FeatureDestination, ScheduledMessage } from '../domain/community'
 import type { VoxholdApi } from '../services/api'
 import { communityPages } from '../services/communityPages'
 import { featuresChanged } from '../services/communityEvents'
-import { Modal } from './Modal'
 import { Icon } from './Icon'
 import '../styles/community-features.css'
 
@@ -15,8 +14,11 @@ const dateInput = (seconds: number) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-export function ScheduledMessagesDialog({ api, token, destination, onClose }: { api: VoxholdApi; token: string; destination: FeatureDestination; onClose: () => void }) {
-  return <Modal open title="Отложенные сообщения" size="medium" onClose={onClose}><ScheduledMessages key={`${destination.kind}:${destination.id}`} api={api} token={token} destination={destination}/></Modal>
+export function ScheduledHistory({ onClose, ...props }: { api: VoxholdApi; token: string; destination: FeatureDestination; onClose: () => void }) {
+  return <section className="scheduled-history" aria-label="Отложенные сообщения" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
+    <header className="scheduled-history__header"><button type="button" className="icon-button" autoFocus aria-label="Вернуться к сообщениям" onClick={onClose}><span aria-hidden="true">←</span></button><div><h2>Отложенные сообщения</h2><small>Время отправки указано под каждым сообщением</small></div></header>
+    <div className="scheduled-history__messages"><ScheduledMessages key={`${props.destination.kind}:${props.destination.id}`} {...props}/></div>
+  </section>
 }
 
 export function ScheduledMessages({ api, token, destination }: { api: VoxholdApi; token: string; destination: FeatureDestination }) {
@@ -26,11 +28,11 @@ export function ScheduledMessages({ api, token, destination }: { api: VoxholdApi
   const { kind, id } = destination
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true); setError(''); setItems([])
+    setError('')
     const query = new URLSearchParams({ destination_kind: kind, destination_id: String(id) })
     void communityPages<ScheduledMessage>(api, token, `/me/scheduled-messages?${query}`, 'scheduled_messages', controller.signal).then((values) => {
       if (controller.signal.aborted) return
-      // Old servers ignore the new query parameters. Keep the dialog scoped
+      // Old servers ignore the new query parameters. Keep the history scoped
       // even with those servers, and exclude completed/cancelled messages.
       setItems(values.filter((item) => item.destination.kind === kind && item.destination.id === id && (item.status === 'pending' || item.status === 'failed')).sort((a, b) => a.send_at - b.send_at || a.id - b.id))
       setLoading(false)
@@ -39,10 +41,23 @@ export function ScheduledMessages({ api, token, destination }: { api: VoxholdApi
   }, [api, token, kind, id, revision])
   useEffect(() => {
     const changed = () => setRevision((value) => value + 1)
-    const event = (value: Event) => { const type = (value as CustomEvent<{ type?: string }>).detail?.type; if (!type || type === 'conversation.scheduled') changed() }
+    const event = (value: Event) => {
+      const detail = (value as CustomEvent<{ type?: string; data?: { id?: number; status?: string } }>).detail
+      if (!detail || detail.type === 'conversation.scheduled') {
+        if (detail?.data?.id && (detail.data.status === 'sent' || detail.data.status === 'cancelled')) {
+          const completed = detail.data.id
+          setItems((values) => values.filter((item) => item.id !== completed))
+          setEdit((value) => value?.id === completed ? null : value)
+        }
+        changed()
+      }
+    }
+    const visible = () => { if (document.visibilityState === 'visible') changed() }
     window.addEventListener('voxhold:community', event)
+    window.addEventListener('voxhold:ready', changed)
     window.addEventListener('focus', changed)
-    return () => { window.removeEventListener('voxhold:community', event); window.removeEventListener('focus', changed) }
+    document.addEventListener('visibilitychange', visible)
+    return () => { window.removeEventListener('voxhold:community', event); window.removeEventListener('voxhold:ready', changed); window.removeEventListener('focus', changed); document.removeEventListener('visibilitychange', visible) }
   }, [])
   const action = async (request: () => Promise<unknown>) => {
     if (busy) return
@@ -63,13 +78,13 @@ export function ScheduledMessages({ api, token, destination }: { api: VoxholdApi
     }))
   }
   return <section className="scheduled-chat" aria-label="Отложенные сообщения этого чата">
-    <p className="feature-hint">Здесь только ваши сообщения для этого чата. Сервер отправит их в указанное время, даже если приложение закрыто.</p>
-    <p className="feature-hint">Часовой пояс: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
     {loading && <p role="status">Загружаем отложенные сообщения…</p>}
-    {!loading && !items.length && !error && <div className="scheduled-chat__empty"><Icon name="clock" size={30}/><h3>В этом чате нет отложенных сообщений</h3><p>Чтобы запланировать отправку, нажмите «Отложить сообщение» под полем ввода.</p></div>}
+    {!loading && !items.length && !error && <div className="scheduled-chat__empty"><Icon name="clock" size={30}/><h3>В этом чате нет отложенных сообщений</h3><p>Вернитесь к сообщениям и выберите «Отложить сообщение» в меню отправки.</p></div>}
     {items.map((item) => <article className="scheduled-chat__item" key={item.id}>
-      <time dateTime={new Date(item.send_at * 1000).toISOString()}>{when(item.send_at)}</time><span className={item.status === 'failed' ? 'form-error' : 'feature-hint'}>{item.status === 'failed' ? 'Не отправлено' : 'Ожидает отправки'}</span>
       <p>{item.payload.content}</p>{!!item.payload.attachment_ids?.length && <small>Вложений: {item.payload.attachment_ids.length}</small>}
+      {item.payload.poll && <div className="scheduled-chat__poll">{item.payload.poll.options.map((option, index) => <span key={index}>○ {option}</span>)}</div>}
+      <time dateTime={new Date(item.send_at * 1000).toISOString()}><Icon name="clock" size={13}/> Отправка {when(item.send_at)}</time>
+      {item.status === 'failed' && <span className="form-error">Не отправлено</span>}
       {item.error && <p className="form-error">{item.error}</p>}
       <div className="feature-actions"><button type="button" className="button button--small button--secondary" disabled={busy} onClick={() => { setEdit(item); setText(item.payload.content); setSendAt(dateInput(item.send_at > Date.now() / 1000 ? item.send_at : Date.now() / 1000 + 3600)); setPollClosesAt(item.payload.poll ? dateInput(item.payload.poll.closes_at) : ''); setError('') }}>Изменить</button><button type="button" className="button button--small button--ghost" disabled={busy} onClick={() => void action(() => api.community.request(token, `/me/scheduled-messages/${item.id}`, 'DELETE'))}>Отменить отправку</button></div>
     </article>)}

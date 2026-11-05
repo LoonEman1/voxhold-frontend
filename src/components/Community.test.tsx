@@ -10,7 +10,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function fixture(request: (input: { path: string; method?: string; body?: unknown; rawBody?: BodyInit; onUploadProgress?: (n: number) => void; signal?: AbortSignal }) => unknown) {
   return createApi({ request: async <T,>(input: Parameters<typeof request>[0]) => ({ status: 200, data: await request(input) as T }) })
 }
-const defaults = (path: string) => path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
+const defaults = (path: string) => path.endsWith('/conversations/7') ? { id: 7, direct: true, name: 'Беседа', members: [{ user_id: 2, username: 'member' }], unread_count: 0 } : path.endsWith('/inbox') ? { items: [], has_more: false } : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
 it('opens a direct conversation from a member action and retains the same retry key after failure', async () => {
   let now = Date.now()
   vi.spyOn(Date, 'now').mockImplementation(() => now)

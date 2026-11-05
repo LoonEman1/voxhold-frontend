@@ -11,6 +11,7 @@ import { readPeerStats } from './peerStats'
 import { MediaQualityTracker, mediaAttemptID } from './mediaQuality'
 import type { E2EEMediaTransform } from './e2ee/mediaTransform'
 import { CameraCapture, configureCameraSender, type CameraQuality } from './camera'
+import { AudioPlaybackMixer } from './audioPlaybackMixer'
 
 
 export type VoiceMediaConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
@@ -140,6 +141,7 @@ export class BrowserVoiceSession {
   private camera: CameraCapture
   private readonly remoteCameras = new Map<string, MediaStream>()
   private readonly remoteOutputs = new Map<string, VoiceRemoteOutput>()
+  private readonly playback = new AudioPlaybackMixer(() => this.options.onPlaybackBlocked?.())
   // The server names every relayed track "audio-<connectionId>" in the offer
   // msid, which lets us attribute remote audio levels to room participants.
   private readonly midOwners = new Map<string, string>()
@@ -269,10 +271,10 @@ export class BrowserVoiceSession {
       const audio = document.createElement('audio')
       audio.autoplay = true
       audio.muted = this.selfDeaf
-      audio.volume = this.remoteAudioVolume(connectionId)
       audio.setAttribute('aria-hidden', 'true')
       audio.className = 'voice-audio-output'
       audio.srcObject = media
+      this.playback.setVolume(audio, media, this.remoteAudioVolume(connectionId))
       const output = { stream: media, track: remoteTrack, audio }
       this.remoteOutputs.set(remoteTrack.id, output)
       this.recordingListeners.forEach((listener) => listener())
@@ -387,7 +389,7 @@ export class BrowserVoiceSession {
       if (owner) this.trackOwners.set(trackId, owner)
       else this.trackOwners.delete(trackId)
       const output = this.remoteOutputs.get(trackId)
-      if (output) output.audio.volume = this.remoteAudioVolume(owner)
+      if (output) this.playback.setVolume(output.audio, output.stream, this.remoteAudioVolume(owner))
       if (output && owner !== previous) clientDiagnostics.record('media', 'voice_remote_track_owner', 'debug', {
         track_id: trackId, mid: transceiver.mid, mapped: !!owner,
       })
@@ -555,25 +557,25 @@ export class BrowserVoiceSession {
     this.trackOwners.delete(trackId)
     this.recordingListeners.forEach((listener) => listener())
     this.detachRemoteAnalyser(trackId)
+    this.playback.remove(output.audio)
     output.audio.pause()
     output.audio.srcObject = null
     output.audio.remove()
     output.stream.removeTrack(output.track)
   }
 
-  // Element volume is capped at 1, so a >100% user volume only amplifies while
-  // the shared channel volume leaves headroom.
+  // Shared volume and a participant override compose; 200% × 200% is gain 4.
   private remoteAudioVolume(connectionId: string | undefined) {
     const gain = connectionId ? this.remoteGains.get(connectionId) ?? 1 : 1
     const base = (this.preferences?.outputVolume ?? 100) / 100
-    return Math.min(1, Math.max(0, base * gain))
+    return Math.min(4, Math.max(0, base * gain))
   }
 
   setRemoteGain(connectionId: string, gain: number) {
     const clamped = Math.min(2, Math.max(0, gain))
     this.remoteGains.set(connectionId, clamped)
     this.remoteOutputs.forEach((output, trackId) => {
-      if (this.trackOwners.get(trackId) === connectionId) output.audio.volume = this.remoteAudioVolume(connectionId)
+      if (this.trackOwners.get(trackId) === connectionId) this.playback.setVolume(output.audio, output.stream, this.remoteAudioVolume(connectionId))
     })
   }
 
@@ -612,7 +614,7 @@ export class BrowserVoiceSession {
     const previous = this.preferences ?? next
     this.preferences = next
     this.remoteOutputs.forEach((output, trackId) => {
-      output.audio.volume = this.remoteAudioVolume(this.trackOwners.get(trackId))
+      this.playback.setVolume(output.audio, output.stream, this.remoteAudioVolume(this.trackOwners.get(trackId)))
     })
     const tasks: Array<Promise<void> | undefined> = [
       previous.bitrateKbps !== next.bitrateKbps ? this.applySenderBitrate(next.bitrateKbps) : undefined,
@@ -735,6 +737,7 @@ export class BrowserVoiceSession {
   stopCamera() { this.camera.stop() }
 
   resumeAudio() {
+    this.playback.resume()
     if (this.analysis?.context.state === 'suspended') {
       void this.analysis.context.resume().catch(() => undefined)
     }
@@ -792,6 +795,7 @@ export class BrowserVoiceSession {
       this.removeRemoteOutput(trackId, output)
     })
     this.remoteOutputs.clear()
+    this.playback.close()
     this.peer?.close()
     this.inputSender = null
     this.peer = null

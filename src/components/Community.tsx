@@ -4,6 +4,7 @@ import { EventsView, AuditView, DesktopNotificationSettings } from './LazyCommun
 import { Suspense, lazy, createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { VoxholdApi } from '../services/api'
 import { communityPages } from '../services/communityPages'
+import { completeConversation } from '../services/openConversation'
 import type { Message, MessageNotification, ServerMember, ServerRole } from '../domain/types'
 import type { Conversation, InboxItem, Privacy, CustomRole } from '../domain/community'
 import { Avatar } from './Avatar'
@@ -28,7 +29,7 @@ interface ContextValue extends Omit<ProviderProps, 'children' | 'onViewChange'> 
   inboxCount: number; directCount: number; refresh: () => void; revision: number
   conversations: Conversation[]; selected: number | null; selectChat: (chat: Conversation) => void
   creating: boolean; initialMemberIds: number[]; startChat: (memberIds?: number[]) => void; items: InboxItem[]; moreInbox: boolean; loadInbox: () => Promise<void>
-  busy: boolean; error: string; loading: boolean; privacy: Privacy
+  busy: boolean; error: string; loading: boolean; privacy: Privacy; privacyError: string
   action: (fn: () => Promise<unknown>, reload?: boolean) => Promise<boolean>
   createChat: (ids: number[], name: string) => Promise<boolean>; leaveChat: () => void
   savePrivacy: (mode: Privacy['mode']) => void; unblock: (id: number) => void
@@ -52,6 +53,7 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   const lastLoaded = useRef(0), liveInbox = useRef(new Map<number, { sequence: number; item: InboxItem }>()), notificationSequence = useRef(0)
   const [loadError, setLoadError] = useState('')
   const [privacy, setPrivacy] = useState<Privacy>({ mode: 'shared', blocked_user_ids: [] })
+  const [privacyError, setPrivacyError] = useState('')
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null), openGeneration = useRef(0)
   const refresh = useCallback(() => { if (refreshTimer.current === null) refreshTimer.current = setTimeout(() => { refreshTimer.current = null; setRevision((v) => v + 1); setListRevision((v) => v + 1) }, 500) }, [])
   useEffect(() => () => { if (refreshTimer.current !== null) clearTimeout(refreshTimer.current) }, [])
@@ -112,7 +114,7 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   useEffect(() => {
     if (!token) return
     const controller = new AbortController()
-    void api.community.request<Privacy>(token, '/me/message-privacy', 'GET', undefined, controller.signal).then((value) => { if (!controller.signal.aborted && value.mode) setPrivacy(value) }).catch(() => undefined)
+    void api.community.request<Privacy>(token, '/me/message-privacy', 'GET', undefined, controller.signal).then((value) => { if (!controller.signal.aborted && value.mode) { setPrivacy(value); setPrivacyError('') } }).catch((error) => { if (!controller.signal.aborted) setPrivacyError(problem(error)) })
     if (serverId) void api.community.request<CustomRole[]>(token, `/servers/${serverId}/roles`, 'GET', undefined, controller.signal).then((value) => { if (!controller.signal.aborted) setRoles(Array.isArray(value) ? value : []) }).catch(() => undefined)
     return () => controller.abort()
   }, [api, token, serverId, roleRevision])
@@ -120,7 +122,8 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
     setView('messages'); const generation = ++openGeneration.current
     setBusy(true)
     try {
-      const chat = await api.community.request<Conversation>(token, '/me/conversations', 'POST', { user_ids: [id] })
+      const created = await api.community.request<Conversation>(token, '/me/conversations', 'POST', { user_ids: [id] })
+      const chat = await completeConversation(api, token, created)
       if (generation !== openGeneration.current) return
       setConversations((values) => [chat, ...values.filter((value) => value.id !== chat.id)]); setSelected(chat.id); refresh()
     } catch (caught) { if (generation === openGeneration.current) setError(problem(caught)) }
@@ -129,6 +132,10 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
   const openDirectRef = useRef(openDirect); openDirectRef.current = openDirect
   useEffect(() => { const open = (event: Event) => { const id = (event as CustomEvent<number>).detail; if (Number.isSafeInteger(id) && id > 0) void openDirectRef.current(id) }; window.addEventListener('voxhold:open-direct', open); return () => window.removeEventListener('voxhold:open-direct', open) }, [])
   const action = async (fn: () => Promise<unknown>, reload = true) => { if (busy) return false; setBusy(true); setError(''); try { await fn(); if (reload) refresh(); return true } catch (caught) { setError(problem(caught)); return false } finally { setBusy(false) } }
+  const privacyAction = (fn: () => Promise<void>) => {
+    setPrivacyError('')
+    void action(async () => { try { await fn() } catch (error) { setPrivacyError(problem(error)); throw error } })
+  }
   const createChat = (ids: number[], name: string) => {
     const generation = ++openGeneration.current
     return action(async () => {
@@ -155,12 +162,13 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
 
   return <CommunityContext.Provider value={{ api, token, userId, serverId, owner, members, roles, onMessage, onNavigate, onOpenProfile, view, setView, openDirect: (id) => void openDirect(id), inboxCount: items.length, directCount: conversations.reduce((n, v) => n + v.unread_count, 0), refresh, revision, conversations, selected, selectChat, creating, initialMemberIds, startChat: (memberIds = []) => { setView('messages'); setSelected(null); setInitialMemberIds(memberIds); setCreating(true) }, items, moreInbox, loading, busy, error: error || loadError, privacy, action, createChat, leaveChat: () => { setConversations((v) => v.filter((c) => c.id !== selected)); setSelected(null); refresh() },
     loadInbox: async () => { await action(async () => { const page = await api.community.request<{ items: InboxItem[]; has_more: boolean }>(token, `/me/inbox?before=${items.at(-1)?.message_id}`); setItems((v) => [...v, ...page.items]); setMoreInbox(page.has_more) }, false) },
-    savePrivacy: (mode) => { void action(async () => { const value = await api.community.request<Privacy>(token, '/me/message-privacy', 'PUT', { mode }); setPrivacy(value) }) },
-    unblock: (id) => { void action(async () => { await api.community.request(token, `/me/blocks/${id}`, 'DELETE'); setPrivacy((v) => ({ ...v, blocked_user_ids: v.blocked_user_ids.filter((n) => n !== id) })) }) },
+    privacyError,
+    savePrivacy: (mode) => { privacyAction(async () => { const value = await api.community.request<Privacy>(token, '/me/message-privacy', 'PUT', { mode }); setPrivacy(value) }) },
+    unblock: (id) => { privacyAction(async () => { await api.community.request(token, `/me/blocks/${id}`, 'DELETE'); setPrivacy((v) => ({ ...v, blocked_user_ids: v.blocked_user_ids.filter((n) => n !== id) })) }) },
   }}>{children}<CommunityFeatureHost api={api} token={token} userId={userId} conversations={conversations} activeConversation={!creating && conversations.some((c)=>c.id===selected && (view==='favorites'?c.saved:view==='messages'?!c.saved:false))?selected:null}/></CommunityContext.Provider>
 }
 
-export function CommunityNavigation({ account }: { account?: ReactNode } = {}) {
+export function CommunityNavigation({ account, onOpenSettings }: { account?: ReactNode; onOpenSettings?: () => void } = {}) {
   const context = useCommunity()
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   if (!context) return null
@@ -182,11 +190,11 @@ export function CommunityNavigation({ account }: { account?: ReactNode } = {}) {
         const sections: Array<readonly [Exclude<View, null>, IconName, string]> = [
           ...(context.serverId ? [['events', 'calendar', 'События сервера'] as const] : []),
           ...(context.serverId && (context.owner || context.members.some((m) => m.user_id === context.userId && m.role === 'admin')) ? [['audit', 'audit', 'Журнал администрации'] as const] : []),
-          ['privacy', 'settings', 'Личные настройки'],
+          ['privacy', 'settings', onOpenSettings ? 'Настройки' : 'Личные настройки'],
         ]
-        setMenu({ x: bounds.left, y: bounds.top, items: sections.map(([view, icon, label]) => ({ key: view, kind: 'action', icon, label, onSelect: () => context.setView(view) })) })
+        setMenu({ x: bounds.left, y: bounds.top, items: sections.map(([view, icon, label]) => ({ key: view, kind: 'action', icon, label, onSelect: () => { if (view === 'privacy' && onOpenSettings) onOpenSettings(); else context.setView(view) } })) })
       }}><Icon name="more" size={22}/><span className="personal-rail__label" aria-hidden="true">Ещё</span></button>
-      <div className="personal-rail__bottom">{nav('privacy', 'settings', 'Личные настройки', 0, true)}{account}</div>
+      <div className="personal-rail__bottom">{onOpenSettings ? <button type="button" className="personal-rail__item personal-rail__desktop" onClick={onOpenSettings} aria-label="Настройки" title="Настройки"><Icon name="settings" size={22}/><span className="personal-rail__tooltip">Настройки</span><span className="personal-rail__label" aria-hidden="true">Настройки</span></button> : nav('privacy', 'settings', 'Личные настройки', 0, true)}{account}</div>
       {menu && createPortal(<ContextMenu menu={menu} onClose={() => setMenu(null)}/>, document.body)}
     </nav>
 }
@@ -235,10 +243,10 @@ export function CommunityContent({ children, onMenu }: { children: ReactNode; on
   </>
 }
 
-function PrivacySettings() {
+export function PrivacySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const c = useCommunity()!
   const choices = [['shared', 'Участники сообщества', 'Вам могут писать участники вашего сообщества.'], ['everyone', 'Все пользователи сервера', 'В том числе те, кто ещё не вступил в сообщество.'], ['none', 'Никто', 'Входящие сообщения отключены, включая существующие беседы.']] as const
-  return <div className="personal-scroll"><div className="personal-page"><div className="personal-page__heading"><h2>Кто может писать мне</h2><p>Выберите, от кого вы хотите получать личные сообщения.</p></div><DesktopNotificationSettings/><fieldset className="personal-privacy"><legend className="sr-only">Кто может писать мне</legend>{choices.map(([mode, title, description]) => <label key={mode} className={c.privacy.mode === mode ? 'is-selected' : ''}><input type="radio" name="message-privacy" value={mode} checked={c.privacy.mode === mode} disabled={c.busy} onChange={() => c.savePrivacy(mode)}/><span><b>{title}</b><small>{description}</small></span><span className="personal-radio"><Icon name="check" size={14}/></span></label>)}</fieldset><section className="personal-blocked"><h2>Заблокированные пользователи</h2><p>Эти пользователи не смогут писать вам независимо от выбранной настройки.</p>{!c.privacy.blocked_user_ids.length && <div className="personal-blocked__empty"><Icon name="lock" size={18}/>Вы никого не заблокировали</div>}{c.privacy.blocked_user_ids.map((id) => { const name = c.members.find((m) => m.user_id === id)?.username ?? `Пользователь #${id}`; return <div className="personal-blocked__row" key={id}><Avatar userId={id} name={name}/><b>{name}</b><button className="button button--secondary button--small" disabled={c.busy} onClick={() => c.unblock(id)}>Разблокировать</button></div> })}</section></div></div>
+  return <div className="personal-scroll"><div className="personal-page">{embedded && c.privacyError && <p className="form-error" role="alert">{c.privacyError}</p>}<div className="personal-page__heading"><h2>Кто может писать мне</h2><p>Выберите, от кого вы хотите получать личные сообщения.</p></div><fieldset className="personal-privacy"><legend className="sr-only">Кто может писать мне</legend>{choices.map(([mode, title, description]) => <label key={mode} className={c.privacy.mode === mode ? 'is-selected' : ''}><input type="radio" name="message-privacy" value={mode} checked={c.privacy.mode === mode} disabled={c.busy} onChange={() => c.savePrivacy(mode)}/><span><b>{title}</b><small>{description}</small></span><span className="personal-radio"><Icon name="check" size={14}/></span></label>)}</fieldset><DesktopNotificationSettings/><section className="personal-blocked"><h2>Заблокированные пользователи</h2><p>Эти пользователи не смогут писать вам независимо от выбранной настройки.</p>{!c.privacy.blocked_user_ids.length && <div className="personal-blocked__empty"><Icon name="lock" size={18}/>Вы никого не заблокировали</div>}{c.privacy.blocked_user_ids.map((id) => { const name = c.members.find((m) => m.user_id === id)?.username ?? `Пользователь #${id}`; return <div className="personal-blocked__row" key={id}><Avatar userId={id} name={name}/><b>{name}</b><button className="button button--secondary button--small" disabled={c.busy} onClick={() => c.unblock(id)}>Разблокировать</button></div> })}</section></div></div>
 }
 export function CustomRoleBadges({ userId }: { userId: number }) {
  const community = useCommunity()

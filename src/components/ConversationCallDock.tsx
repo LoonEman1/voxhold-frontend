@@ -3,7 +3,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { VoxholdApi } from '../services/api'
 import type { CallState, CallSignal } from '../domain/community'
 import type { ConversationCall } from '../services/conversationCall'
-import { loadVoicePreferences } from '../services/voiceSettings'
+import { loadVoicePreferences, normalizeVoicePreferences, VOICE_PREFERENCES_EVENT, type VoicePreferences } from '../services/voiceSettings'
+import { AudioPlaybackMixer } from '../services/audioPlaybackMixer'
 import { E2EE_CAMERA_NOTICE, E2EE_VOICE_NOTICE } from '../services/e2ee/notices'
 import { Icon } from './Icon'
 import { Avatar } from './Avatar'
@@ -12,12 +13,13 @@ import { CameraTile } from './CameraTile'
 import { CameraSettingsDialog } from './CameraSettingsDialog'
 import { loadCameraQuality } from '../services/camera'
 
-function RemoteMedia({ stream, name, deaf, encrypted = false }: { stream: MediaStream; name: string; deaf: boolean; encrypted?: boolean }) {
+function RemoteMedia({ stream, name, deaf, preferences, mixer, encrypted = false }: { stream: MediaStream; name: string; deaf: boolean; preferences: VoicePreferences; mixer: AudioPlaybackMixer; encrypted?: boolean }) {
   const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null), [blocked, setBlocked] = useState(false)
   const hasVideo = stream.getVideoTracks().some((t) => t.readyState === 'live')
-  useEffect(() => { const element = audio.current; if (!element) return; element.srcObject = stream; const prefs = loadVoicePreferences(); element.volume = prefs.outputVolume / 100; if (prefs.outputDeviceId && 'setSinkId' in element) void element.setSinkId(prefs.outputDeviceId).catch(() => undefined); void element.play().then(() => setBlocked(false)).catch(() => setBlocked(true)); return () => { element.pause(); element.srcObject = null } }, [stream])
+  useEffect(() => { const element = audio.current; if (!element) return; element.srcObject = stream; void element.play().then(() => setBlocked(false)).catch(() => setBlocked(true)); return () => { mixer.remove(element); element.pause(); element.srcObject = null } }, [stream, mixer])
+  useEffect(() => { const element = audio.current; if (!element) return; mixer.setVolume(element, stream, preferences.outputVolume / 100); if ('setSinkId' in element) void element.setSinkId(preferences.outputDeviceId).catch(() => undefined) }, [stream, mixer, preferences.outputVolume, preferences.outputDeviceId])
   useEffect(() => { const element = video.current; if (!element) return; element.srcObject = stream; void element.play().catch(() => undefined); return () => { element.srcObject = null } }, [stream, hasVideo])
-  return <div><audio ref={audio} autoPlay muted={deaf}/>{hasVideo && <><span>{name} · Демонстрация экрана{encrypted ? ' (видео не шифруется сквозным шифрованием)' : ''}</span><video ref={video} autoPlay playsInline muted controls/></>}{blocked && <button onClick={() => { void audio.current?.play().then(() => setBlocked(false)).catch(() => setBlocked(true)) }}>Включить звук {name}</button>}</div>
+  return <div><audio ref={audio} autoPlay muted={deaf}/>{hasVideo && <><span>{name} · Демонстрация экрана{encrypted ? ' (видео не шифруется сквозным шифрованием)' : ''}</span><video ref={video} autoPlay playsInline muted controls/></>}{blocked && <button onClick={() => { mixer.resume(); void audio.current?.play().then(() => setBlocked(false)).catch(() => setBlocked(true)) }}>Включить звук {name}</button>}</div>
 }
 function LocalScreenPreview({ stream }: { stream: MediaStream }) {
   const video = useRef<HTMLVideoElement>(null)
@@ -25,6 +27,14 @@ function LocalScreenPreview({ stream }: { stream: MediaStream }) {
   return <div className="direct-call-dock__screen"><span>Ваш экран</span><video ref={video} autoPlay playsInline muted aria-label="Предпросмотр вашего экрана"/></div>
 }
 export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; token: string; userId: number }) {
+  const [voicePreferences, setVoicePreferences] = useState(loadVoicePreferences)
+  const [playbackBlocked, setPlaybackBlocked] = useState(false)
+  const [playback] = useState(() => new AudioPlaybackMixer(() => setPlaybackBlocked(true)))
+  useEffect(() => {
+    const changed = (event: Event) => setVoicePreferences(normalizeVoicePreferences((event as CustomEvent<VoicePreferences>).detail))
+    window.addEventListener(VOICE_PREFERENCES_EVENT, changed)
+    return () => { window.removeEventListener(VOICE_PREFERENCES_EVENT, changed); playback.close() }
+  }, [playback])
   const bodyId = useId()
   const [localCamera, setLocalCamera] = useState<MediaStream | null>(null)
   const [cameras, setCameras] = useState<Record<number, MediaStream>>({})
@@ -37,7 +47,7 @@ export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; 
   const startGeneration = useRef(0), opening = useRef(false)
   const tokenRef = useRef(token)
   useEffect(() => { tokenRef.current = token }, [token])
-  const leave = useCallback(() => { startGeneration.current++; opening.current = false; call.current?.close(); call.current = null; setState(null); setMedia({}); setPending(false); setSharing(false); setLocalScreen(null); setMuted(false); setDeaf(false); setChangedKeys([]); setEncryptedCall(false); setLocalCamera(null); setCameras({}); setCameraSettings(false) }, [])
+  const leave = useCallback(() => { setPlaybackBlocked(false); startGeneration.current++; opening.current = false; call.current?.close(); call.current = null; setState(null); setMedia({}); setPending(false); setSharing(false); setLocalScreen(null); setMuted(false); setDeaf(false); setChangedKeys([]); setEncryptedCall(false); setLocalCamera(null); setCameras({}); setCameraSettings(false) }, [])
   useEffect(() => {
     let alive = true
     const start = async (event: Event) => {
@@ -69,7 +79,7 @@ export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; 
         <div className="direct-call-dock__members">{state.members.map((member) => { const camera = member.user_id === userId ? localCamera : cameras[member.user_id]; return camera ? <CameraTile key={member.user_id} media={camera} name={member.username} isMe={member.user_id === userId}/> : <span key={member.user_id}><Avatar name={member.username} userId={member.user_id} size="small"/><span>{member.username}{member.user_id === userId && <small>Вы</small>}</span></span> })}{state.members.length === 1 && <span className="direct-call-dock__waiting">Ждём участников…</span>}</div>
         {encrypted && <p className="direct-call-dock__e2ee" title={E2EE_VOICE_NOTICE}><Icon name="lock" size={14}/>{E2EE_VOICE_NOTICE}</p>}
         {localScreen && <LocalScreenPreview stream={localScreen}/>}
-        {Object.entries(media).map(([id, stream]) => <RemoteMedia key={id} stream={stream} name={state.members.find((member) => member.user_id === Number(id))?.username ?? 'Участник'} deaf={deaf} encrypted={encrypted}/>)}
+        {Object.entries(media).map(([id, stream]) => <RemoteMedia key={id} mixer={playback} preferences={voicePreferences} stream={stream} name={state.members.find((member) => member.user_id === Number(id))?.username ?? 'Участник'} deaf={deaf} encrypted={encrypted}/>)}
       </div>
       {(localCamera || Object.keys(cameras).length > 0) && encrypted && <p className="direct-call-dock__e2ee">{E2EE_CAMERA_NOTICE}</p>}
       {cameraSettings && <CameraSettingsDialog onCancel={() => { if (!localCamera) call.current?.stopCamera() }} quality={cameraQuality} active={!!localCamera} onClose={() => setCameraSettings(false)} onApply={async (quality) => {
@@ -88,7 +98,7 @@ export function ConversationCallDock({ api, token, userId }: { api: VoxholdApi; 
         <button type="button" className="direct-call-dock__leave" aria-label="Завершить" title="Завершить звонок" onClick={leave}><Icon name="phoneOff" size={20}/></button>
       </div>
     </>}
-    {error && <p className="call-error" role="alert">{error}<button type="button" onClick={() => setError('')}>Закрыть</button></p>}
+    {playbackBlocked && state && <button className="button button--ghost" onClick={() => { playback.resume(); setPlaybackBlocked(false) }}>Включить звук звонка</button>}{error && <p className="call-error" role="alert">{error}<button type="button" onClick={() => setError('')}>Закрыть</button></p>}
     <span className="sr-only" id={`${bodyId}-move-help`}>Перемещайте окно стрелками, с Shift — быстрее. Home сбрасывает положение и размер.</span>
     {state && !collapsed && <button type="button" className="floating-window__resize" aria-label="Изменить размер окна звонка" title="Изменить размер · стрелки или перетаскивание" onPointerDown={floating.beginResize} onKeyDown={floating.resizeKey}><Icon name="more" size={17}/></button>}
   </aside>

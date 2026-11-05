@@ -1,6 +1,6 @@
-import { Suspense, lazy, useState, type ComponentProps } from 'react'
+import { Suspense, lazy, useState, type ComponentProps, type ReactNode } from 'react'
 import type * as Features from './CommunityFeatures'
-import { Icon } from './Icon'
+import { ComposerAttachmentButton } from './ComposerActions'
 import '../styles/composer-tools.css'
 
 export { featuresChanged, openForward, saveFavorite } from '../services/communityEvents'
@@ -9,20 +9,23 @@ const LazyComposerTools = lazy(() => import('./CommunityFeatures').then((module)
 const LazyPollCard = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.PollCard })))
 const LazyEventsView = lazy(() => import('./ServerEventsView').then((module) => ({ default: module.EventsView })))
 const LazyAuditView = lazy(() => import('./AuditView').then((module) => ({ default: module.AuditView })))
-const ScheduledMessagesDialog = lazy(() => import('./ScheduledMessages').then((module) => ({ default: module.ScheduledMessagesDialog })))
+const LazyScheduledHistory = lazy(() => import('./ScheduledMessages').then((module) => ({ default: module.ScheduledHistory })))
 const LazyDesktopNotificationSettings = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.DesktopNotificationSettings })))
 const LazyUniversalForward = lazy(() => import('./CommunityFeatures').then((module) => ({ default: module.UniversalForward })))
 const loading = <p role="status">Загружаем…</p>
 
 /** The plain chat needs only the launcher buttons, until a tool is opened. */
-export function ComposerTools(props: ComponentProps<typeof Features.ComposerTools>) {
+export function ComposerTools({ children, onAttach, attachmentDisabled, disabled, onScheduled, ...props }: ComponentProps<typeof Features.ComposerTools> & {
+  children: (controls: { attachmentButton: ReactNode; onSchedule: () => void }) => ReactNode
+  onAttach: () => void; attachmentDisabled?: boolean; disabled?: boolean; onScheduled: () => void
+}) {
   const [mode, setMode] = useState<'poll' | 'schedule' | null>(null)
-  const [scheduled, setScheduled] = useState(false)
-  return <><div className="composer-tools"><button type="button" onClick={() => setMode('poll')}>Опрос</button><button type="button" onClick={() => setMode('schedule')}>Отложить сообщение</button><button type="button" aria-label="Отложенные сообщения этого чата" onClick={() => setScheduled(true)}><Icon name="clock" size={14}/>Отложенные</button></div>
+  return <>{children({ attachmentButton: <ComposerAttachmentButton onAttach={onAttach} attachmentDisabled={attachmentDisabled} disabled={disabled} onPoll={() => setMode('poll')} onSchedule={() => setMode('schedule')} onScheduled={onScheduled}/>, onSchedule: () => setMode('schedule') })}
     {mode && <Suspense fallback={loading}><LazyComposerTools key={mode} {...props} initialMode={mode} onClose={() => setMode(null)}/></Suspense>}
-    {scheduled && <Suspense fallback={loading}><ScheduledMessagesDialog api={props.api} token={props.token} destination={props.destination} onClose={() => setScheduled(false)}/></Suspense>}
   </>
 }
+
+export function ScheduledHistory(props: ComponentProps<typeof LazyScheduledHistory>) { return <Suspense fallback={<div className="scheduled-history">{loading}</div>}><LazyScheduledHistory {...props}/></Suspense> }
 
 export function PollCard(props: ComponentProps<typeof Features.PollCard>) { return <Suspense fallback={loading}><LazyPollCard {...props}/></Suspense> }
 export function EventsView(props: ComponentProps<typeof LazyEventsView>) { return <Suspense fallback={loading}><LazyEventsView {...props}/></Suspense> }

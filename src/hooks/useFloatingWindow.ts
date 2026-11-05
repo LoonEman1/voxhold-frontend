@@ -18,11 +18,14 @@ function viewport(): Viewport {
   return { width: window.innerWidth, height: Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight), left: window.innerWidth > 760 ? rail?.width ?? 0 : 0, bottom: window.innerWidth <= 760 ? rail?.height ?? 63 : 0 }
 }
 
-export function useFloatingWindow({ storageKey, width, height, minWidth = 280, minHeight = 200, enabled = true, collapsed = false, elementRef }: {
-  storageKey: string; width: number; height: number; minWidth?: number; minHeight?: number; enabled?: boolean; collapsed?: boolean; elementRef?: RefObject<HTMLElement | null>
+export function useFloatingWindow({ storageKey, width, height, minWidth = 280, minHeight = 200, enabled = true, collapsed = false, placement = 'top-right', elementRef }: {
+  storageKey: string; width: number; height: number; minWidth?: number; minHeight?: number; enabled?: boolean; collapsed?: boolean; placement?: 'top-right' | 'bottom-right'; elementRef?: RefObject<HTMLElement | null>
 }) {
   const ownRef = useRef<HTMLElement>(null), ref = elementRef ?? ownRef
-  const defaults = () => constrainWindow({ x: window.innerWidth - width - MARGIN, y: 86, width, height }, viewport(), minWidth, minHeight)
+  const defaults = () => {
+    const area = viewport()
+    return constrainWindow({ x: area.width - width - MARGIN, y: placement === 'bottom-right' ? area.height - area.bottom - height - MARGIN : 86, width, height }, area, minWidth, minHeight)
+  }
   const [bounds, setBounds] = useState<WindowBounds>(() => {
     try {
       const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? 'null')

@@ -54,8 +54,10 @@ export function InviteUserDialog({ open, onClose, server, onCreateLink, onListLi
         <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={() => { setGenerated(null); setCopied(false) }}>Создать ещё</button><button className="button button--primary" type="button" onClick={() => void copyLink()}>{copied ? 'Скопировано' : 'Копировать'}</button></div>
       </div> : <form className="dialog-form" onSubmit={createLink}>
         <p>Новые участники регистрируются по ссылке. Пользователи с аккаунтом уже состоят в этом инстансе.</p>
-        <label><span>Срок действия</span><select value={lifetime} onChange={(event) => setLifetime(Number(event.target.value))}><option value={60 * 60}>1 час</option><option value={6 * 60 * 60}>6 часов</option><option value={24 * 60 * 60}>1 сутки</option></select></label>
-        <label><span>Количество использований</span><input type="number" min={1} max={100} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} required/></label>
+        <div className="invite-dialog__fields">
+          <label><span>Срок действия</span><select value={lifetime} onChange={(event) => setLifetime(Number(event.target.value))}><option value={60 * 60}>1 час</option><option value={6 * 60 * 60}>6 часов</option><option value={24 * 60 * 60}>1 сутки</option></select></label>
+          <label><span>Количество использований</span><input type="number" min={1} max={100} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} required/></label>
+        </div>
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="dialog-actions"><button className="button button--ghost" type="button" onClick={onClose}>Отмена</button><button className="button button--primary" disabled={pending}>{pending ? <span className="spinner"/> : 'Создать ссылку'}</button></div>
       </form>}

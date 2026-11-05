@@ -7,6 +7,18 @@ import { CommunityProvider } from './Community'
 import { createApi } from '../services/api'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+it('previews a bare domain and HTTP link through HTTPS and keeps a URL card for legacy null responses', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  const requested: string[] = []
+  const api = createApi({ request: async <T,>({ path }: { path: string }) => {
+    requested.push(path)
+    return { status: 200, data: (path.includes('/link-preview?') ? null : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : path.endsWith('/inbox') ? { items: [], has_more: false } : []) as T }
+  } })
+  render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}><MessageLinkPreviews content="http://www.gosuslugi.ru/ www.gosuslugi.ru/"/></CommunityProvider>)
+  const link = await screen.findByRole('link', { name: /www.gosuslugi.ru/ })
+  expect(link.getAttribute('href')).toBe('https://www.gosuslugi.ru/')
+  expect(requested.filter((path) => path.includes('/link-preview?'))).toEqual(['/api/v1/link-preview?url=https%3A%2F%2Fwww.gosuslugi.ru%2F'])
+})
 it('renders safe clickable links while escaping markup', () => {
   render(<p><LinkText text={'<script>alert(1)</script> https://example.org/article.'}/></p>)
   const link = screen.getByRole('link')
