@@ -16,7 +16,8 @@ available with the context menu or Up/Down keys while the button is focused.
 Menus open above the entire composer, stay inside the viewport, support arrow
 keys/Home/End, and dismiss on Escape, outside press, window blur or resize. The
 shared editor used for editing an existing message retains its save/cancel flow.
-Poll and scheduling dialogs still load on demand.
+The menu renderer, action descriptions, and poll/scheduling dialogs load on
+demand. The initial-bundle check also prevents the menu from becoming eager.
 
 ## По-русски
 
@@ -28,3 +29,5 @@ Poll and scheduling dialogs still load on demand.
 Короткое нажатие на отправку и Enter отправляют сообщение как раньше. Удержание
 кнопки 450 мс открывает отложенную отправку, без отправки при отпускании.
 Можно также использовать правую кнопку мыши или стрелки на клавиатуре.
+Код меню и описания действий загружаются при открытии; проверка начальной
+сборки запрещает включать модуль меню в обязательную загрузку страницы.

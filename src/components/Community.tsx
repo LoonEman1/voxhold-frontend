@@ -4,6 +4,7 @@ import { EventsView, AuditView, DesktopNotificationSettings } from './LazyCommun
 import { Suspense, lazy, createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { VoxholdApi } from '../services/api'
 import { communityPages } from '../services/communityPages'
+import { completeConversation } from '../services/openConversation'
 import type { Message, MessageNotification, ServerMember, ServerRole } from '../domain/types'
 import type { Conversation, InboxItem, Privacy, CustomRole } from '../domain/community'
 import { Avatar } from './Avatar'
@@ -121,7 +122,8 @@ export function CommunityProvider({ api, token, userId, serverId, owner, members
     setView('messages'); const generation = ++openGeneration.current
     setBusy(true)
     try {
-      const chat = await api.community.request<Conversation>(token, '/me/conversations', 'POST', { user_ids: [id] })
+      const created = await api.community.request<Conversation>(token, '/me/conversations', 'POST', { user_ids: [id] })
+      const chat = await completeConversation(api, token, created)
       if (generation !== openGeneration.current) return
       setConversations((values) => [chat, ...values.filter((value) => value.id !== chat.id)]); setSelected(chat.id); refresh()
     } catch (caught) { if (generation === openGeneration.current) setError(problem(caught)) }

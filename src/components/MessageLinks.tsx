@@ -2,6 +2,7 @@ import { safeImageBlob } from '../lib/safeBlob'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { textLinks } from '../lib/links'
 import { useVisible } from '../hooks/useVisible'
+import { retryBusy } from '../lib/retryBusy'
 import { useCommunity } from './Community'
 import { attachmentDownload } from '../services/attachmentDownloads'
 import type { VoxholdApi } from '../services/api'
@@ -22,7 +23,7 @@ function PreviewImage({ api, token, path }: { api: VoxholdApi; token: string; pa
   useEffect(() => {
     if (!/^\/api\/v1\/link-preview\/images\/[a-f0-9]{64}$/.test(path)) return
     const controller = new AbortController(); let objectURL = ''
-    void attachmentDownload(controller.signal, () => api.linkPreviews.image(token, path, controller.signal)).then((blob) => {
+    void attachmentDownload(controller.signal, () => retryBusy(controller.signal, () => api.linkPreviews.image(token, path, controller.signal))).then((blob) => {
       if (!controller.signal.aborted) { objectURL = URL.createObjectURL(safeImageBlob(blob)); setURL(objectURL) }
     }).catch(() => undefined)
     return () => { controller.abort(); if (objectURL) URL.revokeObjectURL(objectURL) }
@@ -32,15 +33,15 @@ function PreviewImage({ api, token, path }: { api: VoxholdApi; token: string; pa
 export function MessageLinkPreviews({ content }: { content: string }) {
   const context = useCommunity(), { ref, visible } = useVisible<HTMLDivElement>()
   const api = context?.api, token = context?.token
-  const links = useMemo(() => [...new Set(textLinks(content).filter((l) => l.href.startsWith('https://')).map((l) => l.href))].slice(0, 2), [content])
+  const links = useMemo(() => [...new Set(textLinks(content).map((link) => { const url = new URL(link.href); url.protocol = 'https:'; return url.href }))].slice(0, 2), [content])
   const [previews, setPreviews] = useState<LinkPreview[]>([])
   useEffect(() => {
     setPreviews([])
     if (!visible || !api || !token || !links.length) return
     const controller = new AbortController()
     void Promise.all(links.map((href) => attachmentDownload(controller.signal, async () => {
-      const value = await api.linkPreviews.get(token, href, controller.signal)
-      if (!value || typeof value.title !== 'string') return null
+      const value = await retryBusy(controller.signal, () => api.linkPreviews.get(token, href, controller.signal))
+      if (!value || typeof value.title !== 'string') return { url: href, title: new URL(href).hostname, site_name: new URL(href).hostname, unavailable: true }
       const requested = new URL(href), returned = new URL(value.url)
       requested.hash = ''; returned.hash = ''
       return requested.href === returned.href ? { ...value, url: href } : null
