@@ -63,6 +63,33 @@ describe('screen capture audio', () => {
     installMediaDevices({ getSupportedConstraints: () => ({}) } as unknown as Partial<MediaDevices>)
     expect(canRestrictOwnAudio()).toBe(false)
   })
+
+  it('requests window-only audio and retries a restriction that the picker did not apply', async () => {
+    const media = capture('monitor', { restrictOwnAudio: false })
+    const audio = media.getAudioTracks()[0]!
+    const applyConstraints = vi.fn(async () => { Object.assign(audio.getSettings(), { restrictOwnAudio: true }) })
+    Object.assign(audio, { applyConstraints })
+    const getDisplayMedia = vi.fn(async () => media)
+    installMediaDevices({ getDisplayMedia, getSupportedConstraints: () => ({ restrictOwnAudio: true }) } as unknown as Partial<MediaDevices>)
+    expect(await captureScreen(DEFAULT_STREAM_PREFERENCES)).toBe(media)
+    expect(getDisplayMedia).toHaveBeenCalledWith(expect.objectContaining({ windowAudio: 'window' }))
+    expect(applyConstraints).toHaveBeenCalledWith({ restrictOwnAudio: true })
+    expect(capturedAudioIncludesOwnPlayback(media)).toBe(false)
+    expect(audio.stop).not.toHaveBeenCalled()
+  })
+
+  it.each(['unsupported', 'ignored', 'rejected'])('preserves game audio and reports the echo risk when exclusion is %s', async (support) => {
+    const media = capture('monitor', {})
+    const audio = media.getAudioTracks()[0]!
+    const applyConstraints = support === 'rejected' ? vi.fn().mockRejectedValue(new Error('Unavailable')) : vi.fn().mockResolvedValue(undefined)
+    Object.assign(audio, { applyConstraints })
+    installMediaDevices({ getDisplayMedia: vi.fn(async () => media), getSupportedConstraints: () => ({ restrictOwnAudio: support !== 'unsupported' }) } as unknown as Partial<MediaDevices>)
+    expect(await captureScreen(DEFAULT_STREAM_PREFERENCES)).toBe(media)
+    expect(media.getAudioTracks()).toEqual([audio])
+    expect(audio.stop).not.toHaveBeenCalled()
+    expect(capturedAudioIncludesOwnPlayback(media)).toBe(true)
+    expect(applyConstraints).toHaveBeenCalledTimes(support === 'unsupported' ? 0 : 1)
+  })
 })
 
 it('releases capture if loading or probing HDR fails after the picker succeeds', async () => {

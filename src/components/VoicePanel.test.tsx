@@ -46,6 +46,18 @@ it('shows nothing about encryption in a plain channel', () => {
   expect(screen.queryByText(E2EE_VOICE_NOTICE)).toBeNull()
 })
 
+it('keeps sharing available while watching another publisher, with the server capability and channel limit respected', () => {
+  const stream = { server_id: 3, channel_id: 8, publisher_user_id: 2, publisher_connection_id: 'c2', mode: 'server', codec: 'vp9', has_audio: true, viewer_count: 1 } as ActiveStream
+  const value = props({ stream, streamList: [stream], streamRole: 'viewer', multipleStreams: true })
+  const view = render(<VoicePanel {...value}/>)
+  fireEvent.click(screen.getByRole('button', { name: 'Показать свой экран' }))
+  expect(value.onOpenStreamSettings).toHaveBeenCalledOnce()
+  for (const overrides of [{ multipleStreams: false }, { streamRole: 'publisher' as const }, { activeChannel: null }, { streamStatus: 'requesting' as const }, { streamList: Array.from({ length: 8 }, (_, id) => ({ ...stream, publisher_connection_id: `c${id}` })) }]) {
+    view.rerender(<VoicePanel {...value} {...overrides}/>)
+    expect(screen.queryByRole('button', { name: 'Показать свой экран' })).toBeNull()
+  }
+})
+
 it('replaces a participant card with their camera and name, then restores the card on stop', () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)

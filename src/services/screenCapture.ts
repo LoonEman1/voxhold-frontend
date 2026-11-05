@@ -3,6 +3,17 @@ import { clientDiagnostics } from '../platform/clientDiagnostics'
 
 /** Screen Capture spec constraint, not yet in TypeScript's DOM library. */
 type DisplayAudioConstraints = MediaTrackConstraints & { restrictOwnAudio?: boolean }
+/** Retry the restriction on the selected source; preserve the requested game audio. */
+async function restrictOwnPlayback(media: MediaStream) {
+  if (!capturedAudioIncludesOwnPlayback(media)) return
+  const audio = media.getAudioTracks()
+  if (canRestrictOwnAudio()) {
+    await Promise.all(audio.map(async (track) => {
+      try { await track.applyConstraints({ restrictOwnAudio: true } as DisplayAudioConstraints) }
+      catch { /* Verify the applied setting below, even if the browser accepts the constraint. */ }
+    }))
+  }
+}
 
 /** Whether this browser understands restrictOwnAudio at all. */
 export function canRestrictOwnAudio() {
@@ -12,8 +23,8 @@ export function canRestrictOwnAudio() {
 }
 
 /**
- * True when a capture carries whole-system audio (screen or window) that
- * still contains this page's playback, so friends would hear themselves.
+ * True when a screen/window audio track has not confirmed own-audio exclusion.
+ * This is a risk indication, not a measurement of the captured samples.
  * A shared tab only carries that tab's own audio and is never affected.
  */
 export function capturedAudioIncludesOwnPlayback(media: MediaStream) {
@@ -52,6 +63,7 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
     selfBrowserSurface: 'exclude',
     surfaceSwitching: 'include',
     systemAudio: preferences.includeAudio ? 'include' : 'exclude',
+    windowAudio: preferences.includeAudio ? 'window' : 'exclude',
   }
   const media = await navigator.mediaDevices.getDisplayMedia(options)
   const video = media.getVideoTracks()[0]
@@ -59,12 +71,15 @@ export async function captureScreen(value: StreamPreferences): Promise<MediaStre
     media.getTracks().forEach((track) => track.stop())
     throw new Error('Источник экрана не предоставил видеодорожку')
   }
+  try { await restrictOwnPlayback(media) }
+  catch (error) { media.getTracks().forEach((track) => track.stop()); throw error }
   video.contentHint = preferences.content === 'motion' ? 'motion' : 'detail'
   media.getAudioTracks().forEach((track) => { track.contentHint = 'music' })
   const settings = video.getSettings()
   clientDiagnostics.record('media', 'stream_capture_ready', 'info', {
     has_audio: media.getAudioTracks().length > 0,
     audio_includes_own_playback: capturedAudioIncludesOwnPlayback(media),
+    own_audio_restriction_supported: canRestrictOwnAudio(),
     width: settings.width ?? null,
     height: settings.height ?? null,
     frame_rate: settings.frameRate ?? null,

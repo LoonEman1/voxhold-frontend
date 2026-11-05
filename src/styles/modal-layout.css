@@ -1,0 +1,47 @@
+/* The dialog owns its outer spacing, including content loaded by lazy panels. */
+.modal-backdrop > .modal-card { --modal-padding: 24px; min-width: 0; scrollbar-gutter: stable both-edges; }
+.modal-card .modal-head { gap: 16px; padding: var(--modal-padding) var(--modal-padding) 20px; }
+.modal-head > div { min-width: 0; }
+.modal-head h2 { overflow-wrap: anywhere; line-height: 1.25; }
+.modal-head > .icon-button { flex: none; }
+.modal-body { display: flex; min-width: 0; flex-direction: column; gap: 20px; padding: 0 var(--modal-padding) var(--modal-padding); }
+.modal-body > * { min-width: 0; max-width: 100%; }
+.modal-body > :is(.dialog-form, .feature-form, .voice-settings, .recordings-dialog, .community-modal-body, .community-settings, .logout-confirm, .dialog-success, .invite-list, .forward-dialog, .stream-presets, .stream-dialog-actions) { padding: 0; }
+.modal-body > :is(.profile-hero, .danger-zone, .instance-notice, .member-profile-card, .dialog-standalone-error, .server-settings-tabs, .invite-mode-tabs, .invite-dialog__tabs, .stream-warning, .stream-settings-live-note) { margin: 0; }
+.modal-body > :is(.stream-settings-grid, .stream-warning) { padding: 0; }
+.modal-body > p { margin: 0; color: var(--muted); font-size: var(--font-sm); line-height: 1.6; overflow-wrap: anywhere; }
+.modal-body :is(form, fieldset, label) { min-width: 0; }
+.modal-body :is(.dialog-form, .feature-form) { gap: 18px; }
+.modal-body :is(.dialog-form, .feature-form, .community-settings) label { gap: 8px; font-size: var(--font-sm); line-height: 1.45; }
+.modal-body :is(.dialog-form, .feature-form, .community-settings) label > :is(input, select, textarea):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"]) { width: 100%; min-width: 0; max-width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--text); background: var(--surface); font: inherit; line-height: 1.5; }
+.modal-body :is(.dialog-form, .feature-form, .community-settings) label > :is(input, select):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"]) { min-height: 44px; }
+.modal-body :is(.dialog-form, .feature-form) label > textarea { min-height: 104px; resize: vertical; }
+.modal-body :is(.dialog-form, .feature-form) label > small { color: var(--muted); font-size: var(--font-2xs); line-height: 1.5; font-weight: 400; opacity: 1; }
+.modal-body :is(.dialog-actions, .stream-dialog-actions) { flex-wrap: wrap; align-items: center; gap: 8px; }
+.modal-body .dialog-actions > .button { min-height: 40px; }
+.modal-body > .community-settings { max-height: none; overflow: visible; }
+.modal-body > .channel-access { padding: 20px 0 0; }
+.modal-body > .invite-links { padding: 0; }
+.invite-links__heading > p { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.invite-links__heading > button { flex: none; }
+.invite-links__list { scrollbar-gutter: stable both-edges; }
+.invite-dialog__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.modal-body .invite-dialog__fields > label { justify-content: start; }
+.profile-dialog.modal-card { display: flex; overflow: hidden; }
+.profile-dialog > .modal-body { display: contents; }
+.profile-dialog .modal-head { background: transparent; }
+.profile-dialog .profile-tabs { padding: 0 var(--modal-padding) 14px; background: transparent; }
+.profile-dialog .profile-panel { padding: 24px var(--modal-padding); overflow-y: auto; scrollbar-gutter: stable both-edges; }
+.modal-body > .server-settings-tabs { flex-wrap: wrap; }
+.modal-body > .server-settings-tabs button { min-width: 100px; }
+@media (max-width: 720px) {
+  .modal-backdrop > .modal-card { --modal-padding: 18px; max-height: calc(100dvh - 16px); }
+  .modal-card .modal-head { padding-bottom: 18px; }
+  .modal-head h2 { font-size: 21px; }
+  .modal-body { padding-bottom: max(var(--modal-padding), env(safe-area-inset-bottom)); gap: 18px; }
+}
+@media (max-width: 480px) {
+  .invite-dialog__fields { grid-template-columns: 1fr; }
+  .modal-body .dialog-actions > .button { flex: 1; }
+  .invite-links__heading { flex-wrap: wrap; }
+}

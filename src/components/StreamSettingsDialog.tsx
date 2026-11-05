@@ -28,6 +28,7 @@ interface StreamSettingsDialogProps {
   liveHasAudio?: boolean
   onApply?: (value: StreamPreferences) => Promise<void>
   error?: string
+  replacingViewer?: boolean
 }
 
 function VideoBitrateField({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (value: number) => void }) {
@@ -68,7 +69,7 @@ function LiveStreamSettingsDialog(props: StreamSettingsDialogProps) {
   return <StreamSettingsFields {...props} preferences={draft} onChange={setDraft} busy={props.busy || applying} error={error} onStart={() => void apply()}/>
 }
 
-function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onStart, live = false, liveHasAudio, error }: StreamSettingsDialogProps) {
+function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onStart, live = false, liveHasAudio, error, replacingViewer = false }: StreamSettingsDialogProps) {
   const [hdrCapabilities, setHDRCapabilities] = useState<HDRCapabilities | null>(null)
   useEffect(() => {
     if (!open || live) return
@@ -90,6 +91,7 @@ function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onSt
   const heavy = preferences.frameRate >= 90 || preferences.resolution === '2160p'
 
   return <Modal open={open} title={live ? 'Настройки трансляции' : 'Поделиться экраном'} eyebrow={live ? 'В ЭФИРЕ' : 'ТРАНСЛЯЦИЯ ЭКРАНА'} size="medium" onClose={busy ? () => undefined : onClose}>
+    {replacingViewer && <p>После выбора экрана ваш просмотр завершится и начнётся своя трансляция. Другие трансляции в канале продолжатся.</p>}
     {live && <p className="stream-settings-live-note"><Icon name="monitor" size={18}/><span>Качество изменится для текущих зрителей без остановки трансляции. Источник, кодек, диапазон и захват звука выбираются перед запуском.</span></p>}
     <div className="stream-presets" role="group" aria-label="Быстрые настройки">
       {STREAM_PRESETS.map((preset) => <button key={preset.id} type="button" disabled={busy} className={activePreset === preset.id ? 'is-active' : ''} aria-pressed={activePreset === preset.id} onClick={() => onChange(applyStreamPreset(preferences, preset.id))}>
@@ -108,7 +110,7 @@ function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onSt
       <label><span>Звук трансляции</span><select value={preferences.audioBitrateKbps} disabled={busy || !preferences.includeAudio || live && liveHasAudio === false} onChange={(event) => patch('audioBitrateKbps', Number(event.target.value) as StreamPreferences['audioBitrateKbps'])}>{STREAM_AUDIO_BITRATES.map((rate) => <option value={rate} key={rate}>{rate} Кбит/с</option>)}</select></label>
       <label className="stream-audio-toggle"><input type="checkbox" disabled={live || busy} checked={preferences.includeAudio} onChange={(event) => patch('includeAudio', event.target.checked)}/><span>Передавать системный звук</span></label>
     </div>
-    {preferences.includeAudio && !canRestrictOwnAudio() && <p className="stream-warning">Этот браузер не умеет убирать голоса из Voxhold из системного звука: при показе всего экрана или окна друзья услышат себя. Показывайте отдельную вкладку — тогда передаётся только её звук.</p>}
+    {preferences.includeAudio && !canRestrictOwnAudio() && <p className="stream-warning">Этот браузер не подтверждает исключение голосов Voxhold из системного звука. Для игры выберите окно и звук только этого окна, если такой вариант доступен; для видео — отдельную вкладку. При передаче общего звука зрители могут услышать себя.</p>}
     {heavy && <p className="stream-warning">4K и 90+ FPS сильно нагружают процессор и исходящий канал: если картинка начнёт дёргаться, снизьте разрешение или частоту кадров.</p>}
     {hdrCapabilities && !hdrCapabilities.canPublishHDR && <p className="stream-warning">HDR отключён: {hdrCapabilities.reason}</p>}
     {preferences.mode === 'p2p' && <p className="stream-warning">P2P раскрывает IP участникам и расходует ваш исходящий трафик отдельно на каждого зрителя. Максимум — 8 зрителей.</p>}

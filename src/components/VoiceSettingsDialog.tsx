@@ -21,12 +21,13 @@ interface VoiceSettingsDialogProps {
   getInputLevel: () => number
   voiceActive: boolean
   loadingDevices: boolean
+  embedded?: boolean
   onClose: () => void
   onChange: (preferences: VoicePreferences) => void
   onRefreshDevices: (requestPermission: boolean) => Promise<void>
 }
 
-export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel, voiceActive, loadingDevices, onClose, onChange, onRefreshDevices }: VoiceSettingsDialogProps) {
+export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel, voiceActive, loadingDevices, onClose, onChange, onRefreshDevices, embedded = false }: VoiceSettingsDialogProps) {
   const [recording, setRecording] = useState<ShortcutField | null>(null)
   const [previewLevel, setPreviewLevel] = useState(0)
   const [previewError, setPreviewError] = useState('')
@@ -153,9 +154,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel,
     setRecording(null)
   }
 
-  return (
-    <Modal open={open} onClose={onClose} title="Голос и звук" eyebrow="НАСТРОЙКИ" size="medium">
-      <div className="voice-settings">
+  const content = <div className="voice-settings">
         <section className="voice-settings__section">
           <div className="voice-settings__heading"><span><Icon name="mic"/></span><div><h3>Устройства</h3><p>Выберите, откуда брать голос и куда выводить звук комнаты.</p></div></div>
           <div className="voice-device-grid">
@@ -173,7 +172,7 @@ export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel,
           <VoiceRange label="Громкость микрофона" value={preferences.inputVolume} max={200} onChange={(value) => patch('inputVolume', value)}/>
           <MeterWithGate level={voiceActive ? inputLevel : previewLevel} gateEnabled={preferences.noiseSuppressionMode === 'threshold'} threshold={preferences.noiseGateThreshold}/>
           {previewError && <div className="voice-preview-error" role="alert">{previewError}</div>}
-          <VoiceRange label="Громкость собеседников" value={preferences.outputVolume} max={100} onChange={(value) => patch('outputVolume', value)}/>
+          <VoiceRange label="Громкость собеседников" value={preferences.outputVolume} max={200} onChange={(value) => patch('outputVolume', value)}/>
           <div className="voice-bitrate-setting"><span><b>Качество передачи</b><em>{preferences.bitrateKbps} Кбит/с</em></span><div>{VOICE_BITRATES.map((bitrate) => <button className={preferences.bitrateKbps === bitrate ? 'is-active' : ''} type="button" key={bitrate} onClick={() => patch('bitrateKbps', bitrate)}>{bitrate}</button>)}</div><small>Это максимальный битрейт Opus. При нестабильной сети WebRTC может временно снизить его автоматически.</small></div>
         </section>
 
@@ -221,12 +220,11 @@ export function VoiceSettingsDialog({ open, preferences, devices, getInputLevel,
 
         <footer className="voice-settings__footer"><button className="button button--ghost" type="button" onClick={() => onChange({ ...DEFAULT_VOICE_PREFERENCES })}>Сбросить</button><button className="button button--primary" type="button" onClick={onClose}>Готово</button></footer>
       </div>
-    </Modal>
-  )
+  return embedded ? open && content : <Modal open={open} onClose={onClose} title="Голос и звук" eyebrow="НАСТРОЙКИ" size="medium">{content}</Modal>
 }
 
 function VoiceRange({ label, value, max, onChange }: { label: string; value: number; max: number; onChange: (value: number) => void }) {
-  return <label className="voice-range"><span><b>{label}</b><em>{value}%</em></span><input type="range" min="0" max={max} step="1" value={value} onChange={(event) => onChange(Number(event.target.value))}/></label>
+  return <label className="voice-range"><span><b>{label}</b><em>{value}%</em></span><input type="range" min="0" max={max} step="1" value={value} aria-label={label} aria-valuetext={`${value}%${value > 100 ? ', усиление' : ''}`} onChange={(event) => onChange(Number(event.target.value))}/></label>
 }
 
 function MeterWithGate({ level, gateEnabled, threshold }: { level: number; gateEnabled: boolean; threshold: number }) {

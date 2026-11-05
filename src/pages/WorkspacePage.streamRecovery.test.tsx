@@ -9,14 +9,16 @@ import { WorkspacePage } from './WorkspacePage'
 const fixture = vi.hoisted(() => ({
   callbacks: {} as Record<string, (...args: never[]) => unknown>,
   viewers: [] as { onRequestRewatch: () => void; onICECandidate: (candidate: object) => void; close: () => void }[],
-  watch: vi.fn(), leave: vi.fn(), joinVoice: vi.fn(), notify: vi.fn(), expire: vi.fn(),
+  watch: vi.fn(), leave: vi.fn(), publish: vi.fn(), capture: vi.fn(), joinVoice: vi.fn(), notify: vi.fn(), expire: vi.fn(),
   auth: { user: { id: 1, username: 'viewer', created_at: 1 }, token: 'fixture' },
 }))
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ ...fixture.auth, expire: fixture.expire }) }))
 vi.mock('../components/Toast', () => ({ useToast: () => fixture.notify }))
 vi.mock('../theme/ThemeContext', () => ({ useTheme: () => ({ theme: 'dark', toggleTheme: vi.fn() }) }))
 vi.mock('../components/PersistentStreamPlayer', () => ({ PersistentStreamPlayer: () => null }))
-vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () => void; onWatchStream: (publisherId?: string) => void; streamList?: ActiveStream[]; connectionStatus: string; streamStatus: string; streamError: string }) => <>
+vi.mock('../components/StreamSettingsDialog', () => ({ StreamSettingsDialog: (props: { onStart: () => void; onClose: () => void }) => <><button onClick={props.onStart}>Start fixture</button><button onClick={props.onClose}>Cancel fixture</button></> }))
+vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () => void; onOpenStreamSettings: () => void; onWatchStream: (publisherId?: string) => void; streamList?: ActiveStream[]; connectionStatus: string; streamStatus: string; streamError: string }) => <>
+  <button onClick={props.onOpenStreamSettings}>Share fixture</button>
   <button onClick={props.onJoin}>Join fixture</button><button onClick={() => props.onWatchStream()}>Watch fixture</button>{props.streamList?.map((item) => <button key={item.publisher_connection_id} onClick={() => props.onWatchStream(item.publisher_connection_id)}>Watch {item.publisher_connection_id}</button>)}
   <output data-testid="voice-state">{props.connectionStatus}</output><output data-testid="stream-state">{props.streamStatus}</output><output data-testid="stream-error">{props.streamError}</output>
 </> }))
@@ -29,7 +31,10 @@ vi.mock('../services/voice', async (original) => ({ ...await original<object>(),
   setSelfState() {} setParticipantState() {} setUserVolume() {} setPreferences() {} close() {} resumeAudio() {}
   recordingAudioTracks() { return [] } subscribeRecordingAudio() { return () => {} }
 } }))
-vi.mock('../services/stream', async (original) => ({ ...await original<object>(), supportedStreamCodecs: () => ['vp9'], BrowserServerStreamSession: class {
+vi.mock('../services/screenCapture', async (original) => ({ ...await original<object>(), captureScreen: fixture.capture }))
+vi.mock('../services/hdrPipeline', async (original) => ({ ...await original<object>(), createSDRPublishPipeline: async (media: MediaStream) => ({ stream: media, close() {} }) }))
+vi.mock('../services/streamAudioGain', () => ({ StreamAudioGain: class { constructor(public stream: MediaStream) {} async resume() {} close() {} } }))
+vi.mock('../services/stream', async (original) => ({ ...await original<object>(), supportedStreamCodecs: () => ['vp9'], selectedStreamCodec: () => 'vp9', BrowserServerStreamSession: class {
   close = vi.fn()
   constructor(options: typeof fixture.viewers[number]) { fixture.viewers.push({ ...options, close: this.close }) }
 } }))
@@ -41,6 +46,8 @@ vi.mock('../services/realtime', () => ({ RealtimeClient: class {
   leaveVoice() { return 'voice-leave' }
   watchStream(...args: unknown[]) { return fixture.watch(...args) }
   leaveStream() { return fixture.leave() }
+  startStream(...args: unknown[]) { return fixture.publish(...args) }
+  stopStream() { return 'stop-1' }
   sendStreamICECandidate() { return 'old-media' }
 } }))
 
@@ -61,6 +68,7 @@ const api = createApi({ request: async <T,>(request: { path: string }) => {
 beforeEach(() => {
   localStorage.clear(); fixture.viewers.length = 0
   fixture.joinVoice.mockClear()
+  fixture.capture.mockReset(); fixture.publish.mockReset().mockReturnValue('publish-1')
   fixture.watch.mockReset().mockReturnValueOnce('watch-1').mockReturnValue('watch-2')
   fixture.leave.mockReset().mockReturnValue('rewatch-leave')
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
@@ -68,15 +76,47 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-async function startViewer() {
+async function startViewer(multipleStreams = false) {
   render(<WorkspacePage api={api}/>)
   await screen.findByRole('button', { name: 'Join fixture' })
+  act(() => emit('onReady', { multipleStreams }))
   act(() => emit('onStreamSnapshot', { streams: [stream] }))
   fireEvent.click(screen.getByRole('button', { name: 'Join fixture' }))
   await waitFor(() => expect(screen.getByTestId('voice-state').textContent).toBe('connected'))
   fireEvent.click(screen.getByRole('button', { name: 'Watch fixture' }))
   await waitFor(() => expect(fixture.watch).toHaveBeenCalledOnce())
 }
+
+it('keeps the share action while viewing and preserves playback when the picker is cancelled', async () => {
+  await startViewer(true)
+  expect(screen.getByRole('button', { name: 'Поделиться экраном в voice' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Share fixture' }))
+  await screen.findByRole('button', { name: 'Start fixture' })
+  fixture.capture.mockRejectedValue(new DOMException('Cancelled', 'NotAllowedError'))
+  fireEvent.click(screen.getByRole('button', { name: 'Start fixture' }))
+  await waitFor(() => expect(fixture.capture).toHaveBeenCalledOnce())
+  await act(async () => undefined)
+  expect(fixture.leave).not.toHaveBeenCalled()
+  expect(fixture.viewers[0]!.close).not.toHaveBeenCalled()
+  expect(fixture.publish).not.toHaveBeenCalled()
+  expect(screen.getByTestId('stream-error').textContent).toBe('')
+})
+
+it('replaces only our viewer after capture confirmation and ignores its late leave acknowledgement', async () => {
+  await startViewer(true)
+  const track = { stop: vi.fn(), getSettings: () => ({ displaySurface: 'browser' }), addEventListener: vi.fn() }
+  const capture = { getTracks: () => [track], getVideoTracks: () => [track], getAudioTracks: () => [] } as unknown as MediaStream
+  fixture.capture.mockResolvedValue(capture)
+  fireEvent.click(screen.getByRole('button', { name: 'Share fixture' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Start fixture' }))
+  await waitFor(() => expect(fixture.publish).toHaveBeenCalledOnce())
+  expect(fixture.leave).toHaveBeenCalledOnce()
+  expect(fixture.viewers[0]!.close).toHaveBeenCalledOnce()
+  act(() => emit('onStreamLeft', { server_id: 1, channel_id: 1, publisher_connection_id: 'publisher' }, 'rewatch-leave'))
+  expect(fixture.viewers[1]!.close).not.toHaveBeenCalled()
+  expect(track.stop).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'Watch publisher' })).toBeTruthy()
+})
 
 it.each(['voice e2ee device was revoked', 'voice permission was revoked'])('does not automatically register/rejoin after %s', async (reason) => {
   await startViewer()
