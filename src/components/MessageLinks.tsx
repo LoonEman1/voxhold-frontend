@@ -1,13 +1,13 @@
 import { safeImageBlob } from '../lib/safeBlob'
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { textLinks } from '../lib/links'
+import { previewLinks, textLinks } from '../lib/links'
+import { LinkPreviewCard } from './LinkPreviewCard'
 import { useVisible } from '../hooks/useVisible'
 import { retryBusy } from '../lib/retryBusy'
 import { useCommunity } from './Community'
 import { attachmentDownload } from '../services/attachmentDownloads'
 import type { VoxholdApi } from '../services/api'
 import type { LinkPreview } from '../domain/community'
-import './message-links.css'
 
 export function LinkText({ text }: { text: string }) {
   let offset = 0
@@ -33,7 +33,7 @@ function PreviewImage({ api, token, path }: { api: VoxholdApi; token: string; pa
 export function MessageLinkPreviews({ content }: { content: string }) {
   const context = useCommunity(), { ref, visible } = useVisible<HTMLDivElement>()
   const api = context?.api, token = context?.token
-  const links = useMemo(() => [...new Set(textLinks(content).map((link) => { const url = new URL(link.href); url.protocol = 'https:'; return url.href }))].slice(0, 2), [content])
+  const links = useMemo(() => previewLinks(content), [content])
   const [previews, setPreviews] = useState<LinkPreview[]>([])
   useEffect(() => {
     setPreviews([])
@@ -51,7 +51,12 @@ export function MessageLinkPreviews({ content }: { content: string }) {
     return () => controller.abort()
   }, [api, token, visible, links])
   if (!links.length) return null
-  return <div ref={ref} className="message-link-previews">{previews.map((preview) => <a key={preview.url} className="link-preview" href={preview.url} target="_blank" rel="noopener noreferrer nofollow ugc" referrerPolicy="no-referrer">
-    {api && token && preview.image_path && <PreviewImage api={api} token={token} path={preview.image_path}/>}<span><small>{preview.site_name}</small><b>{preview.title}</b>{preview.description && <span>{preview.description}</span>}<small>{new URL(preview.url).hostname}</small></span>
-  </a>)}</div>
+  // One fixed-size slot per URL, from the first render through failures and
+  // late image downloads. Metadata must never change the history geometry.
+  return <div ref={ref} className="message-link-previews">{links.map((href) => {
+    const preview = previews.find((value) => value.url === href)
+    return <LinkPreviewCard key={href} href={href} preview={preview}>
+      {api && token && preview?.image_path && <PreviewImage api={api} token={token} path={preview.image_path}/>}
+    </LinkPreviewCard>
+  })}</div>
 }

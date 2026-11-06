@@ -1,14 +1,16 @@
 import { Component, lazy, Suspense, useMemo, type ReactNode } from 'react'
-import { textLinks } from '../lib/links'
+import { previewLinks } from '../lib/links'
+import { LinkPreviewPlaceholders } from './LinkPreviewCard'
 
 const Previews = lazy(() => import('./MessageLinks').then((module) => ({ default: module.MessageLinkPreviews })))
-class PreviewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+class PreviewBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError() { return { failed: true } }
-  render() { return this.state.failed ? null : this.props.children }
+  render() { return this.state.failed ? this.props.fallback : this.props.children }
 }
 /** Optional cards load only for a message containing a supported URL. */
 export function MessageLinkPreviews({ content }: { content: string }) {
-  const enabled = useMemo(() => textLinks(content).some((link) => link.href.startsWith('https://')), [content])
-  return enabled ? <PreviewBoundary key={content}><Suspense fallback={null}><Previews content={content}/></Suspense></PreviewBoundary> : null
+  const links = useMemo(() => previewLinks(content), [content])
+  const fallback = <LinkPreviewPlaceholders links={links}/>
+  return links.length ? <PreviewBoundary key={content} fallback={fallback}><Suspense fallback={fallback}><Previews content={content}/></Suspense></PreviewBoundary> : null
 }
