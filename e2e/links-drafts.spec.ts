@@ -1,5 +1,65 @@
 import { expect, test, type Page } from '@playwright/test'
 
+const portraitThumbnail = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAABaCAIAAAA+UkE8AAAAK0lEQVR4nO3LMQ0AAAgDsHnjRg7+0cBNk75N9ZxEEARBEARBEARBEAThS1g8o7xsXyo/+gAAAABJRU5ErkJggg==', 'base64')
+
+for (const mode of ['latest', 'history', 'direct']) for (const width of [1280, 390]) {
+  test(`delayed previews preserve ${mode} viewport at ${width}px`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 })
+    let releaseModule!: () => void, releaseMetadata!: () => void, releaseImages!: () => void
+    const module = new Promise<void>((resolve) => { releaseModule = resolve })
+    const metadata = new Promise<void>((resolve) => { releaseMetadata = resolve })
+    const images = new Promise<void>((resolve) => { releaseImages = resolve })
+    let moduleRequests = 0, requests = 0
+    await page.route('**/src/components/MessageLinks.tsx*', async (route) => {
+      moduleRequests++; await module; await route.continue()
+    })
+    await page.route('**/api/v1/**', async (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === '/api/v1/link-preview') {
+        requests++; await metadata
+        const href = url.searchParams.get('url')!
+        if (href.includes('other.example') && Number(href.split('/').at(-1)) % 2) {
+          await route.fulfill({ status: 500, json: { error: 'unavailable' } }); return
+        }
+        await route.fulfill({ json: href.includes('other.example') ? null : { url: href, title: 'Длинный заголовок статьи '.repeat(8), description: 'Описание '.repeat(40), site_name: 'Publisher', image_path: '/api/v1/link-preview/images/' + 'a'.repeat(64) } })
+      } else if (url.pathname.includes('/link-preview/images/')) {
+        await images
+        await route.fulfill({ contentType: 'image/png', body: portraitThumbnail })
+      } else await route.fulfill({ json: url.pathname.endsWith('/inbox') ? { items: [], has_more: false } : url.pathname.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : [] })
+    })
+    await page.goto(`/e2e/fixtures/preview-layout.html?${mode}`)
+    const root = page.locator('.messages')
+    try {
+      await expect.poll(() => moduleRequests).toBeGreaterThan(0)
+      await expect(root.locator('.link-preview').first()).toBeAttached()
+      // Let initial positioning and virtual measurements settle while metadata is held.
+      await root.evaluate(async () => { for (let i = 0; i < 20; i++) await new Promise(requestAnimationFrame) })
+      const before = await root.evaluate((node) => {
+        const top = node.getBoundingClientRect().top
+        const row = [...node.querySelectorAll<HTMLElement>('article.message')].find((row) => row.getBoundingClientRect().bottom > top + 2)!
+        return { id: row.dataset.messageId, text: row.querySelector('p')?.textContent, offset: row.getBoundingClientRect().top - top, height: node.scrollHeight, scroll: node.scrollTop }
+      })
+      releaseModule()
+      await expect.poll(() => requests).toBeGreaterThan(0)
+      releaseMetadata()
+      await expect(root.locator('.link-preview').filter({ hasText: 'Длинный заголовок' }).first()).toBeVisible()
+      releaseImages()
+      await expect(root.locator('.link-preview img').first()).toHaveJSProperty('naturalHeight', 90)
+      await root.evaluate(async () => { for (let i = 0; i < 20; i++) await new Promise(requestAnimationFrame) })
+      const after = await root.evaluate((node, before) => {
+        const row = [...node.querySelectorAll<HTMLElement>('article.message')].find((row) => before.id ? row.dataset.messageId === before.id : row.querySelector('p')?.textContent === before.text)!
+        return { found: !!row, offset: row?.getBoundingClientRect().top - node.getBoundingClientRect().top, height: node.scrollHeight, scroll: node.scrollTop }
+      }, before)
+      expect(after.found, 'the original visible message must remain mounted').toBe(true)
+      expect(Math.abs(after.offset - before.offset)).toBeLessThanOrEqual(1)
+      expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(1)
+      expect(Math.abs(after.scroll - before.scroll)).toBeLessThanOrEqual(1)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      if (mode === 'latest') await page.screenshot({ path: info.outputPath(`stable-previews-${width}.png`), animations: 'disabled' })
+    } finally { releaseModule(); releaseMetadata(); releaseImages() }
+  })
+}
+
 async function fixtures(page: Page) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
