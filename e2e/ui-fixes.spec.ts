@@ -67,7 +67,7 @@ test('speaker volume doubles the actual audio samples above 100%', async ({ page
   expect(values.elementVolume).toBeLessThanOrEqual(1)
 })
 
-async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[] } = {}) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[]; joined?: boolean } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -81,7 +81,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
     }
   })
   const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
-  const participants = options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
+  const participants = options.joined === false ? [] : options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
   let emit = (_type: string, _data: unknown) => {}, revoke = () => {}
   let connections = 0, joins = 0
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
@@ -897,6 +897,29 @@ test('news channels appear first, keep reader permissions and hide the empty gro
   expect(errors).toEqual([])
 })
 
+
+test('voice history opens without joining and the mobile menu reveals channels', async ({ page }) => {
+  const fixture = await openCallWorkspace(page, { joined: false })
+  await expect(page.locator('.voice-empty')).toBeVisible()
+  expect(fixture.counts().joins).toBe(0)
+  const chat = page.getByRole('button', { name: 'Чат канала', exact: true })
+  await chat.click()
+  await expect(chat).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.voice-channel-chat')).toContainText('Начало канала #первый-голосовой')
+  await expect(page.getByLabel('Сообщение в первый-голосовой')).toBeVisible()
+  expect(fixture.counts().joins).toBe(0)
+  await page.getByRole('button', { name: 'Закрыть чат', exact: true }).click()
+  const menu = page.getByRole('button', { name: 'Меню', exact: true })
+  await expect(menu).toBeHidden()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(menu).toBeVisible()
+  await expect(menu).toHaveAttribute('aria-expanded', 'false')
+  await menu.click()
+  await expect(menu).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.locator('.channel-sidebar')).toBeInViewport()
+  await page.locator('.channel-row__main').click()
+  await expect(menu).toHaveAttribute('aria-expanded', 'false')
+})
 
 test('call controls show microphone, sound, screen and leave labels', async ({ page }, testInfo) => {
   await page.goto('/e2e/fixtures/ui-fixes.html')

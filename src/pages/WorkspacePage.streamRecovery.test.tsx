@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { Profiler } from 'react'
+import { Profiler, type ReactNode } from 'react'
 import type { ActiveStream } from '../domain/types'
 import { createApi } from '../services/api'
 import { WorkspacePage } from './WorkspacePage'
@@ -17,10 +17,11 @@ vi.mock('../components/Toast', () => ({ useToast: () => fixture.notify }))
 vi.mock('../theme/ThemeContext', () => ({ useTheme: () => ({ theme: 'dark', toggleTheme: vi.fn() }) }))
 vi.mock('../components/PersistentStreamPlayer', () => ({ PersistentStreamPlayer: () => null }))
 vi.mock('../components/StreamSettingsDialog', () => ({ StreamSettingsDialog: (props: { onStart: () => void; onClose: () => void }) => <><button onClick={props.onStart}>Start fixture</button><button onClick={props.onClose}>Cancel fixture</button></> }))
-vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () => void; onOpenStreamSettings: () => void; onWatchStream: (publisherId?: string) => void; streamList?: ActiveStream[]; connectionStatus: string; streamStatus: string; streamError: string }) => <>
+vi.mock('../components/VoicePanel', () => ({ VoicePanel: (props: { onJoin: () => void; onOpenStreamSettings: () => void; onWatchStream: (publisherId?: string) => void; streamList?: ActiveStream[]; connectionStatus: string; streamStatus: string; streamError: string; chat?: ReactNode }) => <>
   <button onClick={props.onOpenStreamSettings}>Share fixture</button>
   <button onClick={props.onJoin}>Join fixture</button><button onClick={() => props.onWatchStream()}>Watch fixture</button>{props.streamList?.map((item) => <button key={item.publisher_connection_id} onClick={() => props.onWatchStream(item.publisher_connection_id)}>Watch {item.publisher_connection_id}</button>)}
   <output data-testid="voice-state">{props.connectionStatus}</output><output data-testid="stream-state">{props.streamStatus}</output><output data-testid="stream-error">{props.streamError}</output>
+  {props.chat}
 </> }))
 vi.mock('../services/voiceInput', () => ({ BrowserVoiceInput: class { isHealthy = true; close() {} } }))
 vi.mock('../services/voiceEnvironment', async (original) => ({ ...await original<object>(), voiceSupported: () => true }))
@@ -61,6 +62,8 @@ const api = createApi({ request: async <T,>(request: { path: string }) => {
   else if (request.path.endsWith('/channels')) data = [{ id: 1, server_id: 1, name: 'voice', kind: 'voice', position: 0, created_by: 2, created_at: 1 }]
   else if (request.path.endsWith('/members') || request.path.endsWith('/notification-counts')) data = []
   else if (request.path.endsWith('/recordings')) data = { recordings: [] }
+  else if (request.path.includes('/messages/sync')) data = { messages: [], deleted_ids: [], cursor: 0, reset: false, has_more: false, has_older: false }
+  else if (request.path.endsWith('/pins')) data = []
   else if (request.path.endsWith('/webrtc/config')) data = { ice_servers: [], ice_transport_policy: 'all' }
   return { status: 200, data: data as T }
 } })
@@ -202,4 +205,35 @@ it('switches publisher only after leave acknowledgement and ignores the previous
   expect(fixture.viewers[1]!.close).not.toHaveBeenCalled()
   act(() => emit('onStreamStopped', { server_id: 1, channel_id: 1, publisher_connection_id: 'second' }))
   expect(fixture.viewers[1]!.close).toHaveBeenCalledOnce()
+})
+
+
+it('opens an empty voice channel chat and loads history without joining voice', async () => {
+  const sync = vi.spyOn(api.messages, 'sync')
+  const { container } = render(<WorkspacePage api={api}/>)
+  const toggle = await screen.findByRole('button', { name: 'Чат канала' })
+  expect(toggle.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute('aria-pressed')).toBe('true')
+  expect(container.querySelector('.voice-channel-chat')).not.toBeNull()
+  await screen.findByLabelText('Сообщение в voice')
+  await waitFor(() => expect(sync).toHaveBeenCalled())
+  expect(fixture.joinVoice).not.toHaveBeenCalled()
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute('aria-pressed')).toBe('false')
+  expect(container.querySelector('.voice-channel-chat')).toBeNull()
+})
+
+it('opens and closes the channel sidebar from the hamburger', async () => {
+  const { container } = render(<WorkspacePage api={api}/>)
+  const menu = await screen.findByRole('button', { name: 'Меню' })
+  const sidebar = container.querySelector('#workspace-channel-sidebar')!
+  expect(menu.getAttribute('aria-expanded')).toBe('false')
+  expect(sidebar.classList.contains('is-mobile-open')).toBe(false)
+  fireEvent.click(menu)
+  expect(menu.getAttribute('aria-expanded')).toBe('true')
+  expect(sidebar.classList.contains('is-mobile-open')).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Закрыть меню' }))
+  expect(menu.getAttribute('aria-expanded')).toBe('false')
+  expect(sidebar.classList.contains('is-mobile-open')).toBe(false)
 })

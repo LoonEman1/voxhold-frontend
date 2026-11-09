@@ -16,6 +16,8 @@ histories.get(1)![499] = { ...histories.get(1)![499]!, reply: { message_id: 490,
 const keys = new Map<string, Message>()
 const changed = new Map<number, number[]>()
 let cursor = 0, loseFirstReply = true
+let offline = localStorage.getItem('fixture.offline') === 'true'
+let sendBarrier: Promise<void> | undefined, releaseBarrier: (() => void) | undefined
 const requests: string[] = []
 const sockets: { current?: FixtureSocket } = {}
 class FixtureSocket extends EventTarget {
@@ -62,6 +64,9 @@ async function respond(request: TransportRequest): Promise<unknown> {
     return { messages: latest, deleted_ids: ids.filter((id) => !messages.some((item) => item.id === id)), cursor, reset: after === null, has_more: false, has_older: after === null && messages.length > 50 }
   }
   if (messages && path.pathname.endsWith('/messages') && request.method === 'POST') {
+    if (offline) throw new Error('Нет сети')
+    if (sendBarrier) await sendBarrier
+    if (offline) throw new Error('Нет сети')
     const body = request.body as { content: string; client_message_id: string }
     const old = keys.get(body.client_message_id)
     if (old) return old
@@ -89,5 +94,8 @@ Object.assign(window, { reliabilityFixture: {
   },
   resync: () => sockets.current?.emit('channel.sync_required', { server_id: 1, channel_id: 1 }),
   sentCount: () => keys.size,
+  setOffline: (value: boolean) => { offline = value; loseFirstReply = false; localStorage.setItem('fixture.offline', String(value)) },
+  holdSends: () => { sendBarrier = new Promise<void>((resolve) => { releaseBarrier = resolve }) },
+  releaseSends: () => { releaseBarrier?.(); sendBarrier = undefined; releaseBarrier = undefined },
 } })
 createRoot(document.getElementById('root')!).render(<StrictMode><AuthProvider api={api} storage={storage}><ThemeProvider><ToastProvider><WorkspacePage api={api}/></ToastProvider></ThemeProvider></AuthProvider></StrictMode>)

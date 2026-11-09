@@ -58,7 +58,7 @@ interface ChatPanelProps {
   onLoadNewer: () => Promise<void>
   onReturnToLatest: () => Promise<void>
   onReadThrough: (messageId: number) => void
-  onSend: (content: string, reply?: MessageReply, attachmentIds?: string[]) => Promise<void>
+  onSend: (content: string, reply?: MessageReply, attachmentIds?: string[]) => void
   onSetReaction?: (messageId: number, emoji: string, active: boolean) => Promise<void>
   onLoadReactors?: ReactorLoader
   onForward?: (message: Message) => void
@@ -131,6 +131,9 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const pendingChannelScroll = useRef<number | null>(null)
   const previousMessageCount = useRef(0)
   const previousFocus = useRef<number | null>(null)
+  const followingRef = useRef(true)
+  const previousPendingChannel = useRef<number | null>(null)
+  const previousPendingMessages = useRef<readonly PendingMessage[]>([])
   const readFrameRef = useRef<number | null>(null)
   const onReadThroughRef = useRef(onReadThrough)
   onReadThroughRef.current = onReadThrough
@@ -257,11 +260,35 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
       return
     }
     const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 180
-    if (!virtualized && displayMessages.length > previousMessageCount.current && wasNearBottom) {
+    if (!virtualized && displayMessages.length > previousMessageCount.current && (followingRef.current || wasNearBottom)) {
       container.scrollTop = container.scrollHeight
     }
     previousMessageCount.current = displayMessages.length
   }, [channelId, focusedMessageId, focusVersion, initialViewport, loading, displayMessages, virtualized, virtualizer])
+
+  useLayoutEffect(() => {
+    const visible = pendingMessages.filter((item) => channel?.kind !== 'news' || !item.reply)
+    if (channelId === null || previousPendingChannel.current !== channelId) {
+      previousPendingChannel.current = channelId
+      previousPendingMessages.current = visible
+      followingRef.current = initialViewport?.following !== false
+      return
+    }
+    const previous = previousPendingMessages.current
+    const added = visible.some((item) => !previous.some((old) => old.id === item.id))
+    const removed = previous.some((old) => !visible.some((item) => item.id === old.id))
+    const changed = visible.some((item) => {
+      const old = previous.find((value) => value.id === item.id)
+      return old && (old.content !== item.content || old.status !== item.status || old.error !== item.error)
+    })
+    previousPendingMessages.current = visible
+    const shouldFollow = added || followingRef.current && (removed || changed)
+    const container = scrollRef.current
+    if (!container || !shouldFollow) return
+    virtualizer.cancelScroll()
+    container.scrollTop = container.scrollHeight
+    followingRef.current = true
+  }, [channel?.kind, channelId, initialViewport, pendingMessages, virtualizer])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -300,6 +327,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     const container = scrollRef.current
     if (!container) return
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    followingRef.current = distanceFromBottom < 180
     setShowReturnToLatest(distanceFromBottom > Math.max(container.clientHeight, 420))
   }
 
@@ -495,7 +523,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} membersById={membersById} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <><button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} membersById={membersById} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <>{item.error && <span role="alert">{item.error}</span>}<button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
       </div>
       {showReturnToLatest && !scheduled && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
@@ -597,8 +625,14 @@ function ChatComposer({ draftScope, channel, canCompose, reply, membersById, upl
     const draftAtSend = draft
     setSending(true); setSendError('')
     setReplyTarget(null)
-    try { const ids = await upload.prepare(); await (ids.length ? onSend(content, reference ?? undefined, ids) : reference ? onSend(content, reference) : onSend(content)); setDraft((current) => current === draftAtSend ? '' : current); upload.commit(ids) }
-    catch (error) { setDraft((current) => current || draftAtSend); setReplyTarget((current) => current ?? reference); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') }
+    try {
+      const ids = await upload.prepare()
+      if (ids.length) onSend(content, reference ?? undefined, ids)
+      else if (reference) onSend(content, reference)
+      else onSend(content)
+      setDraft((current) => current === draftAtSend ? '' : current)
+      upload.commit(ids)
+    } catch (error) { setDraft((current) => current || draftAtSend); setReplyTarget((current) => current ?? reference); setSendError(error instanceof Error ? error.message : 'Не удалось отправить') }
     finally { upload.release(); setSending(false) }
   }
 

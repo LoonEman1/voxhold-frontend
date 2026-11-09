@@ -35,9 +35,9 @@ describe('long chat histories', () => {
   })
 })
 
-it('preserves stable role mentions when retrying a rejected send', async () => {
+it('preserves stable role mentions when retrying a locally rejected send', async () => {
   const channel: Channel = { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 }
-  const onSend = vi.fn().mockRejectedValueOnce(new Error('Очередь заполнена')).mockResolvedValue(undefined)
+  const onSend = vi.fn().mockImplementationOnce(() => { throw new Error('Очередь заполнена') })
   render(<ChatPanel
     channel={channel} messages={[]} loading={false} loadingOlder={false} hasMore={false}
     loadingNewer={false} hasNewer={false} currentUserId={2} currentRole="admin" canManage={false} members={[]}
@@ -124,4 +124,118 @@ it('a custom role with manage_messages must expose moderation actions', () => {
   fireEvent.contextMenu(screen.getByText('moderation-probe'), { clientX: 100, clientY: 100 })
   expect(screen.queryByRole('menuitem', { name: 'Закрепить' })).not.toBeNull()
   expect(screen.queryByRole('menuitem', { name: 'Удалить' })).not.toBeNull()
+})
+
+
+it('accepts consecutive sends without waiting for network acknowledgement', async () => {
+  let settle!: () => void
+  const acknowledgement = new Promise<void>((resolve) => { settle = resolve })
+  const onSend = vi.fn((..._args: [string, ...unknown[]]) => acknowledgement)
+  const channel: Channel = { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 }
+  render(<ChatPanel
+    channel={channel} messages={[]} loading={false} loadingOlder={false} hasMore={false}
+    loadingNewer={false} hasNewer={false} currentUserId={2} canManage={false} members={[]}
+    pinnedMessageIds={new Set()} focusedMessageId={null} channelReads={{}}
+    onLoadOlder={vi.fn(async () => undefined)} onLoadNewer={vi.fn(async () => undefined)}
+    onReturnToLatest={vi.fn(async () => undefined)} onReadThrough={vi.fn()}
+    onSend={onSend} onEdit={vi.fn(async () => undefined)} onDelete={vi.fn(async () => undefined)}
+    onTogglePin={vi.fn(async () => undefined)} onOpenProfile={vi.fn()}
+  />)
+  const input = screen.getByLabelText('Сообщение в general')
+  fireEvent.change(input, { target: { value: 'first' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+  await waitFor(() => {
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect((input as HTMLTextAreaElement).value).toBe('')
+  })
+  fireEvent.change(input, { target: { value: 'second' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+  await waitFor(() => {
+    expect(onSend).toHaveBeenCalledTimes(2)
+    expect((input as HTMLTextAreaElement).value).toBe('')
+  })
+  expect(onSend.mock.calls.map(([content]) => content)).toEqual(['first', 'second'])
+  settle()
+})
+
+it('scrolls to a new pending message without pulling a reader back on retry or acknowledgement', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
+  const channel: Channel = { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 }
+  const messages: Message[] = [{ id: 1, channel_id: 1, content: 'Hello', author: { user_id: 1, username: 'Alice' }, created_at: 1, edited_at: null }]
+  const failed = { id: 'pending-1', content: 'Outgoing', status: 'failed' as const, error: 'Ошибка сети' }
+  const props = {
+    channel, messages, loading: false, loadingOlder: false, hasMore: false, loadingNewer: false, hasNewer: false,
+    currentUserId: 2, canManage: false, members: [], pinnedMessageIds: new Set<number>(), focusedMessageId: null, channelReads: {},
+    onLoadOlder: vi.fn(async () => undefined), onLoadNewer: vi.fn(async () => undefined), onReturnToLatest: vi.fn(async () => undefined),
+    onReadThrough: vi.fn(), onSend: vi.fn(), onEdit: vi.fn(async () => undefined), onDelete: vi.fn(async () => undefined),
+    onTogglePin: vi.fn(async () => undefined), onOpenProfile: vi.fn(),
+  }
+  const view = render(<ChatPanel {...props} pendingMessages={[]}/>)
+  const container = view.container.querySelector<HTMLDivElement>('.messages')!
+  Object.defineProperty(container, 'scrollHeight', { configurable: true, get: () => 1200 })
+  container.scrollTop = 200
+  fireEvent.scroll(container)
+  view.rerender(<ChatPanel {...props} pendingMessages={[failed]}/>)
+  expect(container.scrollTop).toBe(1200)
+
+  container.scrollTop = 400
+  fireEvent.scroll(container)
+  view.rerender(<ChatPanel {...props} pendingMessages={[{ ...failed, status: 'sending' }]}/>)
+  expect(container.scrollTop).toBe(400)
+  container.scrollTop = 300
+  fireEvent.scroll(container)
+  view.rerender(<ChatPanel {...props} pendingMessages={[]}/>)
+  expect(container.scrollTop).toBe(300)
+})
+
+it('keeps the bottom anchored when pending status and error change without changing ids', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
+  const channel: Channel = { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 }
+  const messages: Message[] = [{ id: 1, channel_id: 1, content: 'Hello', author: { user_id: 1, username: 'Alice' }, created_at: 1, edited_at: null }]
+  const sending = { id: 'pending-1', content: 'Outgoing', status: 'sending' as const }
+  const props = {
+    channel, messages, loading: false, loadingOlder: false, hasMore: false, loadingNewer: false, hasNewer: false,
+    currentUserId: 2, canManage: false, members: [], pinnedMessageIds: new Set<number>(), focusedMessageId: null, channelReads: {},
+    onLoadOlder: vi.fn(async () => undefined), onLoadNewer: vi.fn(async () => undefined), onReturnToLatest: vi.fn(async () => undefined),
+    onReadThrough: vi.fn(), onSend: vi.fn(), onEdit: vi.fn(async () => undefined), onDelete: vi.fn(async () => undefined),
+    onTogglePin: vi.fn(async () => undefined), onOpenProfile: vi.fn(),
+  }
+  const view = render(<ChatPanel {...props} pendingMessages={[sending]}/>)
+  const container = view.container.querySelector<HTMLDivElement>('.messages')!
+  let height = 1200
+  Object.defineProperty(container, 'scrollHeight', { configurable: true, get: () => height })
+  container.scrollTop = 600
+  fireEvent.scroll(container)
+
+  height = 1260
+  view.rerender(<ChatPanel {...props} pendingMessages={[{ ...sending, status: 'failed', error: 'Ошибка сети' }]}/>)
+  expect(container.scrollTop).toBe(1260)
+
+  container.scrollTop = 400
+  fireEvent.scroll(container)
+  view.rerender(<ChatPanel {...props} pendingMessages={[sending]}/>)
+  expect(container.scrollTop).toBe(400)
+})
+
+it('shows a failed pending error and exposes retry and dismiss actions', () => {
+  const channel: Channel = { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 }
+  const pending = { id: 'pending-1', content: 'Outgoing', status: 'failed' as const, error: 'Сеть недоступна' }
+  const onRetry = vi.fn(), onDismiss = vi.fn()
+  render(<ChatPanel
+    channel={channel} messages={[]} pendingMessages={[pending]} onRetryPending={onRetry} onDismissPending={onDismiss}
+    loading={false} loadingOlder={false} hasMore={false} loadingNewer={false} hasNewer={false}
+    currentUserId={2} canManage={false} members={[]} pinnedMessageIds={new Set()} focusedMessageId={null} channelReads={{}}
+    onLoadOlder={vi.fn(async () => undefined)} onLoadNewer={vi.fn(async () => undefined)} onReturnToLatest={vi.fn(async () => undefined)}
+    onReadThrough={vi.fn()} onSend={vi.fn()} onEdit={vi.fn(async () => undefined)} onDelete={vi.fn(async () => undefined)}
+    onTogglePin={vi.fn(async () => undefined)} onOpenProfile={vi.fn()}
+  />)
+  expect(screen.getByRole('alert').textContent).toBe('Сеть недоступна')
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
+  expect(onRetry).toHaveBeenCalledWith(pending)
+  fireEvent.click(screen.getByRole('button', { name: 'Убрать' }))
+  expect(onDismiss).toHaveBeenCalledWith('pending-1')
 })

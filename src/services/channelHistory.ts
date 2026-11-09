@@ -8,7 +8,7 @@ export const MAX_CHANNEL_MESSAGES = 1_000
 export type HistoryUpdate = { type: 'message'; channelId: number; message: Message } | { type: 'deleted'; channelId: number; id: number } | { type: 'reactions'; channelId: number; reactions: MessageReactions } | { type: 'reset'; channelId: number }
 export interface ChatViewport { messageId: number; offset: number; following: boolean }
 export interface ForwardSource { server_id: number; channel_id: number; message_id: number; content: string; created_at: number; author: Message['author']; forward?: Message['forward'] }
-export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; attachmentIds?: string[]; reply?: MessageReply; forward?: ForwardSource; threadRootId?: number }
+export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; retryable?: boolean; attachmentIds?: string[]; reply?: MessageReply; forward?: ForwardSource; threadRootId?: number }
 export interface ChannelHistoryState {
   messages: Message[]
   cursor: number | null
@@ -32,6 +32,7 @@ interface Entry {
   version: number
   viewport?: ChatViewport
   sync?: Promise<void>
+  dispatchTail: Promise<void>
   syncAgain: boolean
   contextGeneration: number
   contextRequest?: { messageId: number; controller: AbortController; promise: Promise<void> }
@@ -41,6 +42,51 @@ interface Entry {
 const initial = (): ChannelHistoryState => ({ messages: [], cursor: null, nextBeforeId: null, hasMore: false, hasNewer: false, loading: false, loadingOlder: false, loadingNewer: false, pending: [] })
 export const EMPTY_HISTORY = initial()
 
+const MAX_PENDING_MESSAGES = 20
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+const isId = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0
+const isText = (value: unknown, max: number): value is string => typeof value === 'string' && value.length <= max
+const isAuthor = (value: unknown) => isRecord(value) && isId(value.user_id) && isText(value.username, 256)
+const isReply = (value: unknown): value is MessageReply => isRecord(value) && isId(value.message_id) && isAuthor(value.author) && isText(value.content, 5120) && typeof value.revision === 'number' && Number.isFinite(value.revision) && typeof value.deleted === 'boolean'
+const isForwardAttribution = (value: unknown) => isRecord(value) && isAuthor(value.author) && typeof value.created_at === 'number' && Number.isFinite(value.created_at) && (value.mention_names === undefined || isRecord(value.mention_names) && Object.values(value.mention_names).every((name) => isText(name, 256)))
+const isForward = (value: unknown): value is ForwardSource => isRecord(value) && isId(value.server_id) && isId(value.channel_id) && isId(value.message_id) && isText(value.content, 5120) && typeof value.created_at === 'number' && Number.isFinite(value.created_at) && isAuthor(value.author) && (value.forward === undefined || isForwardAttribution(value.forward))
+interface StoredOutboxItem { serverId: number; channelId: number; pending: PendingMessage }
+function restoreOutboxItem(value: unknown): StoredOutboxItem | undefined {
+  if (!isRecord(value) || !isId(value.serverId) || !isId(value.channelId) || !isRecord(value.pending)) return
+  const item = value.pending
+  if (!isText(item.id, 128) || !item.id || !isText(item.content, 5120) || (item.status !== 'sending' && item.status !== 'failed') || (item.error !== undefined && !isText(item.error, 2000)) || (item.retryable !== undefined && typeof item.retryable !== 'boolean')) return
+  if (item.reply !== undefined && !isReply(item.reply) || item.forward !== undefined && !isForward(item.forward) || item.threadRootId !== undefined && !isId(item.threadRootId)) return
+  if (item.attachmentIds !== undefined && (!Array.isArray(item.attachmentIds) || item.attachmentIds.length > 10 || !item.attachmentIds.every((id) => isText(id, 128) && !!id))) return
+  const sending = item.status === 'sending'
+  return { serverId: value.serverId, channelId: value.channelId, pending: {
+    id: item.id, content: item.content, status: 'failed',
+    error: sending ? 'Отправка прервана перезапуском' : item.error as string | undefined,
+    retryable: item.retryable !== false,
+    ...(item.attachmentIds ? { attachmentIds: [...item.attachmentIds] as string[] } : {}),
+    ...(item.reply ? { reply: item.reply } : {}), ...(item.forward ? { forward: item.forward } : {}), ...(item.threadRootId ? { threadRootId: item.threadRootId } : {}),
+  } }
+}
+function readOutbox(key: string): StoredOutboxItem[] {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw || raw.length > 500_000) return []
+    const saved: unknown = JSON.parse(raw)
+    if (!isRecord(saved) || saved.version !== 1 || !Array.isArray(saved.items)) return []
+    const result: StoredOutboxItem[] = [], ids = new Set<string>()
+    for (const value of saved.items) {
+      const item = restoreOutboxItem(value)
+      if (!item || ids.has(`${item.channelId}:${item.pending.id}`)) continue
+      ids.add(`${item.channelId}:${item.pending.id}`); result.push(item)
+      if (result.length === MAX_PENDING_MESSAGES) break
+    }
+    return result
+  } catch { return [] }
+}
+function retryableSendError(error: unknown) {
+  const status = isRecord(error) && typeof error.status === 'number' ? error.status : 0
+  return status === 0 || status >= 500 || status === 408 || status === 425 || status === 429
+}
+
 /** A per-login, bounded cache. Requests always retain their original channel. */
 export class ChannelHistoryStore {
   private observers = new Set<(event: HistoryUpdate) => void>()
@@ -49,7 +95,25 @@ export class ChannelHistoryStore {
   private entries = new Map<number, Entry>()
   private closed = false
   private mounts = 0
-  constructor(private api: VoxholdApi, private token: string, private userId = 0) {}
+  private readonly storageKey?: string
+  constructor(private api: VoxholdApi, private token: string, private userId = 0) {
+    const scope = api.storageScope
+    if (!scope || userId <= 0) return
+    this.storageKey = `voxhold.outbox.v1:${scope}:${userId}`
+    for (const item of readOutbox(this.storageKey)) {
+      const entry = this.entry(item.serverId, item.channelId)
+      if (entry.serverId !== item.serverId) continue
+      entry.state = { ...entry.state, pending: [...entry.state.pending, item.pending] }
+    }
+  }
+  private persistOutbox() {
+    if (!this.storageKey) return
+    try {
+      const items = [...this.entries].flatMap(([channelId, entry]) => entry.state.pending.map((pending): StoredOutboxItem => ({ serverId: entry.serverId, channelId, pending })))
+      if (items.length) localStorage.setItem(this.storageKey, JSON.stringify({ version: 1, items }))
+      else localStorage.removeItem(this.storageKey)
+    } catch { /* The in-memory outbox remains authoritative when storage is unavailable. */ }
+  }
   retain() {
     this.mounts++
     return () => { this.mounts--; queueMicrotask(() => { if (this.mounts === 0) this.close() }) }
@@ -58,7 +122,7 @@ export class ChannelHistoryStore {
   entry(serverId: number, channelId: number): Entry {
     let entry = this.entries.get(channelId)
     if (!entry) {
-      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), reactionSnapshots: new Map(), live: new Map(), version: 0, syncAgain: false, contextGeneration: 0, forceSnapshot: false }
+      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), reactionSnapshots: new Map(), live: new Map(), version: 0, dispatchTail: Promise.resolve(), syncAgain: false, contextGeneration: 0, forceSnapshot: false }
       this.entries.set(channelId, entry)
     }
     return entry
@@ -74,7 +138,9 @@ export class ChannelHistoryStore {
   update(channelId: number, patch: Partial<ChannelHistoryState>, deferNotification = false) {
     const entry = this.entries.get(channelId)
     if (!entry || this.closed || entry.controller.signal.aborted) return
+    const pendingChanged = patch.pending !== undefined && patch.pending !== entry.state.pending
     entry.state = { ...entry.state, ...patch }
+    if (pendingChanged) this.persistOutbox()
     if (deferNotification) {
       if (entry.notificationTimer === undefined) entry.notificationTimer = setTimeout(() => {
         entry.notificationTimer = undefined
@@ -233,8 +299,10 @@ export class ChannelHistoryStore {
       return (!entry.state.hasNewer && !preserveWindow && message.id >= first) || (message.id >= first && message.id <= last)
     })
     const { messages, truncated } = this.merge(entry, incoming, reset)
+    const acknowledged = new Set(page.messages.flatMap((message) => message.client_message_id && message.author.user_id === this.userId ? [message.client_message_id] : []))
+    const pending = acknowledged.size ? entry.state.pending.filter((item) => !acknowledged.has(item.id)) : entry.state.pending
     this.update(channelId, {
-      messages, cursor: page.cursor,
+      messages, pending, cursor: page.cursor,
       ...(reset ? { hasMore: page.has_older, hasNewer: false, nextBeforeId: page.has_older ? messages[0]?.id ?? null : null } : {}),
       ...(truncated ? { hasMore: true, nextBeforeId: messages[0]!.id } : {}),
       ...(preserveWindow && page.messages.some((message) => message.id > (messages.at(-1)?.id ?? 0)) ? { hasNewer: true } : {}),
@@ -308,32 +376,60 @@ export class ChannelHistoryStore {
     this.update(channelId, { cursor: null, hasNewer: false })
     await this.sync(serverId, channelId)
   }
-  async send(serverId: number, channelId: number, content: string, retryId?: string, reply?: MessageReply, forward?: ForwardSource, newId?: string, threadRootId?: number, attachmentIds?: string[]) {
+  send(serverId: number, channelId: number, content: string, retryId?: string, reply?: MessageReply, forward?: ForwardSource, newId?: string, threadRootId?: number, attachmentIds?: string[]): Promise<Message | void> {
     const entry = this.entry(serverId, channelId)
-    if (!retryId && [...this.entries.values()].reduce((count, value) => count + value.state.pending.length, 0) >= 20) throw new Error('Сначала повторите или удалите неотправленные сообщения')
+    if (!retryId && [...this.entries.values()].reduce((count, value) => count + value.state.pending.length, 0) >= MAX_PENDING_MESSAGES) throw new Error('Сначала повторите или удалите неотправленные сообщения')
     const id = retryId ?? newId ?? crypto.randomUUID()
     const pending = entry.state.pending.find((item) => item.id === id)
-    if (retryId && (!pending || pending.status === 'sending')) return
+    if (retryId && (!pending || pending.status === 'sending')) return Promise.resolve()
     const reference = pending?.reply ?? reply
     const forwarded = pending?.forward ?? forward
     const thread = pending?.threadRootId ?? threadRootId
     const attachments = pending?.attachmentIds ?? attachmentIds
-    this.update(channelId, { pending: [...entry.state.pending.filter((item) => item.id !== id), { id, content, status: 'sending', ...(attachments?.length ? { attachmentIds: [...attachments] } : {}), ...(thread ? { threadRootId: thread } : {}), ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }] })
-    const timeout = new AbortController()
-    const abort = () => timeout.abort()
-    entry.controller.signal.addEventListener('abort', abort, { once: true })
-    const timer = setTimeout(abort, 15_000)
-    try {
-      const message = await (forwarded ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, timeout.signal) : reference ? this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, reference.message_id, thread, attachments) : this.api.messages.create(this.token, serverId, channelId, content, id, timeout.signal, undefined, thread, attachments))
+    const text = pending?.content ?? content
+    const next: PendingMessage = { id, content: text, status: 'sending', ...(attachments?.length ? { attachmentIds: [...attachments] } : {}), ...(thread ? { threadRootId: thread } : {}), ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }
+    this.update(channelId, { pending: pending ? entry.state.pending.map((item) => item.id === id ? next : item) : [...entry.state.pending, next] })
+    const previous = entry.dispatchTail
+    let cancelWait!: () => void
+    const cancelled = new Promise<void>((resolve) => { cancelWait = resolve })
+    entry.controller.signal.addEventListener('abort', cancelWait, { once: true })
+    const request = (async () => {
+      await Promise.race([previous, cancelled])
+      entry.controller.signal.removeEventListener('abort', cancelWait)
       if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
-      this.receive({ ...message, client_message_id: id })
-      this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id) })
-      return message
-    } catch (error) {
-      // A WS acknowledgement may have arrived while the HTTP reply was lost.
-      if (!entry.state.pending.some((item) => item.id === id)) return
-      this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? { ...item, status: 'failed', error: error instanceof Error ? humanError(error) : 'Ошибка сети' } : item) })
-    } finally { clearTimeout(timer); entry.controller.signal.removeEventListener('abort', abort); this.trim() }
+      const timeout = new AbortController()
+      const abort = () => timeout.abort()
+      entry.controller.signal.addEventListener('abort', abort, { once: true })
+      const timer = setTimeout(abort, 15_000)
+      try {
+        const message = await (forwarded ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, timeout.signal) : reference ? this.api.messages.create(this.token, serverId, channelId, text, id, timeout.signal, reference.message_id, thread, attachments) : this.api.messages.create(this.token, serverId, channelId, text, id, timeout.signal, undefined, thread, attachments))
+        if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
+        this.receive({ ...message, client_message_id: id })
+        this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id) })
+        return message
+      } catch (error) {
+        // A WS acknowledgement may have arrived while the HTTP reply was lost.
+        if (!entry.state.pending.some((item) => item.id === id)) return
+        this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? { ...item, status: 'failed', error: error instanceof Error ? humanError(error) : 'Ошибка сети', retryable: retryableSendError(error) } : item) })
+      } finally { clearTimeout(timer); entry.controller.signal.removeEventListener('abort', abort); this.trim() }
+    })()
+    entry.dispatchTail = request.then(() => undefined, () => undefined)
+    return request
+  }
+  async retryFailed() {
+    const retryReady = () => {
+      const retries: Array<Promise<Message | void>> = []
+      for (const [channelId, entry] of this.entries) for (const item of entry.state.pending) {
+        if (item.status === 'failed' && item.retryable !== false) retries.push(this.send(entry.serverId, channelId, item.content, item.id))
+      }
+      return retries
+    }
+    const retries = retryReady()
+    if (!retries.length) {
+      await Promise.all([...this.entries.values()].map((entry) => entry.dispatchTail))
+      retries.push(...retryReady())
+    }
+    await Promise.all(retries)
   }
   async forward(serverId: number, channelId: number, source: ForwardSource, key: string): Promise<Message> {
     const entry = this.entry(serverId, channelId)
