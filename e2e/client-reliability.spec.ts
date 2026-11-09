@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 declare global {
-  interface Window { reliabilityFixture: { mutateOffline(): void; resync(): void; sentCount(): number; requests: string[] } }
+  interface Window { reliabilityFixture: { mutateOffline(): void; resync(): void; sentCount(): number; requests: string[]; setOffline(value: boolean): void; holdSends(): void; releaseSends(): void } }
 }
 test.beforeEach(async ({ page }) => { await page.route('**/api/v1/diagnostics/client-events', (route) => route.fulfill({ status: 204 })) })
 async function anchor(page: Page) {
@@ -52,6 +52,39 @@ test('workspace retries a lost send response with one saved message', async ({ p
   await expect(page.locator('.message-pending')).toHaveCount(0)
   await expect(page.locator('[data-message-id="501"]')).toContainText('Повтор без дубля')
   expect(await page.evaluate(() => window.reliabilityFixture.sentCount())).toBe(1)
+})
+
+test('workspace persists an outbox, follows rapid sends and retries after reconnect', async ({ page }) => {
+  await page.goto('/e2e/fixtures/reliability.html')
+  await expect(page.locator('[data-message-id="500"]')).toBeVisible()
+  const composer = page.getByLabel('Сообщение в канал-1')
+  await page.evaluate(() => window.reliabilityFixture.holdSends())
+  for (const content of ['Первое', 'Второе', 'Третье']) {
+    await composer.fill(content)
+    await composer.press('Enter')
+    await expect(composer).toHaveValue('')
+  }
+  await expect(page.locator('.message-pending--sending p')).toHaveText(['Первое', 'Второе', 'Третье'])
+  await expect.poll(async () => page.locator('.messages').evaluate((root) => root.scrollHeight - root.scrollTop - root.clientHeight)).toBeLessThan(2)
+  expect(await page.evaluate(() => window.reliabilityFixture.requests.filter((path) => path.startsWith('POST ') && path.endsWith('/messages')).length)).toBe(1)
+  await page.evaluate(() => { window.reliabilityFixture.setOffline(true); window.reliabilityFixture.releaseSends() })
+  await expect(page.locator('.message-pending--failed')).toHaveCount(3)
+  await page.reload()
+  await expect(page.locator('[data-message-id="500"]')).toBeVisible()
+  await expect(page.locator('.message-pending--failed p')).toHaveText(['Первое', 'Второе', 'Третье'])
+  await expect.poll(async () => page.locator('.messages').evaluate((root) => root.scrollHeight - root.scrollTop - root.clientHeight)).toBeLessThan(2)
+  await page.locator('.message-pending').last().getByRole('button', { name: 'Убрать', exact: true }).click()
+  await expect(page.locator('.message-pending')).toHaveCount(2)
+  await page.reload()
+  await expect(page.locator('.message-pending--failed p')).toHaveText(['Первое', 'Второе'])
+  await page.evaluate(() => { window.reliabilityFixture.setOffline(false); window.reliabilityFixture.holdSends(); window.dispatchEvent(new Event('online')) })
+  await expect(page.locator('.message-pending--sending')).toHaveCount(2)
+  await page.evaluate(() => window.reliabilityFixture.releaseSends())
+  await expect(page.locator('.message-pending')).toHaveCount(0)
+  await expect(page.locator('[data-message-id="501"]')).toContainText('Первое')
+  await expect(page.locator('[data-message-id="502"]')).toContainText('Второе')
+  await expect(page.locator('[data-message-id="503"]')).toHaveCount(0)
+  await expect.poll(async () => page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith('voxhold.outbox.v1:')))).toBe(false)
 })
 
 test('rapid reply clicks keep mounted history and reuse a cached target', async ({ page }) => {

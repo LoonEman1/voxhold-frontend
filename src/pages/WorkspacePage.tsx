@@ -14,7 +14,6 @@ import { useCallRecordings } from '../hooks/useCallRecordings'
 import { Avatar } from '../components/Avatar'
 import { MembersSidebar } from '../components/MembersSidebar'
 import { Brand } from '../components/Brand'
-import { ChatPanel } from '../components/ChatPanel'
 import { SettingsDialog, VoiceSettingsDialog } from '../components/LazyWorkspaceDialogs'
 import type { SettingsTab } from '../components/SettingsDialog'
 import { WorkspaceDialogBoundary } from '../components/WorkspaceDialogBoundary'
@@ -75,6 +74,8 @@ import { createWebRTCConfigService } from '../services/webrtcConfig'
 import { isEditableKeyboardTarget, loadUserVolumes, loadVoicePreferences, saveUserVolumes, saveVoicePreferences, shortcutMatches, type VoicePreferences } from '../services/voiceSettings'
 import { clientDiagnostics } from '../platform/clientDiagnostics'
 
+const LazyChatPanel = lazy(() => import('../components/ChatPanel').then((module) => ({ default: module.ChatPanel })))
+function ChatPanel(props: ComponentProps<typeof LazyChatPanel>) { return <Suspense fallback={<section className="chat-panel"><p role="status">Загружаем сообщения…</p></section>}><LazyChatPanel {...props}/></Suspense> }
 const LazyStreamPlayer = lazy(() => import('../components/PersistentStreamPlayer').then((module) => ({ default: module.PersistentStreamPlayer })))
 function PersistentStreamPlayer(props: ComponentProps<typeof StreamPlayer>) { return <Suspense fallback={null}><LazyStreamPlayer {...props}/></Suspense> }
 const ForwardMessageDialog = lazy(() => import('../components/ForwardMessageDialog').then((module) => ({ default: module.ForwardMessageDialog })))
@@ -1420,6 +1421,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     else realtimeRef.current?.unsubscribe()
   }, [selectedServerId, selectedChannelId, chatVisible])
 
+  useEffect(() => {
+    const retry = () => { void historyStore.retryFailed().catch(() => undefined) }
+    if (connection === 'online') retry()
+    window.addEventListener('online', retry)
+    return () => window.removeEventListener('online', retry)
+  }, [connection, historyStore])
+
   // Tell other members that we are typing: at most once every 3 seconds.
   useEffect(() => {
     if (!selectedServerId || !selectedChannelId || !chatVisible) return
@@ -2042,6 +2050,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         },
         onInputError: (error) => { if (voiceMediaRef.current === media) { setMicUnavailable(true); setVoiceError(voiceErrorMessage(error)) } },
         onError: () => undefined,
+        onInputLevel: (level) => {
+          voiceInputLevelRef.current = level
+          recomputeSpeakingUsers()
+        },
         onRemoteLevels: applyRemoteLevels,
         onPlaybackBlocked: () => setVoicePlaybackBlocked(true),
         e2ee: e2ee ? { media: e2ee.media, onReceiverOwners: (owners) => e2ee.setReceiverOwners(owners) } : undefined,
@@ -2059,7 +2071,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       coordinator.fail('voice rejoin failed')
       finishFailedRecovery('Не удалось восстановить голосовой канал после обрыва. Подключитесь заново')
     }
-  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels, trackVoiceRequest, prepareVoiceE2EE])
+  }, [finishFailedRecovery, ensureWebRTCConfig, applyRemoteLevels, recomputeSpeakingUsers, trackVoiceRequest, prepareVoiceE2EE])
 
   /**
    * Unexpected WebSocket loss: close peers only, keep the microphone and the
@@ -2598,10 +2610,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     await historyStore.forward(serverId, channel.id, { server_id: source.serverId, channel_id: source.message.channel_id, message_id: source.message.id, author: source.message.author, content: source.message.content, created_at: source.message.created_at, forward: source.message.forward }, key)
     if (workspaceActive.current && activeToken.current === credentials) notify(`Сообщение переслано в «${channel.name}»`, 'success')
   }
-  const sendMessage = async (content: string, reply?: MessageReply, attachmentIds?: string[]) => {
-    if (!token || !selectedServerId || !selectedChannelId) return
-    const created = await historyStore.send(selectedServerId, selectedChannelId, content, undefined, reply, undefined, undefined, undefined, attachmentIds)
-    if (created) recordLastMessage(created.channel_id, created.id)
+  const sendMessage = (content: string, reply?: MessageReply, attachmentIds?: string[]) => {
+    if (!token || !selectedServerId || !selectedChannelId) throw new Error('Канал не выбран')
+    const request = historyStore.send(selectedServerId, selectedChannelId, content, undefined, reply, undefined, undefined, undefined, attachmentIds)
+    void request.then((created) => { if (created) recordLastMessage(created.channel_id, created.id) }).catch(() => undefined)
   }
 
   const editMessage = async (messageId: number, content: string) => {
@@ -2701,7 +2713,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   return (
     <CommunityProvider onOpenProfile={(id, _name, role) => void openUserProfile(id, role)} onViewChange={(active) => { personalOpenRef.current = active; setPersonalOpen(active); setMobileNav(false); setMessagePanel(null) }} api={api} token={token ?? ''} userId={user?.id ?? 0} serverId={selectedServerId} owner={selectedServer?.role === 'owner'} members={members} onMessage={(message) => historyStore.receive(message)} onNavigate={(item) => { setSelectedServerId(item.server_id); setSelectedChannelId(item.channel_id); setMessageTarget({ channelId: item.channel_id, messageId: item.message_id }); setFocusedMessageId(item.message_id); setMessagePanel(null); setMobileNav(false) }}><MediaActivityProvider value={mediaActivity}><AvatarProvider api={api} token={token ?? ''} userId={user?.id ?? 0} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => { if (!preferNativeContextMenu(event)) event.preventDefault() }} onPointerDownCapture={(event) => { memberAnchor.current = { x: event.clientX, y: event.clientY } }}>
       <CommunityNavigation onOpenSettings={() => openSettings(settingsTab)} account={<WorkspaceAccountMenu userId={user?.id} username={user?.username ?? 'V'} online={connection === 'online'} onSettings={() => openSettings(settingsTab)} onLogout={() => setDialog('logout')} voice={voiceSession ? { name: voiceSession.channelName, muted: voiceSession.selfMute, deafened: voiceSession.selfDeaf, onOpen: openActiveVoiceChannel, onMute: toggleSelfMute, onDeafen: toggleSelfDeaf, onLeave: leaveVoiceChannel } : undefined}/>}/>
-      <aside className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
+      <aside id="workspace-channel-sidebar" className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
           <CommunitySidebar><header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div><button className="icon-button" onClick={openServerSettings} aria-label="Настройки сервера"><Icon name="settings"/></button></header>
           <div className="channel-scroll">
@@ -2724,8 +2736,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       <WorkspaceContentBoundary resetKey={`${selectedServerId}:${selectedChannelId}:${personalOpen}`}><CommunityContent onMenu={() => setMobileNav((value) => !value)}><section className="content-shell">
         {!selectedServer && instance?.initialized && <div className="instance-access-empty"><div className="welcome-art"><span>V</span><i/><i/><i/></div><span className="eyebrow">ДОСТУП ОГРАНИЧЕН</span><h1>Нужно приглашение</h1><p>Ваш аккаунт пока не имеет доступа к этому инстансу. Обратитесь к администратору за ссылкой-приглашением.</p></div>}
         <header className="content-header">
-          <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'news' ? 'news' : selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'news' ? 'Новости и объявления' : selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
+          <div className="content-header__title"><button className="icon-button mobile-menu" onClick={() => setMobileNav((value) => !value)} aria-label="Меню" aria-expanded={mobileNav} aria-controls="workspace-channel-sidebar"><Icon name="menu"/></button>{selectedChannel ? <><Icon name={selectedChannel.kind === 'news' ? 'news' : selectedChannel.kind === 'text' ? 'hash' : 'volume'}/><h1>{selectedChannel.name}</h1><span className="header-divider"/><p>{selectedChannel.kind === 'news' ? 'Новости и объявления' : selectedChannel.kind === 'text' ? 'Всё важное — здесь' : 'Голосовая комната'}</p></> : <h1>{selectedServer?.name ?? 'Voxhold'}</h1>}</div>
           <div className="content-header__actions">
+            {selectedChannel?.kind === 'voice' && <button className={`header-action ${voiceChatOpen ? 'is-active' : ''}`} onClick={() => { setVoiceChatOpen((value) => !value); if (voiceChatOpen && messagePanel === 'pins') setMessagePanel(null) }} aria-label="Чат канала" aria-pressed={voiceChatOpen} title="Чат канала"><Icon name="chat"/><span>Чат</span></button>}
             {selectedServer && <button className={`header-action ${messagePanel === 'search' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'search' ? null : 'search')} aria-label="Поиск" title="Поиск по серверу"><Icon name="search"/><span>Поиск</span></button>}
             {selectedServer && <button className="header-action" onMouseEnter={() => { void loadRecordingsDialog().catch(() => undefined) }} onFocus={() => { void loadRecordingsDialog().catch(() => undefined) }} onClick={() => { recordingSyncRef.current(); setRecordingsOpen(true) }} title="Список записей" aria-label="Список записей"><Icon name="inbox"/><span>Записи</span></button>}
             {chatVisible && selectedChannel?.kind !== 'voice' && <button className={`header-action header-action--pins ${messagePanel === 'pins' ? 'is-active' : ''}`} onClick={() => setMessagePanel((current) => current === 'pins' ? null : 'pins')} aria-label="Закрепы" title="Закреплённые сообщения"><Icon name="pin"/><span>Закрепы</span>{pinnedMessages.length > 0 && <b>{pinnedMessages.length}</b>}</button>}
