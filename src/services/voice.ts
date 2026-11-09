@@ -470,7 +470,7 @@ export class BrowserVoiceSession {
         for (const value of entry.values) energy += ((value - 128) / 128) ** 2
         level = Math.min(1, Math.sqrt(energy / entry.values.length) * 4.5)
       }
-      levels.push({ connectionId, level: this.selfDeaf || output.track.muted || output.track.readyState === 'ended' ? 0 : level ?? 0 })
+      levels.push({ connectionId, level: output.track.muted || output.track.readyState === 'ended' ? 0 : level ?? 0 })
     })
     this.options.onRemoteLevels?.(levels)
   }

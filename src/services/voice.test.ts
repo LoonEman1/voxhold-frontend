@@ -252,6 +252,11 @@ describe('BrowserVoiceSession', () => {
       expect(output.volume).toBe(1)
       await vi.advanceTimersByTimeAsync(200)
       expect(levels).toHaveBeenLastCalledWith([{ connectionId: 'bob', level: .45 }])
+      session.setState(false, true)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([{ connectionId: 'bob', level: .45 }])
+      expect(output.muted).toBe(true)
+      session.setState(false, false)
       level = 0
       await vi.advanceTimersByTimeAsync(200)
       expect(levels).toHaveBeenLastCalledWith([{ connectionId: 'bob', level: 0 }])
