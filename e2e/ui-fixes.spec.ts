@@ -251,7 +251,7 @@ test('call tiles, registration links and docked pins work in the real workspace'
   expect(Math.abs(tile.width - tile.height)).toBeLessThan(2)
   expect(tile.width).toBeLessThanOrEqual(300)
   expect((await page.locator('.voice-participant .avatar').boundingBox())!.width).toBeGreaterThanOrEqual(80)
-  await expect(page.locator('.content-header').getByRole('button', { name: 'Чат канала' })).toHaveCount(0)
+  await expect(page.locator('.content-header').getByRole('button', { name: 'Чат канала', exact: true })).toBeVisible()
   await expect(page.locator('.content-header').getByRole('button', { name: 'Приглашения', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Пригласить', exact: true }).click()
   await expect(page.getByRole('button', { name: 'По имени' })).toHaveCount(0)
