@@ -10,16 +10,28 @@ class Stream {
 }
 class Context {
   static instances: Context[] = []
-  state = 'running'; currentTime = 0
+  static initialState = 'running'
+  state = Context.initialState; currentTime = 0
+  onstatechange: (() => void) | null = null
   nodes: { gain: { setTargetAtTime: ReturnType<typeof vi.fn> }; disconnect: ReturnType<typeof vi.fn> }[] = []
   constructor() { Context.instances.push(this) }
   createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }))
   createGain = vi.fn(() => { const node = { gain: { setTargetAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() }; this.nodes.push(node); return node })
   createMediaStreamDestination = vi.fn(() => ({ stream: new Stream() }))
-  resume = vi.fn(async () => { this.state = 'running' })
+  setState(state: string) { this.state = state; this.onstatechange?.() }
+  resume = vi.fn(async () => {
+    if (Context.initialState === 'suspended') await new Promise<void>(() => {})
+    this.setState('running')
+  })
   close = vi.fn(async () => undefined)
 }
-beforeEach(() => { Context.instances = []; vi.stubGlobal('AudioContext', Context); vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined) })
+beforeEach(() => {
+  Context.instances = []
+  Context.initialState = 'running'
+  vi.stubGlobal('AudioContext', Context)
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+})
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 it('uses native volume up to 100%, then applies real gain and keeps one context for all participants', () => {
@@ -29,6 +41,9 @@ it('uses native volume up to 100%, then applies real gain and keeps one context 
   mixer.setVolume(first, input, .5)
   expect(first.volume).toBe(.5); expect(first.srcObject).toBe(input); expect(Context.instances).toHaveLength(0)
   mixer.setVolume(first, input, 2)
+  const backingAudio = vi.mocked(HTMLMediaElement.prototype.play).mock.contexts[0] as HTMLAudioElement
+  expect(backingAudio.srcObject).toBe(input)
+  expect(backingAudio.muted).toBe(true)
   mixer.setVolume(second, input, 4)
   expect(Context.instances).toHaveLength(1)
   const context = Context.instances[0]!
@@ -40,6 +55,8 @@ it('uses native volume up to 100%, then applies real gain and keeps one context 
   expect(first.srcObject).toBe(output)
   expect(context.nodes[0]!.gain.setTargetAtTime).toHaveBeenLastCalledWith(.3, 0, .01)
   mixer.remove(first)
+  expect(backingAudio.srcObject).toBeNull()
+  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledOnce()
   expect(context.close).not.toHaveBeenCalled()
   expect((output as unknown as Stream).getTracks()[0]!.stop).toHaveBeenCalledOnce()
   mixer.close()
@@ -52,19 +69,52 @@ it('resumes suspended gain processing and releases the graph when a stream is re
   const first = new Stream() as unknown as MediaStream, next = new Stream() as unknown as MediaStream
   mixer.setVolume(audio, first, 2)
   const context = Context.instances[0]!
-  context.state = 'suspended'; context.resume.mockRejectedValueOnce(new Error('Blocked'))
+  context.setState('suspended'); context.resume.mockRejectedValueOnce(new Error('Blocked'))
   mixer.resume(); await Promise.resolve(); await Promise.resolve()
-  expect(blocked).toHaveBeenCalledOnce()
+  expect(audio.srcObject).toBe(first)
+  expect(blocked).not.toHaveBeenCalled()
   mixer.resume(); await Promise.resolve()
   expect(context.state).toBe('running')
+  expect(audio.srcObject).not.toBe(first)
   mixer.setVolume(audio, next, .7)
   expect(context.close).toHaveBeenCalledOnce(); expect(audio.srcObject).toBe(next); expect(audio.volume).toBe(.7)
   mixer.close()
 })
 
+it('keeps incoming tracks audible while the shared context cannot start', () => {
+  Context.initialState = 'suspended'
+  const mixer = new AudioPlaybackMixer()
+  const first = document.createElement('audio'), second = document.createElement('audio')
+  const firstInput = new Stream() as unknown as MediaStream, secondInput = new Stream() as unknown as MediaStream
+  mixer.setVolume(first, firstInput, 2)
+  mixer.setVolume(second, secondInput, 1.5)
+  expect(first.srcObject).toBe(firstInput)
+  expect(second.srcObject).toBe(secondInput)
+  expect(first.volume).toBe(1)
+  const context = Context.instances[0]!
+  mixer.setVolume(second, secondInput, .5)
+  context.setState('running')
+  expect(first.srcObject).not.toBe(firstInput)
+  expect(second.srcObject).toBe(secondInput)
+  expect(second.volume).toBe(.5)
+  mixer.close()
+})
+
+it('restores the incoming track when the processed stream fails to play', async () => {
+  vi.mocked(HTMLMediaElement.prototype.play).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Playback failed'))
+  const blocked = vi.fn(), mixer = new AudioPlaybackMixer(blocked), audio = document.createElement('audio')
+  const input = new Stream() as unknown as MediaStream
+  mixer.setVolume(audio, input, 2)
+  await Promise.resolve()
+  expect(audio.srcObject).toBe(input)
+  expect(audio.volume).toBe(1)
+  expect(blocked).not.toHaveBeenCalled()
+  expect(Context.instances[0]!.close).toHaveBeenCalledOnce()
+})
+
 it('ignores playback failures from a removed output', async () => {
   let reject!: (reason: Error) => void
-  vi.mocked(HTMLMediaElement.prototype.play).mockReturnValueOnce(new Promise<void>((_resolve, fail) => { reject = fail }))
+  vi.mocked(HTMLMediaElement.prototype.play).mockResolvedValueOnce(undefined).mockReturnValueOnce(new Promise<void>((_resolve, fail) => { reject = fail }))
   const blocked = vi.fn(), mixer = new AudioPlaybackMixer(blocked), audio = document.createElement('audio')
   mixer.setVolume(audio, new Stream() as unknown as MediaStream, 2)
   mixer.close()
