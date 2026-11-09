@@ -39,15 +39,14 @@ export function MessageLinkPreviews({ content }: { content: string }) {
     setPreviews([])
     if (!visible || !api || !token || !links.length) return
     const controller = new AbortController()
-    void Promise.all(links.map((href) => attachmentDownload(controller.signal, async () => {
-      const value = await retryBusy(controller.signal, () => api.linkPreviews.get(token, href, controller.signal))
-      if (!value || typeof value.title !== 'string') return { url: href, title: new URL(href).hostname, site_name: new URL(href).hostname, unavailable: true }
-      const requested = new URL(href), returned = new URL(value.url)
-      requested.hash = ''; returned.hash = ''
-      return requested.href === returned.href ? { ...value, url: href } : null
-    }).catch(() => null))).then((values) => {
-      if (!controller.signal.aborted) setPreviews(values.filter((value): value is LinkPreview => !!value))
-    })
+    for (const href of links) {
+      void attachmentDownload(controller.signal, () => retryBusy(controller.signal, () => api.linkPreviews.get(token, href, controller.signal))).then((value) => {
+        if (controller.signal.aborted || !value || typeof value.title !== 'string') return
+        const requested = new URL(href), returned = new URL(value.url)
+        requested.hash = ''; returned.hash = ''
+        if (requested.href === returned.href) setPreviews((current) => [...current, { ...value, url: href }])
+      }).catch(() => undefined)
+    }
     return () => controller.abort()
   }, [api, token, visible, links])
   if (!links.length) return null
