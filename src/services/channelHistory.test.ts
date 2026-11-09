@@ -173,6 +173,7 @@ describe('outgoing message acknowledgement', () => {
     create.mockReturnValueOnce(response.promise)
     const sending = store.send(1, 2, 'hello')
     const id = store.snapshot(2).pending[0]!.id
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
     store.receive({ ...message(1), client_message_id: id })
     response.reject(new Error('reply lost')); await sending
     expect(store.snapshot(2).pending).toEqual([])
@@ -425,6 +426,46 @@ it('retries a failure produced while a concurrent retry pass is draining', async
   expect(store.snapshot(2).pending).toEqual([])
 })
 
+it('retries an in-flight send that fails on reconnect even when another channel already has a retry', async () => {
+  const inFlight = deferred<Message>(), otherRetry = deferred<Message>()
+  const { store, create } = setup()
+  create.mockRejectedValueOnce(new Error('offline'))
+    .mockReturnValueOnce(inFlight.promise)
+    .mockReturnValueOnce(otherRetry.promise)
+  await store.send(1, 2, 'already failed')
+  const sending = store.send(1, 3, 'still sending')
+  const key = store.snapshot(3).pending[0]!.id
+  await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+
+  const reconnect = store.retryFailed()
+  try {
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(3))
+    inFlight.reject(new Error('disconnected'))
+    await sending
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(4))
+    expect(create.mock.calls[3]?.slice(2, 5)).toEqual([3, 'still sending', key])
+    expect(store.snapshot(3).pending).toEqual([])
+  } finally {
+    otherRetry.resolve(message(10))
+    await reconnect
+  }
+})
+
+it('skips a queued request that history sync already acknowledged', async () => {
+  const inFlight = deferred<Message>()
+  const { store, create, sync } = setup()
+  create.mockReturnValueOnce(inFlight.promise)
+  const first = store.send(1, 2, 'first')
+  const queued = store.send(1, 2, 'already delivered')
+  const key = store.snapshot(2).pending[1]!.id
+  sync.mockResolvedValueOnce(page([{ ...message(8), client_message_id: key }]))
+  await store.sync(1, 2)
+  inFlight.resolve(message(9))
+  await Promise.all([first, queued])
+  expect(store.snapshot(2).pending).toEqual([])
+  expect(create).toHaveBeenCalledOnce()
+})
+
 it('cancels queued dispatch on close without a late request', async () => {
   vi.useFakeTimers()
   try {
@@ -540,6 +581,7 @@ describe('persistent optimistic outbox', () => {
     create.mockReturnValueOnce(request.promise)
     const sending = store.send(1, 2, 'acknowledge')
     const id = store.snapshot(2).pending[0]!.id
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
     sync.mockResolvedValueOnce(page([{ ...message(8), client_message_id: id }]))
     await store.sync(1, 2)
     expect(store.snapshot(2).pending).toEqual([])

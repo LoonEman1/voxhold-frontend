@@ -397,6 +397,8 @@ export class ChannelHistoryStore {
       await Promise.race([previous, cancelled])
       entry.controller.signal.removeEventListener('abort', cancelWait)
       if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
+      // History sync or a live acknowledgement can settle a queued retry.
+      if (!entry.state.pending.some((item) => item.id === id)) return
       const timeout = new AbortController()
       const abort = () => timeout.abort()
       entry.controller.signal.addEventListener('abort', abort, { once: true })
@@ -417,19 +419,14 @@ export class ChannelHistoryStore {
     return request
   }
   async retryFailed() {
-    const retryReady = () => {
-      const retries: Array<Promise<Message | void>> = []
-      for (const [channelId, entry] of this.entries) for (const item of entry.state.pending) {
-        if (item.status === 'failed' && item.retryable !== false) retries.push(this.send(entry.serverId, channelId, item.content, item.id))
-      }
-      return retries
-    }
-    const retries = retryReady()
-    if (!retries.length) {
-      await Promise.all([...this.entries.values()].map((entry) => entry.dispatchTail))
-      retries.push(...retryReady())
-    }
-    await Promise.all(retries)
+    await Promise.all([...this.entries].map(async ([channelId, entry]) => {
+      // Drain only this channel's current sends. Another channel may already
+      // be ready to retry, and an in-flight send can fail after reconnect.
+      if (entry.state.pending.some((item) => item.status === 'sending')) await entry.dispatchTail
+      if (this.closed || this.entries.get(channelId) !== entry) return
+      const failed = entry.state.pending.filter((item) => item.status === 'failed' && item.retryable !== false)
+      await Promise.all(failed.map((item) => this.send(entry.serverId, channelId, item.content, item.id)))
+    }))
   }
   async forward(serverId: number, channelId: number, source: ForwardSource, key: string): Promise<Message> {
     const entry = this.entry(serverId, channelId)
