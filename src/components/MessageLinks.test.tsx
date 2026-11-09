@@ -26,6 +26,30 @@ it('renders safe clickable links while escaping markup', () => {
   expect(link.getAttribute('rel')).toContain('noopener')
   expect(document.querySelector('script')).toBeNull()
 })
+it('renders a ready preview while another URL in the same message is still loading', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  let releaseSlow!: () => void
+  const slow = new Promise<void>((resolve) => { releaseSlow = resolve })
+  const fastUrl = 'https://fast.example/article'
+  const slowUrl = 'https://slow.example/article'
+  const api = createApi({ request: async <T,>({ path }: { path: string }) => {
+    const href = new URL(path, 'https://api.example').searchParams.get('url')
+    if (href === slowUrl) { await slow; return { status: 200, data: null as T } }
+    const data = href === fastUrl ? { url: href, title: 'Fast article', site_name: 'Publisher' }
+      : path.endsWith('/inbox') ? { items: [], has_more: false }
+        : path.endsWith('/message-privacy') ? { mode: 'shared', blocked_user_ids: [] } : []
+    return { status: 200, data: data as T }
+  } })
+  render(<CommunityProvider api={api} token="test" userId={1} serverId={1} owner members={[]} onMessage={() => undefined} onNavigate={() => undefined}>
+    <MessageLinkPreviews content={`${fastUrl} ${slowUrl}`}/>
+  </CommunityProvider>)
+  try {
+    expect((await screen.findByRole('link', { name: /Fast article/ })).getAttribute('href')).toBe(fastUrl)
+    expect(screen.getByRole('link', { name: /slow\.example/ }).getAttribute('href')).toBe(slowUrl)
+  } finally {
+    await act(async () => releaseSlow())
+  }
+})
 it('waits for visibility before downloading images and fetching universal preview cards', async () => {
   const callbacks: IntersectionObserverCallback[] = []
   vi.stubGlobal('IntersectionObserver', class {

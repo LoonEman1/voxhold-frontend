@@ -7,7 +7,7 @@ import type { ChatViewport, PendingMessage } from '../services/channelHistory'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { preferNativeContextMenu } from '../lib/contextMenu'
-import { textLinks } from '../lib/links'
+import { previewLinks } from '../lib/links'
 import { inlineMediaType } from '../lib/safeBlob'
 import { useMemberIdentity } from '../hooks/useMemberIdentity'
 import type { VoxholdApi } from '../services/api'
@@ -149,8 +149,8 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const estimateMessageSize = useCallback((index: number) => {
     const message = displayMessages[index]
     const attachments = message?.attachments?.reduce((height, item) => height + (item.deleted ? 56 : inlineMediaType(item.mime_type)?.startsWith('image/') ? (item.width && item.height && item.width > 0 && item.height > 0 ? Math.min(320, 440 * item.height / item.width) : 240) + 34 : 56), 0) ?? 0
-    const links = new Set(textLinks(message?.content ?? '').filter((link) => link.href.startsWith('https://')).map((link) => link.href)).size
-    return 52 + Math.min(240, Math.floor((message?.content.length ?? 0) / 80) * 18) + (message?.reply ? 55 : 0) + (message?.forward ? 25 : 0) + (message?.reactions?.length ? 37 : 0) + attachments + Math.min(2, links) * 90
+    const links = previewLinks(message?.content ?? '').length
+    return 52 + Math.min(240, Math.floor((message?.content.length ?? 0) / 80) * 18) + (message?.reply ? 55 : 0) + (message?.forward ? 25 : 0) + (message?.reactions?.length ? 37 : 0) + attachments + links * 156 + Math.max(0, links - 1) * 8
   }, [displayMessages])
   const getScrollElement = useCallback(() => scrollRef.current, [])
   const virtualizer = useVirtualizer({
