@@ -316,7 +316,7 @@ export function ServerSettingsDialog({
     try { await onSaveRecordingQuota(value * GIB) } catch (caught) { setError(humanError(caught)) } finally { setQuotaPending(false) }
   }
   return (
-    <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
+    <Modal open={open && owner} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
       {owner && storageApi && <nav className="server-settings-tabs" aria-label="Раздел настроек сервера">{([['general', 'settings', 'Основное'], ['roles', 'people', 'Роли и права'], ['storage', 'inbox', 'Хранилище'], ['bans', 'lock', 'Баны']] as const).map(([value, icon, label]) => <button key={value} aria-pressed={tab === value} onClick={() => setTab(value)}><Icon name={icon} size={17}/>{label}</button>)}</nav>}
       {tab === 'roles' && open && owner && storageApi && storageToken && server && <RoleManager api={storageApi} token={storageToken} serverId={server.id} members={community?.members ?? []}/>}
       {tab === 'storage' && open && owner && storageApi && storageToken && <StorageManager api={storageApi} token={storageToken}/>}

@@ -152,7 +152,7 @@ test('recording downloads a compact mixed file, preserves live tracks and keeps 
 test('call controls stop and download, defer the server copy during a call, then allow repeat downloads', async ({ page }) => {
   const pageErrors: string[] = []; page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/e2e/fixtures/calls.html')
-  await page.getByRole('button', { name: 'Чат канала', exact: true }).click()
+  await page.locator('.call-controls').getByRole('button', { name: 'Чат канала', exact: true }).click()
   await expect(page.getByText('Всё слышно. Давайте запишем встречу.')).toBeVisible()
   await page.getByRole('button', { name: 'Начать запись', exact: true }).click()
   await expect(page.getByText('Записывает Александр')).toBeVisible()

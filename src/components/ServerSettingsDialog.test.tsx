@@ -46,7 +46,7 @@ describe('ServerSettingsDialog CORS settings', () => {
     ]))
   })
 
-  it('hides CORS controls from non-owners', () => {
+  it('keeps the server settings closed for admins', () => {
     const view = render(
       <ServerSettingsDialog
         open
@@ -60,8 +60,7 @@ describe('ServerSettingsDialog CORS settings', () => {
       />,
     )
 
-    expect(view.queryByLabelText('Разрешённые origin')).toBeNull()
-    expect(view.queryByRole('button', { name: /Удалить аккаунт/ })).toBeNull()
+    expect(view.queryByRole('dialog', { name: 'Настройки сервера' })).toBeNull()
   })
 
   it('renders safely when the CORS origins payload is null', () => {
