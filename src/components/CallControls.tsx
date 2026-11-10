@@ -1,12 +1,13 @@
 import { Icon } from './Icon'
-export function CallControls({ cameraActive = false, onCamera, onCameraSettings, selfMute, selfDeaf, recording, recordBusy, canRecord, canShare, chatOpen, onMute, onDeaf, onRecord, onRecordings, onChat, onShare, onLeave, connecting = false }: {
+export function CallControls({ cameraActive = false, onCamera, onCameraSettings, selfMute, serverMute = false, selfDeaf, recording, recordBusy, canRecord, canShare, chatOpen, onMute, onDeaf, onRecord, onRecordings, onChat, onShare, onLeave, connecting = false }: {
   selfMute: boolean; selfDeaf: boolean; recording: boolean; recordBusy: boolean; canRecord: boolean; canShare: boolean; chatOpen: boolean
   cameraActive?: boolean; onCamera?: () => void; onCameraSettings?: () => void
-  connecting?: boolean
+  connecting?: boolean; serverMute?: boolean
   onMute: () => void; onDeaf: () => void; onRecord: () => void; onRecordings: () => void; onChat: () => void; onShare: () => void; onLeave: () => void
 }) {
+  const micLabel = serverMute ? 'Микрофон заглушён на сервере' : selfMute ? 'Включить микрофон' : 'Выключить микрофон'
   return <div className="call-controls" aria-label="Управление звонком">
-    <button className={selfMute ? 'is-muted' : ''} disabled={connecting} onClick={onMute} title={selfMute ? 'Включить микрофон' : 'Выключить микрофон'} aria-label={selfMute ? 'Включить микрофон' : 'Выключить микрофон'}><Icon name={selfMute ? 'micOff' : 'mic'}/><small>Микрофон</small></button>
+    <button className={selfMute || serverMute ? 'is-muted' : ''} disabled={connecting || serverMute} onClick={onMute} title={micLabel} aria-label={micLabel}><Icon name={selfMute || serverMute ? 'micOff' : 'mic'}/><small>Микрофон</small></button>
     <button className={selfDeaf ? 'is-muted' : ''} disabled={connecting} onClick={onDeaf} title={selfDeaf ? 'Включить звук' : 'Выключить звук'} aria-label={selfDeaf ? 'Включить звук' : 'Выключить звук'}><Icon name={selfDeaf ? 'headphonesOff' : 'headphones'}/><small>Звук</small></button>
     {onCamera && <button className={cameraActive ? 'is-active' : ''} disabled={connecting} onClick={onCamera} title={cameraActive ? 'Выключить камеру' : 'Включить камеру'} aria-label={cameraActive ? 'Выключить камеру' : 'Включить камеру'} aria-pressed={cameraActive}><Icon name="camera"/><small>Камера</small></button>}
     {cameraActive && onCameraSettings && <button onClick={onCameraSettings} title="Качество камеры" aria-label="Качество камеры"><Icon name="settings"/><small>Качество</small></button>}

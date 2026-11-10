@@ -399,8 +399,8 @@ describe('RealtimeClient', () => {
     client.requestE2EEKey(8, 2, 'b'.repeat(32))
     const sent = socket?.sent.slice(sentBefore).map((payload) => { const { type, data } = JSON.parse(payload); return { type, data } }) ?? []
     expect(sent).toEqual([
-      { type: 'voice.join', data: { server_id: 3, channel_id: 8, self_mute: false, self_deaf: false, e2ee_device_id: 'a'.repeat(32) } },
-      { type: 'voice.join', data: { server_id: 3, channel_id: 9, self_mute: true, self_deaf: false } },
+      { type: 'voice.join', data: { server_id: 3, channel_id: 8, self_mute: false, self_deaf: false, supports_move: true, e2ee_device_id: 'a'.repeat(32) } },
+      { type: 'voice.join', data: { server_id: 3, channel_id: 9, self_mute: true, self_deaf: false, supports_move: true } },
       { type: 'e2ee.key', data: { channel_id: 8, recipient_user_id: 2, recipient_device_id: 'b'.repeat(32), payload: 'AQID' } },
       { type: 'e2ee.key_request', data: { channel_id: 8, recipient_user_id: 2, recipient_device_id: 'b'.repeat(32) } },
     ])

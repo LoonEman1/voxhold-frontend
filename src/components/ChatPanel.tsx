@@ -4,6 +4,7 @@ import { CustomRoleBadges, useCommunity } from './Community'
 import { ComposerTools, PollCard, ScheduledHistory, saveFavorite } from './LazyCommunityFeatures'
 import { MessageAttachments, useAttachmentUpload } from './MessageAttachments'
 import type { ChatViewport, PendingMessage } from '../services/channelHistory'
+import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { preferNativeContextMenu } from '../lib/contextMenu'
@@ -106,6 +107,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const [replyTarget, setReplyTarget] = useState<MessageReply | null>(null)
   const [composerFocus, setComposerFocus] = useState(0)
   const [messageMenu, setMessageMenu] = useState<{ id: number; x: number; y: number; expanded: boolean } | null>(null)
+  const [pendingMenu, setPendingMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [reactionPending, setReactionPending] = useState<Record<number, Record<string, boolean>>>({})
   const reactionInFlight = useRef(new Set<string>())
   const closeMessageMenu = useCallback(() => setMessageMenu(null), [])
@@ -123,6 +125,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const viewportToRestore = useRef(initialViewport)
   const restoreFrame = useRef<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollContentRef = useRef<HTMLDivElement>(null)
   const topSentinelRef = useRef<HTMLDivElement>(null)
   const bottomSentinelRef = useRef<HTMLDivElement>(null)
   const autoLoadingOlderRef = useRef(false)
@@ -290,6 +293,22 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     followingRef.current = true
   }, [channel?.kind, channelId, initialViewport, pendingMessages, virtualizer])
 
+  useLayoutEffect(() => {
+    const container = scrollRef.current
+    const content = scrollContentRef.current
+    if (!container || !content || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (!followingRef.current || focusedMessageId || restoreFrame.current !== null || !container.clientHeight) return
+      // Composer resizing and measured virtual rows can both change the end
+      // after a send or acknowledgement has already scrolled there.
+      virtualizer.cancelScroll()
+      container.scrollTop = container.scrollHeight
+    })
+    observer.observe(container)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [channelId, focusedMessageId, virtualizer])
+
   useEffect(() => {
     const root = scrollRef.current
     const sentinel = topSentinelRef.current
@@ -323,11 +342,11 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     return () => observer.disconnect()
   }, [hasNewer, loading, loadingNewer, onLoadNewer])
 
-  const updateReturnVisibility = () => {
+  const updateReturnVisibility = (fromScroll = false) => {
     const container = scrollRef.current
     if (!container) return
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
-    followingRef.current = distanceFromBottom < 180
+    if (fromScroll) followingRef.current = distanceFromBottom < 180
     setShowReturnToLatest(distanceFromBottom > Math.max(container.clientHeight, 420))
   }
 
@@ -366,7 +385,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
 
   useEffect(() => {
     setDiscussion(null)
-    setReplyTarget(null); setMessageMenu(null); setReactionPending({}); reactionInFlight.current.clear()
+    setReplyTarget(null); setMessageMenu(null); setPendingMenu(null); setReactionPending({}); reactionInFlight.current.clear()
     setEditingId(null)
     setConfirmDeleteId(null)
     setActionError(null)
@@ -397,10 +416,27 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const liveReply = replyTarget ? messages.find((value) => value.id === replyTarget.message_id) : undefined
   const reply = replyTarget ? { ...replyTarget, ...(liveReply ? { author: liveReply.author, content: liveReply.content, revision: liveReply.revision ?? 0 } : {}), deleted: replyTarget.deleted || !!isMessageDeleted?.(replyTarget.message_id) } : null
   const menuMessage = messageMenu ? messages.find((value) => value.id === messageMenu.id) : undefined
+  const queuedMessage = pendingMenu ? pendingMessages.find((item) => item.id === pendingMenu.id) : undefined
+  const pendingActions: ContextMenuItem[] = []
+  if (queuedMessage && !waitingToSend(queuedMessage) && onRetryPending) pendingActions.push({
+    key: 'retry', kind: 'action', label: 'Отправить', icon: 'send', onSelect: () => onRetryPending(queuedMessage),
+  })
+  if (queuedMessage && onDismissPending) pendingActions.push({
+    key: 'delete', kind: 'action', label: 'Удалить', icon: 'trash', danger: true, onSelect: () => onDismissPending(queuedMessage.id),
+  })
+  const openPendingMenu = (event: ReactMouseEvent<HTMLElement>, item: PendingMessage) => {
+    if (event.type === 'contextmenu' && preferNativeContextMenu(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const box = event.currentTarget.getBoundingClientRect()
+    setMessageMenu(null)
+    setPendingMenu({ id: item.id, x: event.clientX || box.right, y: event.clientY || box.bottom })
+  }
   const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, message: Message, expanded = false) => {
     if (event.type === 'contextmenu' && preferNativeContextMenu(event)) return
     if ((event.target as Element).closest('textarea,input,[contenteditable="true"]')) return
     event.preventDefault(); event.stopPropagation()
+    setPendingMenu(null)
     const box = event.currentTarget.getBoundingClientRect()
     setMessageMenu({ id: message.id, x: event.clientX || box.right - 12, y: event.clientY || box.bottom + 4, expanded })
   }
@@ -504,7 +540,8 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
 
   return (
     <section className="chat-panel" onPaste={attachmentUpload.onPaste} onDrop={attachmentUpload.onDrop} onDragOver={attachmentUpload.onDragOver}>
-      <div className="messages" hidden={scheduled} ref={scrollRef} onScroll={() => { updateReturnVisibility(); scheduleReadCheck() }}>
+      <div className="messages" hidden={scheduled} ref={scrollRef} onScroll={() => { updateReturnVisibility(true); scheduleReadCheck() }}>
+        <div className="message-scroll-content" ref={scrollContentRef}>
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
         {loading && displayMessages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (
           <div className="channel-start"><span><Icon name="hash" size={30}/></span><h2>{emptyLabel ?? (channel.kind === 'news' ? `Новости «${channel.name}»` : `Начало канала #${channel.name}`)}</h2><p>{channel.kind === 'news' ? 'Здесь появятся публикации авторов канала.' : 'Первое сообщение задаёт настроение. Сделайте его хорошим.'}</p></div>
@@ -523,12 +560,29 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
         })}
         {virtualized && <div aria-hidden="true" style={{ height: Math.max(0, virtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0)) }}/>}
         </>}
-        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => <article className={`message-pending message-pending--${item.status}`} key={item.id} aria-live="polite"><div>{item.reply && <MessageQuote reference={item.reply} membersById={membersById} onOpen={onOpenMessage}/>}</div>{item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}<p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p><small>{(item.attachmentIds?.length ?? 0) > 0 && <span>Вложений: {item.attachmentIds!.length} · </span>}{item.status === 'sending' ? 'Отправляется…' : 'Не отправлено'}{item.status === 'failed' && <>{item.error && <span role="alert">{item.error}</span>}<button type="button" onClick={() => onRetryPending?.(item)}>Повторить</button><button type="button" onClick={() => onDismissPending?.(item.id)}>Убрать</button></>}</small></article>)}
+        {pendingMessages.filter((item) => channel.kind !== 'news' || !item.reply).map((item) => {
+          const waiting = waitingToSend(item)
+          const label = waiting ? 'Ожидает отправки' : 'Не отправлено'
+          return <article className="message-pending" key={item.id} onContextMenu={(event) => openPendingMenu(event, item)}>
+            <div className="message-pending__body">
+              {item.reply && <MessageQuote reference={item.reply} membersById={membersById} onOpen={onOpenMessage}/>}
+              {item.forward && <div className="message-forward"><Icon name="forward" size={14}/>Пересылаем от {item.forward.forward?.author.username ?? item.forward.author.username}</div>}
+              <p><MessageMentions content={item.content} mentions={parseMentions(item.content, directory)} currentUserId={currentUserId} currentRole={ownRole}/></p>
+              {!!item.attachmentIds?.length && <small>Вложений: {item.attachmentIds.length}</small>}
+            </div>
+            <button className={`message-pending__status ${waiting ? '' : 'is-failed'}`} type="button" aria-label={label} aria-haspopup="menu"
+              title={waiting ? label : item.error ?? label} onClick={(event) => openPendingMenu(event, item)}>
+              {waiting ? <Icon name="clock" size={15}/> : <span aria-hidden="true">!</span>}
+            </button>
+          </article>
+        })}
         <div className={`message-page-sentinel message-page-sentinel--bottom ${hasNewer ? 'is-active' : ''}`} ref={bottomSentinelRef}>{loadingNewer && <><span className="spinner"/> Загружаем следующие…</>}</div>
+        </div>
       </div>
       {showReturnToLatest && !scheduled && <button className="return-to-latest" onClick={() => void returnToLatest()} disabled={returningToLatest} title="Вернуться к актуальным сообщениям">{returningToLatest ? <span className="spinner"/> : <Icon name="chevron" size={17}/>}<span>К новым сообщениям</span></button>}
 
       {menuMessage && messageMenu && <MessageContextMenu key={`menu:${menuMessage.id}`} message={menuMessage} x={messageMenu.x} y={messageMenu.y} expanded={messageMenu.expanded} canEdit={menuMessage.author.user_id === currentUserId && !menuMessage.forward && (channel.kind !== 'news' || canCompose)} canReply={canReply} canDelete={menuMessage.author.user_id === currentUserId || canModerate} canPin={canModerate && allowPin} pinned={pinnedMessageIds.has(menuMessage.id)} pending={reactionPending[menuMessage.id] ?? {}} onClose={closeMessageMenu} onDiscuss={renderComments && !menuMessage.thread_root_id && (channel.kind === 'text' || channel.comments_enabled || (menuMessage.comment_count ?? 0) > 0) ? () => setDiscussion(menuMessage) : undefined} onReply={() => beginReply(menuMessage)} onReact={onSetReaction ? (emoji) => { void react(menuMessage, emoji) } : undefined} onEdit={() => { setEditingId(menuMessage.id); setEditDraft(menuMessage.content); setConfirmDeleteId(null); setActionError(null) }} onPin={() => { void togglePin(menuMessage.id, pinnedMessageIds.has(menuMessage.id)) }} onCopy={() => { void copyMessage(menuMessage) }} onSave={() => saveFavorite({ kind: 'channel', id: menuMessage.id })} onForward={onForward ? () => onForward(menuMessage) : undefined} onDelete={() => setConfirmDeleteId(menuMessage.id)}/>}
+      {queuedMessage && pendingMenu && !!pendingActions.length && <ContextMenu menu={{ ...pendingMenu, items: pendingActions }} onClose={() => setPendingMenu(null)}/>}
       <TypingIndicator channelId={channel.id} currentUserId={currentUserId} membersById={membersById}/>
       {scheduled && featureContext && <ScheduledHistory api={featureContext.api} token={featureContext.token} destination={{ kind: 'channel', id: channel.id }} onClose={() => setScheduled(false)}/>}
       <div className="chat-composer-slot" hidden={scheduled}><ChatComposer onScheduled={() => { setMessageMenu(null); setScheduled(true) }} canMentionRoles={ownRole === 'owner' || ownRole === 'admin'} draftScope={threadRootId} key={`composer:${channel.id}:${threadRootId ?? 0}:${currentUserId}`} channel={channel} canCompose={canCompose} reply={reply} membersById={membersById}
@@ -537,6 +591,10 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
       {discussion && !isMessageDeleted?.(discussion.id) && renderComments?.(messages.find((message) => message.id === discussion.id) ?? discussion, closeDiscussion)}
     </section>
   )
+}
+
+function waitingToSend(message: PendingMessage) {
+  return message.status === 'sending' || message.retryable === true
 }
 
 interface MessageRowContext {

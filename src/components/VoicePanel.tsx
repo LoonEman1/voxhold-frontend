@@ -111,14 +111,15 @@ export function VoicePanel({ cameras = {}, onPlaybackRecovery, channel, activeCh
           const username = member?.username ?? `Пользователь #${participant.user_id}`
           const role = member?.role ?? 'member'
           const isMe = participant.user_id === currentUserId
-          const isSpeaking = !participant.self_mute && speakingUsers.has(participant.user_id)
+          const muted = participant.self_mute || participant.server_mute
+          const isSpeaking = !muted && speakingUsers.has(participant.user_id)
           const camera = activeHere && (isMe || participant.self_video) ? cameras[participant.connection_id] : undefined
           if (camera) return <CameraTile key={participant.connection_id} media={camera} name={username} isMe={isMe} speaking={isSpeaking} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)}/>
           return <button className={`voice-participant ${isMe ? 'is-me' : ''} ${isSpeaking ? 'is-speaking' : ''}`} key={participant.connection_id} onClick={() => onOpenProfile(participant.user_id, role)} onContextMenu={(event) => onParticipantContextMenu?.(event, participant, member)}>
-            <div className="voice-participant__avatar"><Avatar userId={participant.user_id} name={username}/><i className={participant.self_mute ? 'is-muted' : ''}/></div>
+            <div className="voice-participant__avatar"><Avatar userId={participant.user_id} name={username}/><i className={muted ? 'is-muted' : ''}/></div>
             <span><b className={`member-name--${role}`}>{username}{isMe && <small>вы</small>}</b><em>{roleMeta[role].shortLabel}</em></span>
             {availableStreams.some((item) => item.publisher_user_id === participant.user_id) && <b className="voice-participant__live" title="Показывает экран"><Icon name="monitor" size={11}/>В эфире</b>}
-            <div className="voice-participant__state">{participant.self_deaf && <span title="Звук выключен"><Icon name="headphonesOff" size={14}/></span>}{participant.self_mute && <span title="Микрофон выключен"><Icon name="micOff" size={14}/></span>}</div>
+            <div className="voice-participant__state">{participant.self_deaf && <span title="Звук выключен"><Icon name="headphonesOff" size={14}/></span>}{muted && <span title={participant.server_mute ? "Микрофон заглушён на сервере" : "Микрофон выключен"}><Icon name="micOff" size={14}/></span>}</div>
           </button>
         })}</div> : <div className="voice-empty"><span><Icon name="people" size={25}/></span><div><b>Здесь пока тихо</b><p>Подключитесь первым — остальные увидят вас в комнате сразу.</p></div></div>}
       </section></div>

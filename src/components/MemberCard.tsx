@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { Profile, ServerRole } from '../domain/types'
 import type { CustomRole } from '../domain/community'
 import { roleMeta } from '../lib/roles'
@@ -9,11 +9,11 @@ import { Icon } from './Icon'
 import { MemberPresence, usePresenceClock } from './MemberPresence'
 import { communityChanged, useCommunity } from './Community'
 
-const permissions = [[1, 'Читать каналы'], [2, 'Публиковать сообщения'], [4, 'Участвовать в голосе'], [8, 'Запускать трансляции'], [16, 'Управлять сообщениями']] as const
+import { rolePermissions as permissions } from '../domain/rolePermissions'
 const problem = (caught: unknown) => caught instanceof Error ? caught.message : 'Не удалось сохранить роль'
 
-export function MemberCard({ profile, role, online, loading, error, anchor, onClose, onOpenProfile, onMessage }: {
-  profile: Profile | null; role: ServerRole; online: boolean; loading: boolean; error: string
+export function MemberCard({ profile, role, online, loading, error, anchor, onClose, onOpenProfile, onMessage, voiceMenu }: {
+  voiceMenu?: ReactNode; profile: Profile | null; role: ServerRole; online: boolean; loading: boolean; error: string
   anchor: { x: number; y: number }; onClose: () => void; onOpenProfile: () => void; onMessage: () => void
 }) {
   const community = useCommunity(), root = useRef<HTMLElement>(null), closeButton = useRef<HTMLButtonElement>(null)
@@ -91,6 +91,7 @@ export function MemberCard({ profile, role, online, loading, error, anchor, onCl
     {loading ? <div className="member-card__loading" role="status"><span className="spinner"/>Загружаем профиль…</div> : error ? <p role="alert" className="form-error">{error}</p> : profile && <>
       <button className="member-card__avatar" aria-label={`Открыть профиль ${profile.username}`} title="Открыть полный профиль" onClick={onOpenProfile}><Avatar userId={profile.user_id} name={profile.username} size="large" online={online}/><span><Icon name="maximize" size={14}/></span></button>
       <div className="member-card__body"><header><h2>{profile.username}</h2><span className="member-card__username">@{profile.username}{country && <span title={country.name}><CountryFlag code={country.code}/></span>}</span><MemberPresence online={online} lastSeenAt={profile.last_seen_at} now={now}/></header>
+        {voiceMenu}
         {profile.about && <p className="member-card__about">{profile.about}</p>}
         <section className="member-card__roles" aria-label="Роли участника"><h3>РОЛИ</h3><div className="member-card__role-list"><span className={`role-badge role-badge--${role}`}>{roleMeta[role].label}</span>{assigned.map((r) => <span className="member-card__role" key={r.id}><i style={{ background: r.color }}/>{r.name}{canManage && <button disabled={pending} aria-label={`Снять роль ${r.name}`} onClick={() => void toggle(r.id, false)}><Icon name="close" size={12}/></button>}</span>)}{canManage && <button className={`member-card__add-role ${picker ? 'is-active' : ''}`} aria-label="Добавить роль" aria-expanded={picker} title="Добавить роль" onClick={() => { setPicker((v) => !v); setCreating(false) }}><Icon name="add" size={17}/></button>}</div></section>
         {picker && canManage && <div className="member-role-picker"><label className="personal-search"><Icon name="search" size={15}/><input type="search" aria-label="Найти роль" placeholder="Найти роль" value={search} onChange={(e) => setSearch(e.target.value)}/></label><div className="member-role-picker__list">{roles.filter((r) => r.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map((r) => <label key={r.id}><i style={{ background: r.color }}/><span>{r.name}</span><input type="checkbox" aria-label={`Назначить роль ${r.name}`} checked={r.user_ids.includes(profile.user_id)} disabled={pending} onChange={(e) => void toggle(r.id, e.target.checked)}/></label>)}{!roles.length && <p>Создайте первую роль для сообщества.</p>}</div><button className="member-role-picker__create" disabled={pending} onClick={() => setCreating((v) => !v)}><Icon name="add" size={16}/>Создать новую роль</button>

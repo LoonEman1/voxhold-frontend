@@ -34,6 +34,7 @@ import type {
   VoiceICECandidate,
   VoiceJoined,
   VoiceLeft,
+  VoiceModeration,
   VoiceParticipant,
   VoiceSnapshot,
   VoiceWebRTCClosed,
@@ -97,6 +98,7 @@ interface RealtimeOptions {
   onChannelRead?: (read: ChannelRead) => void
   onVoiceJoined?: (event: VoiceJoined) => void
   onVoiceLeft?: (event: VoiceLeft) => void
+  onVoiceModerated?: (requestId: string | undefined) => void
   onVoiceParticipantJoined?: (participant: VoiceParticipant) => void
   onVoiceParticipantLeft?: (event: VoiceLeft) => void
   onVoiceStateUpdated?: (participant: VoiceParticipant) => void
@@ -213,8 +215,13 @@ export class RealtimeClient {
       channel_id: channelId,
       self_mute: selfMute,
       self_deaf: selfDeaf,
+      supports_move: true,
       ...(e2eeDeviceId ? { e2ee_device_id: e2eeDeviceId } : {}),
     })
+  }
+
+  moderateVoice(data: VoiceModeration) {
+    return this.send('voice.moderate', data)
   }
 
   /** Sends a wrapped voice sender key to one device in the channel (FEAT-13). */
@@ -509,6 +516,8 @@ export class RealtimeClient {
           this.options.onVoiceJoined?.(payload.data as VoiceJoined)
         } else if (payload.type === 'voice.left' && payload.data) {
           this.options.onVoiceLeft?.(payload.data as VoiceLeft)
+        } else if (payload.type === 'voice.moderated') {
+          this.options.onVoiceModerated?.(payload.request_id)
         } else if (payload.type === 'voice.participant_joined' && payload.data) {
           this.options.onVoiceParticipantJoined?.(payload.data as VoiceParticipant)
         } else if (payload.type === 'voice.participant_left' && payload.data) {
