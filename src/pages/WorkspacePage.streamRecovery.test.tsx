@@ -211,7 +211,8 @@ it('switches publisher only after leave acknowledgement and ignores the previous
 it('opens an empty voice channel chat and loads history without joining voice', async () => {
   const sync = vi.spyOn(api.messages, 'sync')
   const { container } = render(<WorkspacePage api={api}/>)
-  const toggle = await screen.findByRole('button', { name: 'Чат канала' })
+  const toggle = await screen.findByRole('button', { name: /^Чат канала voice$/ })
+  expect(container.querySelector('.content-header [aria-label^="Чат канала"]')).toBeNull()
   expect(toggle.getAttribute('aria-pressed')).toBe('false')
   fireEvent.click(toggle)
   expect(toggle.getAttribute('aria-pressed')).toBe('true')
@@ -222,6 +223,11 @@ it('opens an empty voice channel chat and loads history without joining voice', 
   fireEvent.click(toggle)
   expect(toggle.getAttribute('aria-pressed')).toBe('false')
   expect(container.querySelector('.voice-channel-chat')).toBeNull()
+  fireEvent.contextMenu(screen.getByRole('button', { name: /^voice$/ }))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Открыть чат' }))
+  expect(toggle.getAttribute('aria-pressed')).toBe('true')
+  expect(container.querySelector('.voice-channel-chat')).not.toBeNull()
+  expect(fixture.joinVoice).not.toHaveBeenCalled()
 })
 
 it('opens and closes the channel sidebar from the hamburger', async () => {

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react'
 import { Icon, type IconName } from './Icon'
 
 export interface ContextMenuAction {
@@ -35,13 +35,25 @@ export interface ContextMenuState {
   items: ContextMenuItem[]
 }
 
-export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose: () => void }) {
+export function MemberVoiceMenu({ items }: { items: ContextMenuItem[] }) {
+  const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  if (!items.length) return null
+  return <div className="member-voice-menu">
+    <button ref={trigger} className="button button--secondary button--small" type="button" aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen((value) => !value)}><Icon name="mic" size={15}/>Голосовые действия</button>
+    {open && <ContextMenu menu={{ x: 0, y: 0, items }} onClose={() => setOpen(false)} trigger={trigger}/>}
+  </div>
+}
+
+export function ContextMenu({ menu, onClose, trigger }: { menu: ContextMenuState; onClose: () => void; trigger?: RefObject<HTMLElement | null> }) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ x: menu.x, y: menu.y })
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
   useLayoutEffect(() => {
+    if (trigger) return
     const element = ref.current
     if (!element) return
     const rect = element.getBoundingClientRect()
@@ -49,14 +61,15 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose
       x: Math.max(8, Math.min(menu.x, window.innerWidth - rect.width - 8)),
       y: Math.max(8, Math.min(menu.y, window.innerHeight - rect.height - 8)),
     })
-  }, [menu])
+  }, [menu, trigger])
 
   useLayoutEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     const root = ref.current
     root?.querySelector<HTMLElement>('button[role="menuitem"]:not(:disabled), button:not(:disabled), input:not(:disabled)')?.focus({ preventScroll: true })
     const closeOnPointerDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) onCloseRef.current()
+      const target = event.target as Node
+      if (!root?.contains(target) && !trigger?.current?.contains(target)) onCloseRef.current()
     }
     const closeOnKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented) onCloseRef.current()
@@ -66,7 +79,7 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose
     window.addEventListener('keydown', closeOnKey)
     window.addEventListener('resize', closeOnScroll)
     window.addEventListener('blur', closeOnScroll)
-    document.addEventListener('scroll', closeOnScroll, true)
+    if (!trigger) document.addEventListener('scroll', closeOnScroll, true)
     return () => {
       if (root?.contains(document.activeElement) && previous?.isConnected) previous.focus({ preventScroll: true })
       window.removeEventListener('pointerdown', closeOnPointerDown, true)
@@ -75,10 +88,11 @@ export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose
       window.removeEventListener('blur', closeOnScroll)
       document.removeEventListener('scroll', closeOnScroll, true)
     }
-  }, [])
+  }, [trigger])
 
   return (
-    <div ref={ref} className="context-menu" role="menu" style={{ left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
+    <div ref={ref} className={trigger ? 'context-menu context-menu--anchored' : 'context-menu'} role="menu"
+      style={trigger ? undefined : { left: position.x, top: position.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return }
       if (event.target instanceof Element && event.target.closest('input, select, textarea')) return
       const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')]

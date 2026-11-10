@@ -91,4 +91,4 @@ The recording and avatar changes add their own workspace code. The final product
 
 A fresh npm registry review/audit found zero reported vulnerabilities. React/Vite/Vitest are current within the selected versions. Newer toolchain majors (TypeScript 7, ESLint 10, hooks plugin 7, jsdom 30) remain separate migrations: they do not make live media faster merely by changing versions. The tested TypeScript 5.9 toolchain and Playwright 1.62 are retained for this change; minor flag data/testing-tool updates are also deferred.
 
-The browser regression job uses the official mcr.microsoft.com/playwright:v1.62.1-noble image on a pinned Ubuntu 24.04 runner, with a 15-minute job timeout. Its bundled browser/system dependencies avoid an unbounded cold install in the job; keep the image tag synchronized with the lockfile's Playwright version.
+The browser regression job uses the official Playwright Noble image on Ubuntu 24.04, with a 15-minute job timeout. Its bundled browsers and system dependencies avoid a cold install in the job. Keep the image tag synchronized with the lockfile's Playwright version.

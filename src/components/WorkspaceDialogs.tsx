@@ -158,7 +158,7 @@ export function ProfileDialog({ open, onClose, profile, onSubmit, onAvatar, hasA
   return embedded ? open && <div className="settings-profile">{content}</div> : <Modal open={open} onClose={() => { if (!deletePending) onClose() }} title="Ваш профиль" eyebrow="ЛИЧНЫЕ НАСТРОЙКИ" size="medium" className="profile-dialog">{content}</Modal>
 }
 
-export function MemberProfileDialog({ onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout, safetyCode }: AsyncDialogProps & { safetyCode?: () => Promise<SafetyCodeResult>; onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
+export function MemberProfileDialog({ voiceMenu, onMessage, online = false, open, onClose, profile, role, loading, error, canChangeRole, canBan, onRoleChange, onBan, onTimeout, safetyCode }: AsyncDialogProps & { voiceMenu?: ReactNode; safetyCode?: () => Promise<SafetyCodeResult>; onTimeout?(seconds: number | null): Promise<void>; onMessage?: () => void; online?: boolean; profile: Profile | null; role: ServerRole; loading: boolean; error: string; canChangeRole: boolean; canBan: boolean; onRoleChange(role: Exclude<ServerRole, 'owner'>): Promise<void>; onBan(reason?: string): Promise<void> }) {
   const now = usePresenceClock(open)
   const country = countryByCode(profile?.country_code)
   const [pending, setPending] = useState(false)
@@ -183,6 +183,7 @@ export function MemberProfileDialog({ onMessage, online = false, open, onClose, 
         <div className="member-profile-avatar-slot" aria-label="Фотография профиля"><Avatar userId={profile.user_id} name={profile.username} size="large"/></div>
         <div className="member-profile-head"><div><h3>{profile.username}</h3><span>@{profile.username}</span></div><span className={`role-badge role-badge--${role}`}>{roleMeta[role].label}</span></div>
         <div className="member-profile-presence"><MemberPresence online={online} lastSeenAt={profile.last_seen_at} now={now}/></div>
+        {voiceMenu}
         <dl className="profile-facts">
           <div><dt>В Voxhold с</dt><dd>{formatDate(profile.created_at)}</dd></div>
           <div><dt>Страна проживания</dt><dd>{country ? <><CountryFlag code={country.code}/> {country.name}</> : 'Не указана'}</dd></div>
@@ -316,7 +317,7 @@ export function ServerSettingsDialog({
     try { await onSaveRecordingQuota(value * GIB) } catch (caught) { setError(humanError(caught)) } finally { setQuotaPending(false) }
   }
   return (
-    <Modal open={open} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
+    <Modal open={open && owner} onClose={onClose} title="Настройки сервера" eyebrow={server?.name.toUpperCase()} size="medium">
       {owner && storageApi && <nav className="server-settings-tabs" aria-label="Раздел настроек сервера">{([['general', 'settings', 'Основное'], ['roles', 'people', 'Роли и права'], ['storage', 'inbox', 'Хранилище'], ['bans', 'lock', 'Баны']] as const).map(([value, icon, label]) => <button key={value} aria-pressed={tab === value} onClick={() => setTab(value)}><Icon name={icon} size={17}/>{label}</button>)}</nav>}
       {tab === 'roles' && open && owner && storageApi && storageToken && server && <RoleManager api={storageApi} token={storageToken} serverId={server.id} members={community?.members ?? []}/>}
       {tab === 'storage' && open && owner && storageApi && storageToken && <StorageManager api={storageApi} token={storageToken}/>}

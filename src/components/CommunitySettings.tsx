@@ -5,7 +5,7 @@ import type { ServerMember } from '../domain/types'
 import type { CleanupPlan, CustomRole, StorageState } from '../domain/community'
 import { communityChanged } from './Community'
 
-const rights = [[1, 'Читать каналы'], [2, 'Публиковать сообщения'], [4, 'Участвовать в голосе'], [8, 'Запускать трансляции'], [16, 'Управлять сообщениями']] as const
+import { rolePermissions as rights } from '../domain/rolePermissions'
 const problem = (caught: unknown) => caught instanceof Error ? caught.message : 'Не удалось сохранить'
 const GiB = 1024 ** 3
 export { bytes } from '../lib/bytes'

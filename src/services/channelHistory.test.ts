@@ -491,6 +491,43 @@ it('cancels queued dispatch on close without a late request', async () => {
 })
 
 describe('persistent optimistic outbox', () => {
+  it('cancels an active send and removes its persisted retry when dismissed', async () => {
+    const { store, create } = setup(undefined, 'instance-a')
+    const response = deferred<Message>()
+    create.mockReturnValueOnce(response.promise)
+    const sending = store.send(1, 2, 'cancel this')
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    const pending = store.snapshot(2).pending[0]!
+    store.dismiss(2, pending.id)
+    expect(create.mock.calls[0]?.[5]?.aborted).toBe(true)
+    expect(localStorage.getItem(storageKey('instance-a'))).toBeNull()
+    response.reject(new Error('offline'))
+    await sending
+    await store.retryFailed()
+    expect(create).toHaveBeenCalledOnce()
+    expect(store.snapshot(2).pending).toEqual([])
+  })
+
+  it('stops passive retries after the retry budget and keeps the original key for manual retry', async () => {
+    vi.useFakeTimers()
+    const { store, create } = setup()
+    try {
+      create.mockRejectedValue(new Error('offline'))
+      await store.send(1, 2, 'offline')
+      const id = store.snapshot(2).pending[0]!.id
+      expect(store.snapshot(2).pending[0]?.retryable).toBe(true)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(create).toHaveBeenCalledTimes(4)
+      expect(store.snapshot(2).pending[0]).toMatchObject({ status: 'failed', retryable: false })
+      await store.retryFailed()
+      expect(create).toHaveBeenCalledTimes(4)
+      create.mockResolvedValueOnce(message(42))
+      await store.send(1, 2, 'offline', id)
+      expect(create.mock.calls.map((call) => call[4])).toEqual(Array(5).fill(id))
+      expect(store.snapshot(2).pending).toEqual([])
+    } finally { store.close(); vi.useRealTimers() }
+  })
+
   it('restores interrupted sends as failed with metadata and isolates users without persisting credentials', async () => {
     const first = setup(undefined, 'instance-a')
     const request = deferred<Message>()

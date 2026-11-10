@@ -8,7 +8,7 @@ export const MAX_CHANNEL_MESSAGES = 1_000
 export type HistoryUpdate = { type: 'message'; channelId: number; message: Message } | { type: 'deleted'; channelId: number; id: number } | { type: 'reactions'; channelId: number; reactions: MessageReactions } | { type: 'reset'; channelId: number }
 export interface ChatViewport { messageId: number; offset: number; following: boolean }
 export interface ForwardSource { server_id: number; channel_id: number; message_id: number; content: string; created_at: number; author: Message['author']; forward?: Message['forward'] }
-export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; retryable?: boolean; attachmentIds?: string[]; reply?: MessageReply; forward?: ForwardSource; threadRootId?: number }
+export interface PendingMessage { id: string; content: string; status: 'sending' | 'failed'; error?: string; retryable?: boolean; attempts?: number; attachmentIds?: string[]; reply?: MessageReply; forward?: ForwardSource; threadRootId?: number }
 export interface ChannelHistoryState {
   messages: Message[]
   cursor: number | null
@@ -33,6 +33,8 @@ interface Entry {
   viewport?: ChatViewport
   sync?: Promise<void>
   dispatchTail: Promise<void>
+  sendControllers: Map<string, AbortController>
+  retryTimers: Map<string, ReturnType<typeof setTimeout>>
   syncAgain: boolean
   contextGeneration: number
   contextRequest?: { messageId: number; controller: AbortController; promise: Promise<void> }
@@ -43,6 +45,7 @@ const initial = (): ChannelHistoryState => ({ messages: [], cursor: null, nextBe
 export const EMPTY_HISTORY = initial()
 
 const MAX_PENDING_MESSAGES = 20
+const SEND_RETRY_DELAYS = [2_000, 5_000, 12_000]
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const isId = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0
 const isText = (value: unknown, max: number): value is string => typeof value === 'string' && value.length <= max
@@ -62,6 +65,7 @@ function restoreOutboxItem(value: unknown): StoredOutboxItem | undefined {
     id: item.id, content: item.content, status: 'failed',
     error: sending ? 'Отправка прервана перезапуском' : item.error as string | undefined,
     retryable: item.retryable !== false,
+    ...(typeof item.attempts === 'number' && Number.isInteger(item.attempts) && item.attempts >= 0 && item.attempts <= SEND_RETRY_DELAYS.length + 1 ? { attempts: item.attempts } : {}),
     ...(item.attachmentIds ? { attachmentIds: [...item.attachmentIds] as string[] } : {}),
     ...(item.reply ? { reply: item.reply } : {}), ...(item.forward ? { forward: item.forward } : {}), ...(item.threadRootId ? { threadRootId: item.threadRootId } : {}),
   } }
@@ -116,13 +120,26 @@ export class ChannelHistoryStore {
   }
   retain() {
     this.mounts++
+    if (this.token) for (const [channelId, entry] of this.entries) {
+      for (const item of entry.state.pending) {
+        if (item.status === 'failed' && item.retryable && !entry.retryTimers.has(item.id)) {
+          const retryIndex = Math.min(SEND_RETRY_DELAYS.length - 1, Math.max(0, (item.attempts ?? 1) - 1))
+          this.scheduleRetry(entry, channelId, item.id, item.content, SEND_RETRY_DELAYS[retryIndex]!)
+        }
+      }
+    }
     return () => { this.mounts--; queueMicrotask(() => { if (this.mounts === 0) this.close() }) }
   }
 
   entry(serverId: number, channelId: number): Entry {
     let entry = this.entries.get(channelId)
     if (!entry) {
-      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), reactionSnapshots: new Map(), live: new Map(), version: 0, dispatchTail: Promise.resolve(), syncAgain: false, contextGeneration: 0, forceSnapshot: false }
+      entry = { serverId, state: initial(), listeners: new Set(), controller: new AbortController(), historyController: new AbortController(), tombstones: new Set(), reactionSnapshots: new Map(), live: new Map(), version: 0, dispatchTail: Promise.resolve(), sendControllers: new Map(), retryTimers: new Map(), syncAgain: false, contextGeneration: 0, forceSnapshot: false }
+      const retryTimers = entry.retryTimers
+      entry.controller.signal.addEventListener('abort', () => {
+        retryTimers.forEach((timer) => clearTimeout(timer))
+        retryTimers.clear()
+      }, { once: true })
       this.entries.set(channelId, entry)
     }
     return entry
@@ -139,8 +156,17 @@ export class ChannelHistoryStore {
     const entry = this.entries.get(channelId)
     if (!entry || this.closed || entry.controller.signal.aborted) return
     const pendingChanged = patch.pending !== undefined && patch.pending !== entry.state.pending
+    const oldPending = entry.state.pending
     entry.state = { ...entry.state, ...patch }
-    if (pendingChanged) this.persistOutbox()
+    if (pendingChanged) {
+      const ids = new Set(entry.state.pending.map((item) => item.id))
+      for (const item of oldPending) if (!ids.has(item.id)) {
+        clearTimeout(entry.retryTimers.get(item.id))
+        entry.retryTimers.delete(item.id)
+        entry.sendControllers.get(item.id)?.abort()
+      }
+      this.persistOutbox()
+    }
     if (deferNotification) {
       if (entry.notificationTimer === undefined) entry.notificationTimer = setTimeout(() => {
         entry.notificationTimer = undefined
@@ -376,46 +402,73 @@ export class ChannelHistoryStore {
     this.update(channelId, { cursor: null, hasNewer: false })
     await this.sync(serverId, channelId)
   }
+  private scheduleRetry(entry: Entry, channelId: number, id: string, content: string, delay: number) {
+    entry.retryTimers.set(id, setTimeout(() => {
+      if (!this.closed && this.entries.get(channelId) === entry) void this.send(entry.serverId, channelId, content, id)
+    }, delay))
+  }
   send(serverId: number, channelId: number, content: string, retryId?: string, reply?: MessageReply, forward?: ForwardSource, newId?: string, threadRootId?: number, attachmentIds?: string[]): Promise<Message | void> {
     const entry = this.entry(serverId, channelId)
     if (!retryId && [...this.entries.values()].reduce((count, value) => count + value.state.pending.length, 0) >= MAX_PENDING_MESSAGES) throw new Error('Сначала повторите или удалите неотправленные сообщения')
     const id = retryId ?? newId ?? crypto.randomUUID()
     const pending = entry.state.pending.find((item) => item.id === id)
     if (retryId && (!pending || pending.status === 'sending')) return Promise.resolve()
+    if (entry.sendControllers.has(id)) return Promise.resolve()
+    clearTimeout(entry.retryTimers.get(id))
+    entry.retryTimers.delete(id)
     const reference = pending?.reply ?? reply
     const forwarded = pending?.forward ?? forward
     const thread = pending?.threadRootId ?? threadRootId
     const attachments = pending?.attachmentIds ?? attachmentIds
     const text = pending?.content ?? content
-    const next: PendingMessage = { id, content: text, status: 'sending', ...(attachments?.length ? { attachmentIds: [...attachments] } : {}), ...(thread ? { threadRootId: thread } : {}), ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }
+    const attempts = pending?.retryable === true ? pending.attempts ?? 0 : 0
+    const next: PendingMessage = { id, content: text, status: 'sending', ...(attempts ? { attempts } : {}), ...(attachments?.length ? { attachmentIds: [...attachments] } : {}), ...(thread ? { threadRootId: thread } : {}), ...(reference ? { reply: reference } : {}), ...(forwarded ? { forward: forwarded } : {}) }
+    const controller = new AbortController()
+    entry.sendControllers.set(id, controller)
+    const lifetime = AbortSignal.any([entry.controller.signal, controller.signal])
     this.update(channelId, { pending: pending ? entry.state.pending.map((item) => item.id === id ? next : item) : [...entry.state.pending, next] })
     const previous = entry.dispatchTail
     let cancelWait!: () => void
     const cancelled = new Promise<void>((resolve) => { cancelWait = resolve })
-    entry.controller.signal.addEventListener('abort', cancelWait, { once: true })
+    if (lifetime.aborted) cancelWait()
+    else lifetime.addEventListener('abort', cancelWait, { once: true })
     const request = (async () => {
       await Promise.race([previous, cancelled])
-      entry.controller.signal.removeEventListener('abort', cancelWait)
-      if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
-      // History sync or a live acknowledgement can settle a queued retry.
-      if (!entry.state.pending.some((item) => item.id === id)) return
-      const timeout = new AbortController()
-      const abort = () => timeout.abort()
-      entry.controller.signal.addEventListener('abort', abort, { once: true })
-      const timer = setTimeout(abort, 15_000)
+      lifetime.removeEventListener('abort', cancelWait)
+      let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        const message = await (forwarded ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, timeout.signal) : reference ? this.api.messages.create(this.token, serverId, channelId, text, id, timeout.signal, reference.message_id, thread, attachments) : this.api.messages.create(this.token, serverId, channelId, text, id, timeout.signal, undefined, thread, attachments))
-        if (this.closed || entry.controller.signal.aborted || this.entries.get(channelId) !== entry) return
+        if (lifetime.aborted || this.closed || this.entries.get(channelId) !== entry) return
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('Нет подключения к интернету')
+        const timeout = new AbortController()
+        timer = setTimeout(() => timeout.abort(), 15_000)
+        const signal = AbortSignal.any([lifetime, timeout.signal])
+        const message = await (forwarded
+          ? this.api.messages.forward(this.token, serverId, channelId, forwarded.server_id, forwarded.channel_id, forwarded.message_id, id, signal)
+          : this.api.messages.create(this.token, serverId, channelId, text, id, signal, reference?.message_id, thread, attachments))
+        if (lifetime.aborted || this.closed || this.entries.get(channelId) !== entry) return
         this.receive({ ...message, client_message_id: id })
         this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id) })
         return message
       } catch (error) {
         // A WS acknowledgement may have arrived while the HTTP reply was lost.
-        if (!entry.state.pending.some((item) => item.id === id)) return
-        this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? { ...item, status: 'failed', error: error instanceof Error ? humanError(error) : 'Ошибка сети', retryable: retryableSendError(error) } : item) })
-      } finally { clearTimeout(timer); entry.controller.signal.removeEventListener('abort', abort); this.trim() }
+        if (lifetime.aborted || !entry.state.pending.some((item) => item.id === id)) return
+        const delay = SEND_RETRY_DELAYS[attempts]
+        const retryable = delay !== undefined && retryableSendError(error)
+        this.update(channelId, { pending: entry.state.pending.map((item) => item.id === id ? {
+          ...item, status: 'failed', error: error instanceof Error ? humanError(error) : 'Ошибка сети',
+          attempts: attempts + 1, retryable,
+        } : item) })
+        if (retryable && entry.state.pending.some((item) => item.id === id)) {
+          this.scheduleRetry(entry, channelId, id, text, delay)
+        }
+      } finally {
+        clearTimeout(timer)
+        entry.sendControllers.delete(id)
+        this.trim()
+      }
     })()
-    entry.dispatchTail = request.then(() => undefined, () => undefined)
+    // Cancelling a queued item leaves later sends behind the active request.
+    entry.dispatchTail = Promise.allSettled([previous, request]).then(() => undefined)
     return request
   }
   async retryFailed() {
@@ -446,7 +499,7 @@ export class ChannelHistoryStore {
   }
   dismiss(channelId: number, id: string) {
     const entry = this.entries.get(channelId)
-    if (entry) this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id || item.status === 'sending') })
+    if (entry) this.update(channelId, { pending: entry.state.pending.filter((item) => item.id !== id) })
   }
   removeChannel(channelId: number) {
     this.removeForwardSources((source) => source.channel_id === channelId)

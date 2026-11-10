@@ -72,6 +72,8 @@ interface AudioRTPDiagnosticStats extends RTCStats {
   packetsLost?: number
   jitter?: number
   audioLevel?: number
+  totalAudioEnergy?: number
+  totalSamplesDuration?: number
   concealedSamples?: number
   totalSamplesReceived?: number
   jitterBufferDelay?: number
@@ -150,6 +152,7 @@ export class BrowserVoiceSession {
   private readonly receiverIds = new WeakMap<RTCRtpReceiver, string>()
   private nextReceiverId = 0
   private levelsSampling = false
+  private remoteAudioSamples = new Map<string, { energy: number; duration: number }>()
   private analysis: { context: AudioContext; sink: GainNode } | null = null
   private readonly remoteAnalysers = new Map<string, VoiceRemoteAnalyser>()
   // Per-user loudness multiplier keyed by the server connection id (0..2).
@@ -169,6 +172,7 @@ export class BrowserVoiceSession {
   private readonly visibilityHandler = () => {
     if (this.closed || typeof document === 'undefined') return
     if (document.visibilityState === 'hidden') {
+      this.remoteAudioSamples.clear()
       if (this.levelTimer !== null) window.clearInterval(this.levelTimer)
       this.levelTimer = null
     } else if (document.visibilityState === 'visible') { this.resumeAudio(); this.ensureLevelTimer() }
@@ -445,34 +449,53 @@ export class BrowserVoiceSession {
     this.levelsSampling = true
     const values = new Map<string, number>()
     try {
-      // Receiver audioLevel works even when a separate AudioContext is suspended
-      // by autoplay policy. Keep Web Audio as the feature-detected fallback.
       if (this.peer && typeof this.peer.getStats === 'function') {
         const report = await readPeerStats(this.peer, 150)
+        if (this.closed || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+        const samples = new Map<string, { energy: number; duration: number }>()
         report.forEach((raw) => {
           const stats = raw as AudioRTPDiagnosticStats
-          if (stats.type !== 'inbound-rtp' || (stats.kind !== 'audio' && stats.mediaType !== 'audio') || typeof stats.audioLevel !== 'number') return
-          if (stats.trackIdentifier) values.set(stats.trackIdentifier, Math.min(1, Math.max(0, stats.audioLevel) * 4.5))
+          const { trackIdentifier, totalAudioEnergy: energy, totalSamplesDuration: duration } = stats
+          if (stats.type !== 'inbound-rtp' || (stats.kind !== 'audio' && stats.mediaType !== 'audio') || !trackIdentifier || !this.remoteOutputs.has(trackIdentifier)) return
+          let amplitude = stats.audioLevel
+          if (typeof energy === 'number' && typeof duration === 'number') {
+            samples.set(stats.id, { energy, duration })
+            const previous = this.remoteAudioSamples.get(stats.id)
+            // Measure the whole polling interval so speech between reads still counts.
+            if (previous && energy >= previous.energy && duration >= previous.duration) {
+              const elapsed = duration - previous.duration
+              amplitude = elapsed > 0 ? Math.max(amplitude ?? 0, Math.sqrt((energy - previous.energy) / elapsed)) : undefined
+            }
+          }
+          if (amplitude !== undefined && Number.isFinite(amplitude)) {
+            const level = Math.min(1, Math.max(0, amplitude) * 4.5)
+            values.set(trackIdentifier, Math.max(values.get(trackIdentifier) ?? 0, level))
+          }
         })
+        this.remoteAudioSamples = samples
       }
     } catch { /* The analyser can still meter audio when getStats is unavailable. */ }
     finally { this.levelsSampling = false }
     if (this.closed || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-    const levels: VoiceRemoteLevel[] = []
+    const levels = new Map<string, number>()
     this.remoteOutputs.forEach((output, trackId) => {
       const connectionId = this.trackOwners.get(trackId)
       if (!connectionId) return
-      let level = values.get(trackId)
-      const entry = this.remoteAnalysers.get(trackId)
-      if (level === undefined && entry && this.analysis?.context.state === 'running') {
-        entry.analyser.getByteTimeDomainData(entry.values)
-        let energy = 0
-        for (const value of entry.values) energy += ((value - 128) / 128) ** 2
-        level = Math.min(1, Math.sqrt(energy / entry.values.length) * 4.5)
-      }
-      levels.push({ connectionId, level: output.track.muted || output.track.readyState === 'ended' ? 0 : level ?? 0 })
+      const level = output.track.muted || output.track.readyState === 'ended'
+        ? 0
+        : values.get(trackId) ?? this.analyseRemoteLevel(trackId)
+      levels.set(connectionId, Math.max(levels.get(connectionId) ?? 0, level))
     })
-    this.options.onRemoteLevels?.(levels)
+    this.options.onRemoteLevels?.(Array.from(levels, ([connectionId, level]) => ({ connectionId, level })))
+  }
+
+  private analyseRemoteLevel(trackId: string) {
+    const entry = this.remoteAnalysers.get(trackId)
+    if (!entry || this.analysis?.context.state !== 'running') return 0
+    entry.analyser.getByteTimeDomainData(entry.values)
+    let energy = 0
+    for (const value of entry.values) energy += ((value - 128) / 128) ** 2
+    return Math.min(1, Math.sqrt(energy / entry.values.length) * 4.5)
   }
 
   private playRemoteAudio(output: VoiceRemoteOutput, reason: string) {
@@ -782,6 +805,7 @@ export class BrowserVoiceSession {
     this.pendingRemoteCandidates = []
     Array.from(this.remoteAnalysers.keys()).forEach((trackId) => this.detachRemoteAnalyser(trackId))
     this.remoteAnalysers.clear()
+    this.remoteAudioSamples.clear()
     this.trackOwners.clear()
     this.remoteTransceivers.clear()
     this.midOwners.clear()
