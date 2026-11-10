@@ -12,8 +12,12 @@ import '../../src/styles/workspace.css'
 
 const makeMessage = (id: number, channelId: number): Message => ({ id, channel_id: channelId, content: `История ${id}`, revision: 1, author: { user_id: 1, username: 'Alice' }, created_at: 1_700_000_000 + id, edited_at: null })
 const histories = new Map([1, 2].map((channel) => [channel, Array.from({ length: 500 }, (_, index) => makeMessage(index + 1 + (channel - 1) * 1000, channel))]))
-const quoteId = new URLSearchParams(location.search).has('deep-reply') ? 100 : 490
+const params = new URLSearchParams(location.search)
+const quoteId = params.has('deep-reply') ? 100 : 490
 histories.get(1)![499] = { ...histories.get(1)![499]!, reply: { message_id: quoteId, author: { user_id: 1, username: 'Alice' }, content: `История ${quoteId}`, deleted: false } }
+if (params.has('link-history')) {
+  for (const message of histories.get(1)!.slice(-18, -10)) message.content = `https://example.com/${message.id}`
+}
 const keys = new Map<string, Message>()
 const changed = new Map<number, number[]>()
 let cursor = 0, loseFirstReply = true
