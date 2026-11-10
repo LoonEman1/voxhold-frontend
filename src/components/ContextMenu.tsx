@@ -35,6 +35,18 @@ export interface ContextMenuState {
   items: ContextMenuItem[]
 }
 
+export function MemberVoiceMenu({ items }: { items: ContextMenuItem[] }) {
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
+  if (!items.length) return null
+  return <>
+    <button className="button button--secondary button--small" type="button" aria-haspopup="menu" aria-expanded={!!anchor} onClick={(event) => {
+      const bounds = event.currentTarget.getBoundingClientRect()
+      setAnchor(anchor ? null : { x: bounds.left, y: bounds.bottom + 4 })
+    }}><Icon name="mic" size={15}/>Голосовые действия</button>
+    {anchor && <ContextMenu menu={{ ...anchor, items }} onClose={() => setAnchor(null)}/>}
+  </>
+}
+
 export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ x: menu.x, y: menu.y })

@@ -272,6 +272,8 @@ export interface VoiceParticipant {
   channel_id: EntityId
   self_mute: boolean
   self_deaf: boolean
+  server_mute?: boolean
+  supports_move?: boolean
   /** Device whose key wraps this participant's voice sender key. */
   e2ee_device_id?: string
 }
@@ -303,7 +305,16 @@ export interface VoiceLeft {
   user_id: EntityId
   server_id: EntityId
   channel_id: EntityId
+  reason?: 'kicked' | 'moved'
+  destination_channel_id?: EntityId
 }
+
+export type VoiceModerationAction =
+  | { action: 'mute'; muted: boolean }
+  | { action: 'move'; destination_channel_id: EntityId }
+  | { action: 'kick' }
+
+export type VoiceModeration = Pick<VoiceParticipant, 'server_id' | 'channel_id' | 'user_id' | 'connection_id'> & VoiceModerationAction
 
 export interface VoiceSnapshot {
   participants: VoiceParticipant[]

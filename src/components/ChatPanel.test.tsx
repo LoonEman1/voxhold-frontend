@@ -221,21 +221,25 @@ it('keeps the bottom anchored when pending status and error change without chang
   expect(container.scrollTop).toBe(400)
 })
 
-it('shows a failed pending error and exposes retry and dismiss actions', () => {
+it('shows the queued and failed indicators with their respective context actions', () => {
   const channel: Channel = { id: 1, server_id: 1, name: 'general', kind: 'text', position: 0, created_by: 1, created_at: 0 }
   const pending = { id: 'pending-1', content: 'Outgoing', status: 'failed' as const, error: 'Сеть недоступна' }
+  const queued = { id: 'pending-2', content: 'Waiting', status: 'failed' as const, retryable: true }
   const onRetry = vi.fn(), onDismiss = vi.fn()
   render(<ChatPanel
-    channel={channel} messages={[]} pendingMessages={[pending]} onRetryPending={onRetry} onDismissPending={onDismiss}
+    channel={channel} messages={[]} pendingMessages={[pending, queued]} onRetryPending={onRetry} onDismissPending={onDismiss}
     loading={false} loadingOlder={false} hasMore={false} loadingNewer={false} hasNewer={false}
     currentUserId={2} canManage={false} members={[]} pinnedMessageIds={new Set()} focusedMessageId={null} channelReads={{}}
     onLoadOlder={vi.fn(async () => undefined)} onLoadNewer={vi.fn(async () => undefined)} onReturnToLatest={vi.fn(async () => undefined)}
     onReadThrough={vi.fn()} onSend={vi.fn()} onEdit={vi.fn(async () => undefined)} onDelete={vi.fn(async () => undefined)}
     onTogglePin={vi.fn(async () => undefined)} onOpenProfile={vi.fn()}
   />)
-  expect(screen.getByRole('alert').textContent).toBe('Сеть недоступна')
-  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
+  expect(screen.getByRole('button', { name: 'Не отправлено' }).getAttribute('title')).toBe('Сеть недоступна')
+  fireEvent.contextMenu(screen.getByText('Outgoing'))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Отправить' }))
   expect(onRetry).toHaveBeenCalledWith(pending)
-  fireEvent.click(screen.getByRole('button', { name: 'Убрать' }))
-  expect(onDismiss).toHaveBeenCalledWith('pending-1')
+  fireEvent.click(screen.getByRole('button', { name: 'Ожидает отправки' }))
+  expect(screen.queryByRole('menuitem', { name: 'Отправить' })).toBeNull()
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить' }))
+  expect(onDismiss).toHaveBeenCalledWith('pending-2')
 })

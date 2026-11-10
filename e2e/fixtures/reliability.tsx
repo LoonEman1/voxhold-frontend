@@ -59,9 +59,10 @@ async function respond(request: TransportRequest): Promise<unknown> {
   if (messages && path.pathname.endsWith('/messages/sync')) {
     const after = path.searchParams.get('after')
     if (after !== null) await new Promise((resolve) => setTimeout(resolve, 500))
+    const current = histories.get(channelId)!
     const ids = after === null ? [] : [...changed.entries()].filter(([sequence]) => sequence > Number(after)).flatMap(([, ids]) => ids)
-    const latest = after === null ? messages.slice(-50) : messages.filter((item) => ids.includes(item.id))
-    return { messages: latest, deleted_ids: ids.filter((id) => !messages.some((item) => item.id === id)), cursor, reset: after === null, has_more: false, has_older: after === null && messages.length > 50 }
+    const latest = after === null ? current.slice(-50) : current.filter((item) => ids.includes(item.id))
+    return { messages: latest, deleted_ids: ids.filter((id) => !current.some((item) => item.id === id)), cursor, reset: after === null, has_more: false, has_older: after === null && current.length > 50 }
   }
   if (messages && path.pathname.endsWith('/messages') && request.method === 'POST') {
     if (offline) throw new Error('Нет сети')

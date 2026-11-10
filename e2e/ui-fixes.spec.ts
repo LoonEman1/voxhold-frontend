@@ -67,7 +67,7 @@ test('speaker volume doubles the actual audio samples above 100%', async ({ page
   expect(values.elementVolume).toBeLessThanOrEqual(1)
 })
 
-async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[]; joined?: boolean } = {}) {
+async function openCallWorkspace(page: Page, options: { withPeers?: boolean; reconnectIDs?: boolean; role?: 'owner' | 'admin' | 'member'; channelMemberIds?: number[]; joined?: boolean; voiceModeration?: boolean } = {}) {
   await page.addInitScript(() => {
     localStorage.setItem('voxhold.theme.v1', 'dark')
     localStorage.setItem('voxhold.session.v1', JSON.stringify({ user: { id: 1, username: 'Александр', created_at: 1 }, session: { token: 'fixture', expires_at: Math.floor(Date.now() / 1000) + 86400 } }))
@@ -80,10 +80,11 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
       return output.stream
     }
   })
-  const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
+  const participant = { connection_id: 'fixture-voice', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false, supports_move: options.voiceModeration }
   const participants = options.joined === false ? [] : options.withPeers ? [participant, { ...participant, connection_id: 'fixture-maria', user_id: 2 }, { ...participant, connection_id: 'fixture-other', user_id: 3 }] : [participant]
   let emit = (_type: string, _data: unknown) => {}, revoke = () => {}
   let connections = 0, joins = 0
+  const moderation: unknown[] = []
   await page.routeWebSocket('**/api/v1/ws', (socket) => {
     connections++
     if (options.reconnectIDs) participant.connection_id = `fixture-voice-${connections}`
@@ -98,6 +99,10 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
       }
       if (event.type === 'voice.join') { joins++; socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.joined', data: { participant, participants } })) }
       if (event.type === 'voice.state_update') socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.state_updated', data: { ...participant, ...event.data } }))
+      if (event.type === 'voice.moderate') {
+        moderation.push(event.data)
+        socket.send(JSON.stringify({ request_id: event.request_id, type: 'voice.moderated', data: event.data }))
+      }
       if (event.type === 'channel.subscribe') socket.send(JSON.stringify({ request_id: event.request_id, type: 'channel.subscribed', data: event.data }))
     })
   })
@@ -123,7 +128,11 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
     }
     else if (path.endsWith('/me/inbox')) json = { items: [], has_more: false }
     else if (path.endsWith('/me/conversations')) json = []
-    else if (path.endsWith('/channels')) json = [{ id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }]
+    else if (path.endsWith('/channels')) {
+      const first = { id: 1, server_id: 1, name: 'первый-голосовой', kind: 'voice', position: 0, created_by: 1, created_at: 1 }
+      json = options.voiceModeration ? [first, { ...first, id: 2, name: 'второй-голосовой', position: 1 }] : [first]
+    }
+    else if (options.voiceModeration && path.endsWith('/users/2/profile')) json = { user_id: 2, username: 'Мария', about: '', country_code: null, created_at: 1 }
     else if (/\/channels\/\d+\/members$/.test(path)) json = { user_ids: options.channelMemberIds ?? [1, 2, 3] }
     else if (path.endsWith('/members')) json = ['Александр', 'Мария', 'ОченьДлинноеИмяУчастника'].map((username, index) => ({ user_id: index + 1, username, role: index ? 'member' : options.role ?? 'owner', created_at: 1, joined_at: 1, about: '', country_code: null, last_seen_at: now - 5 * 60 }))
     else if (path.endsWith('/recordings')) json = { recordings: [], quota_bytes: 8 * 2 ** 30, max_file_bytes: 2 ** 31, retention_seconds: 86400 }
@@ -152,7 +161,7 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
   })
   await page.goto('/')
   await expect(page.locator('.voice-participant')).toHaveCount(participants.length)
-  return { emit, revoke: () => revoke(), counts: () => ({ connections, joins }) }
+  return { emit, revoke: () => revoke(), counts: () => ({ connections, joins }), moderation }
 }
 
 for (const role of ['owner', 'admin', 'member'] as const) {
@@ -259,6 +268,28 @@ test('participant volume updates in an open menu and the same menu opens on room
   await expect(menu.getByRole('button', { name: 'Админ', exact: true })).toHaveCount(0)
   await expect(menu.getByRole('menuitem', { name: 'Забанить на инстансе' })).toHaveCount(0)
   expect(errors).toEqual([])
+})
+
+test('voice moderation is shared by the popup and member card and supports dragging to another channel', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  const { moderation } = await openCallWorkspace(page, { withPeers: true, voiceModeration: true, role: 'admin' })
+  const participant = page.locator('.channel-voice-users button').filter({ hasText: 'Мария' })
+  await participant.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Заглушить у меня', exact: true }).click()
+  expect(moderation).toHaveLength(0)
+  await page.locator('.voice-participant').filter({ hasText: 'Мария' }).click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Включить звук у меня' })).toBeVisible()
+  await page.getByRole('menuitem', { name: 'Заглушить микрофон на сервере' }).click()
+  await expect.poll(() => moderation).toEqual([expect.objectContaining({ action: 'mute', user_id: 2, muted: true })])
+  await participant.dragTo(page.getByRole('button', { name: 'второй-голосовой', exact: true }))
+  await expect.poll(() => moderation[1]).toMatchObject({ action: 'move', user_id: 2, channel_id: 1, destination_channel_id: 2 })
+  await participant.click()
+  await page.getByRole('button', { name: 'Голосовые действия' }).click()
+  await page.getByRole('menuitem', { name: 'Отключить от голосового канала' }).click()
+  await expect.poll(() => moderation[2]).toMatchObject({ action: 'kick', user_id: 2, channel_id: 1 })
+  await page.getByRole('button', { name: 'Полный профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Голосовые действия' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Включить звук у меня' })).toBeVisible()
 })
 
 test('call tiles, registration links and docked pins work in the real workspace', async ({ page }) => {

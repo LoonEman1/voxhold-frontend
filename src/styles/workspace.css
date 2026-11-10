@@ -650,11 +650,18 @@ body.is-resizing-workspace, body.is-resizing-workspace * { cursor: col-resize !i
   .voice-stage-content .voice-participant .avatar { width: 68px; height: 68px; font-size: 24px; }
 }
 
-.message-pending { padding: 8px 20px; opacity: .7; overflow-wrap: anywhere; }
-.message-pending p { white-space: pre-wrap; margin: 0 0 4px; }
-.message-pending small { display: flex; gap: 12px; align-items: center; }
-.message-pending--failed { opacity: 1; }
-.message-pending button { color: var(--cyan); background: none; border: 0; cursor: pointer; }
+.chat-panel > .messages { overflow-anchor: none; }
+.message-scroll-content { display: flow-root; }
+.message-pending { display: flex; align-items: flex-start; gap: 12px; padding: 8px 20px; overflow-wrap: anywhere; }
+.message-pending__body { flex: 1; min-width: 0; }
+.message-pending p { white-space: pre-wrap; margin: 0; }
+.message-pending small { color: var(--muted); }
+.message-pending__status { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
+.message-pending__status.is-failed > span { display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #fff; background: #bd292d; font-size: 11px; font-weight: 800; }
+.channel-voice-users > button[draggable="true"] { cursor: grab; }
+.channel-voice-users > button[draggable="true"]:active { cursor: grabbing; }
+.voice-move-channels { display: grid; gap: 8px; }
+.voice-move-channels > button { justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
 .members-sidebar__scroll .member-group { margin: 0; padding: 12px 0 8px; }
 
 .invite-dialog__tabs { margin-bottom: 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
