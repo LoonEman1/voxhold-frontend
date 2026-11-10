@@ -12,7 +12,8 @@ import '../../src/styles/workspace.css'
 
 const makeMessage = (id: number, channelId: number): Message => ({ id, channel_id: channelId, content: `История ${id}`, revision: 1, author: { user_id: 1, username: 'Alice' }, created_at: 1_700_000_000 + id, edited_at: null })
 const histories = new Map([1, 2].map((channel) => [channel, Array.from({ length: 500 }, (_, index) => makeMessage(index + 1 + (channel - 1) * 1000, channel))]))
-histories.get(1)![499] = { ...histories.get(1)![499]!, reply: { message_id: 490, author: { user_id: 1, username: 'Alice' }, content: 'История 490', deleted: false } }
+const quoteId = new URLSearchParams(location.search).has('deep-reply') ? 100 : 490
+histories.get(1)![499] = { ...histories.get(1)![499]!, reply: { message_id: quoteId, author: { user_id: 1, username: 'Alice' }, content: `История ${quoteId}`, deleted: false } }
 const keys = new Map<string, Message>()
 const changed = new Map<number, number[]>()
 let cursor = 0, loseFirstReply = true

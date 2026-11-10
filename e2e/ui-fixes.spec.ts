@@ -288,8 +288,12 @@ test('voice moderation is shared by the popup and member card and supports dragg
   await page.getByRole('menuitem', { name: 'Отключить от голосового канала' }).click()
   await expect.poll(() => moderation[2]).toMatchObject({ action: 'kick', user_id: 2, channel_id: 1 })
   await page.getByRole('button', { name: 'Полный профиль', exact: true }).click()
-  await page.getByRole('button', { name: 'Голосовые действия' }).click()
+  const voiceMenuButton = page.getByRole('button', { name: 'Голосовые действия' })
+  await voiceMenuButton.click()
   await expect(page.getByRole('menuitem', { name: 'Включить звук у меня' })).toBeVisible()
+  await voiceMenuButton.click()
+  await expect(voiceMenuButton).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('menuitem', { name: 'Включить звук у меня' })).toHaveCount(0)
 })
 
 test('call tiles, registration links and docked pins work in the real workspace', async ({ page }) => {

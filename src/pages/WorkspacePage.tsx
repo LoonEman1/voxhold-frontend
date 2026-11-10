@@ -2760,6 +2760,13 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const sendMessage = (content: string, reply?: MessageReply, attachmentIds?: string[]) => {
     if (!token || !selectedServerId || !selectedChannelId) throw new Error('Канал не выбран')
     const request = historyStore.send(selectedServerId, selectedChannelId, content, undefined, reply, undefined, undefined, undefined, attachmentIds)
+    if (historyStore.snapshot(selectedChannelId).hasNewer) {
+      void returnToLatest()
+    } else if (focusedMessageId !== null || messageTarget) {
+      // Sending resumes following the end instead of keeping the old jump target.
+      setMessageTarget(null)
+      setFocusedMessageId(null)
+    }
     void request.then((created) => { if (created) recordLastMessage(created.channel_id, created.id) }).catch(() => undefined)
   }
 
