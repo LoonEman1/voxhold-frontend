@@ -155,6 +155,23 @@ async function openCallWorkspace(page: Page, options: { withPeers?: boolean; rec
   return { emit, revoke: () => revoke(), counts: () => ({ connections, joins }) }
 }
 
+for (const role of ['owner', 'admin', 'member'] as const) {
+  test('space settings gear for ' + role, async ({ page }) => {
+    await openCallWorkspace(page, { role, joined: false })
+    await expect(page.locator('.server-header h2')).toHaveText('FirstInstance')
+    const gear = page.getByRole('button', { name: 'Настройки сервера', exact: true })
+    if (role === 'owner') {
+      await gear.click()
+      await expect(page.getByRole('dialog', { name: 'Настройки сервера', exact: true }).getByLabel('Название сервера')).toHaveValue('FirstInstance')
+    } else {
+      await expect(gear).toHaveCount(0)
+    }
+    if (role === 'admin') {
+      await expect(page.getByRole('button', { name: 'Изменить первый-голосовой', exact: true })).toBeVisible()
+    }
+  })
+}
+
 for (const role of ['owner', 'admin'] as const) {
   test(`${role} manages active invitation links from the top invitation menu`, async ({ page }) => {
     await openCallWorkspace(page, { role })
@@ -251,7 +268,8 @@ test('call tiles, registration links and docked pins work in the real workspace'
   expect(Math.abs(tile.width - tile.height)).toBeLessThan(2)
   expect(tile.width).toBeLessThanOrEqual(300)
   expect((await page.locator('.voice-participant .avatar').boundingBox())!.width).toBeGreaterThanOrEqual(80)
-  await expect(page.locator('.content-header').getByRole('button', { name: 'Чат канала', exact: true })).toBeVisible()
+  await expect(page.locator('.content-header').getByRole('button', { name: /^Чат канала/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Чат канала первый-голосовой', exact: true })).toBeVisible()
   await expect(page.locator('.content-header').getByRole('button', { name: 'Приглашения', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Пригласить', exact: true }).click()
   await expect(page.getByRole('button', { name: 'По имени' })).toHaveCount(0)
@@ -902,10 +920,16 @@ test('voice history opens without joining and the mobile menu reveals channels',
   const fixture = await openCallWorkspace(page, { joined: false })
   await expect(page.locator('.voice-empty')).toBeVisible()
   expect(fixture.counts().joins).toBe(0)
-  const chat = page.getByRole('button', { name: 'Чат канала', exact: true })
+  const chat = page.getByRole('button', { name: 'Чат канала первый-голосовой', exact: true })
   await chat.click()
   await expect(chat).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.voice-channel-chat')).toContainText('Начало канала #первый-голосовой')
+  await expect(page.getByLabel('Сообщение в первый-голосовой')).toBeVisible()
+  expect(fixture.counts().joins).toBe(0)
+  await page.getByRole('button', { name: 'Закрыть чат', exact: true }).click()
+  await page.locator('.channel-row__main').click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Открыть чат', exact: true }).click()
+  await expect(chat).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByLabel('Сообщение в первый-голосовой')).toBeVisible()
   expect(fixture.counts().joins).toBe(0)
   await page.getByRole('button', { name: 'Закрыть чат', exact: true }).click()

@@ -5,7 +5,7 @@ async function session(page: Page, username: string) {
   const response = await page.request.post('/api/v1/auth/login', { data: { username, password } }); expect(response.ok()).toBeTruthy(); const auth = await response.json() as { user: { id: number }; session: { token: string } }
   if (username === 'qaowner') { const allowed = await page.request.put('/api/v1/instance/cors-origins', { headers: { Authorization: `Bearer ${auth.session.token}` }, data: { origins: ['http://127.0.0.1:4193'] } }); expect(allowed.ok()).toBeTruthy() }
   await page.addInitScript((auth) => localStorage.setItem('voxhold.session.v1', JSON.stringify(auth)), auth)
-  await page.goto('/'); await expect(page.getByRole('button', { name: 'Настройки сервера' })).toBeVisible(); return auth
+  await page.goto('/'); await expect(page.locator('.server-header h2')).toBeVisible(); return auth
 }
 test('new community features work against the real backend', async ({ page, browser }, testInfo) => {
   const owner = await session(page, 'qaowner')

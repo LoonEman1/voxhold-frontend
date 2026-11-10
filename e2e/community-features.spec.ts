@@ -5,7 +5,7 @@ async function login(page: Page, username: string) {
   const auth = await response.json() as { user: { id: number }; session: { token: string } }
   if (username === 'qaowner') await page.request.put('/api/v1/instance/cors-origins', { headers: { Authorization: `Bearer ${auth.session.token}` }, data: { origins: ['http://127.0.0.1:4193'] } })
   await page.addInitScript((v) => { localStorage.setItem('voxhold.session.v1', JSON.stringify(v)); const Native = RTCPeerConnection; const peers: RTCPeerConnection[] = []; Object.assign(window, { __callPeers: peers }); window.RTCPeerConnection = class extends Native { constructor(config?: RTCConfiguration) { super(config); peers.push(this) } } }, auth)
-  await page.goto('/'); await expect(page.getByRole('button', { name: 'Настройки сервера', exact: true })).toBeVisible(); await expect(page.locator('.user-dock__profile small')).toHaveText('В сети', {timeout:60_000}); return auth
+  await page.goto('/'); await expect(page.locator('.server-header h2')).toBeVisible(); await expect(page.locator('.user-dock__profile small')).toHaveText('В сети', {timeout:60_000}); return auth
 }
 async function view(page: Page, name: string) { await page.locator('.personal-rail').getByRole('button', { name, exact: true }).click() }
 async function openDirect(page: Page) { await page.locator('.personal-rail__recents').getByRole('button', { name: /^Диалог: qa(owner|member)/ }).first().click(); await page.locator('.personal-conversations').getByRole('button').filter({ hasText: /qa(owner|member)/ }).first().click(); await expect(page.getByLabel('Сообщение в беседу')).toBeVisible() }

@@ -266,6 +266,52 @@ describe('BrowserVoiceSession', () => {
     } finally { session.close(); input.close(); vi.useRealTimers() }
   })
 
+  it('meters speech between polls for each remote participant', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('AudioContext', undefined)
+    const input = new BrowserVoiceInput()
+    await input.start(DEFAULT_VOICE_PREFERENCES)
+    const levels = vi.fn()
+    const session = new BrowserVoiceSession({ input, onAnswer: vi.fn(), onICECandidate: vi.fn(), onConnectionStateChange: vi.fn(), onError: vi.fn(), onRemoteLevels: levels })
+    const owners = ['alice', 'bob', 'carol', 'carol']
+    const tracks = owners.map(() => new FakeTrack())
+    const transceivers = tracks.map((track, index) => ({ mid: String(index), receiver: { track } }))
+    const energy = [0, 0, 0, 0]
+    let duration = 1
+    try {
+      await session.start(false, false, DEFAULT_VOICE_PREFERENCES)
+      const peer = FakePeerConnection.latest!
+      Object.assign(peer, {
+        getTransceivers: () => transceivers,
+        getStats: async () => new Map(tracks.map((track, index) => [track.id, {
+          id: track.id, type: 'inbound-rtp', kind: 'audio', trackIdentifier: track.id,
+          audioLevel: 0, totalAudioEnergy: energy[index], totalSamplesDuration: duration,
+        }])) as unknown as RTCStatsReport,
+      })
+      const media = owners.map((owner, index) => `m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:${index}\r\na=msid:voice audio-${owner}\r\n`)
+      await session.acceptOffer('v=0\r\n' + media.join(''))
+      tracks.forEach((track, index) => peer.ontrack?.({ track, transceiver: transceivers[index] } as unknown as RTCTrackEvent))
+      await vi.advanceTimersByTimeAsync(200)
+      duration = 1.2
+      energy[0] = .002
+      energy[2] = .0002
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([
+        { connectionId: 'alice', level: expect.closeTo(.45) },
+        { connectionId: 'bob', level: 0 },
+        { connectionId: 'carol', level: expect.closeTo(.142, 3) },
+      ])
+      duration = 1.4
+      energy[1] = .002
+      await vi.advanceTimersByTimeAsync(200)
+      expect(levels).toHaveBeenLastCalledWith([
+        { connectionId: 'alice', level: 0 },
+        { connectionId: 'bob', level: expect.closeTo(.45) },
+        { connectionId: 'carol', level: 0 },
+      ])
+    } finally { session.close(); input.close(); vi.useRealTimers() }
+  })
+
   it('protects the preallocated receiver before negotiation and keeps its key mapping when mid and owner change', async () => {
     const remoteTrack = new FakeTrack()
     const transceiver = { mid: null as string | null, receiver: { track: remoteTrack } }
