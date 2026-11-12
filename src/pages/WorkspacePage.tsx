@@ -274,6 +274,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const p2pStreamViewerRef = useRef<BrowserP2PStreamViewer | null>(null)
   const streamDynamicRangeRef = useRef<StreamDynamicRange>('sdr')
   const pendingStreamRewatchRef = useRef<{ forceSDR: boolean; requestId?: string; publisherId?: string } | null>(null)
+  const streamPublisherWaitRef = useRef<number | null>(null)
   const streamWatchActionRef = useRef<(forceSDR: boolean, rewatch: boolean, restoring?: boolean, publisherId?: string) => Promise<void>>(async () => {})
 	const streamStartActionRef = useRef<(restoring?: boolean) => void>(() => undefined)
   const streamsRef = useRef(streams)
@@ -361,7 +362,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   voicePreferencesRef.current = voicePreferences
   streamRoleRef.current = streamRole
   streamPreferencesRef.current = streamPreferences
-  streamsRef.current = streams
   viewedProfileRef.current = viewedProfile
   hasNewerRef.current = hasNewer
   messageTargetRef.current = messageTarget
@@ -561,12 +561,23 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     return true
   }, [])
 
-  const upsertStream = useCallback((value: ActiveStream) => {
-    setStreams((current) => ({ ...current, [value.publisher_connection_id]: value }))
+  const replaceStreamCatalog = useCallback((catalog: typeof streams) => {
+    streamsRef.current = catalog
+    setStreams(catalog)
   }, [])
 
+  const upsertStream = useCallback((value: ActiveStream) => {
+    replaceStreamCatalog({ ...streamsRef.current, [value.publisher_connection_id]: value })
+  }, [replaceStreamCatalog])
+
   const removeStream = useCallback((channelId: number, publisherId?: string) => {
-    setStreams((current) => withoutStoppedStream(current, { channel_id: channelId, publisher_connection_id: publisherId }))
+    replaceStreamCatalog(withoutStoppedStream(streamsRef.current, { channel_id: channelId, publisher_connection_id: publisherId }))
+  }, [replaceStreamCatalog])
+
+  const clearStreamPublisherWait = useCallback(() => {
+    if (streamPublisherWaitRef.current === null) return
+    window.clearTimeout(streamPublisherWaitRef.current)
+    streamPublisherWaitRef.current = null
   }, [])
 
   const upsertVoiceParticipant = useCallback((participant: VoiceParticipant) => {
@@ -589,6 +600,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   }, [])
 
   const closeStreamLocally = useCallback((preserveWindow = false) => {
+    clearStreamPublisherWait()
+    pendingStreamRewatchRef.current = null
     streamAttemptRef.current++
     streamAudioGainRef.current?.close()
     streamAudioGainRef.current = null
@@ -619,7 +632,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       setStreamCinema(false)
       setStreamAudioMuted(false)
     }
-  }, [setStreamQuality])
+  }, [clearStreamPublisherWait, setStreamQuality])
 
   /**
    * Closes stream/voice peer connections and remote outputs but deliberately
@@ -627,7 +640,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
    * the "unexpected signalling offline" path, not a user leave.
    */
   const detachMediaPeers = useCallback((preserveStreamWindow = false) => {
-    pendingStreamRewatchRef.current = null
     closeStreamLocally(preserveStreamWindow)
     setStreamRewatching(false)
 
@@ -1140,8 +1152,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         historyStore.removeServer(event.server_id)
         notificationCenter.removeServer(event.server_id)
         if (voiceSessionRef.current?.serverId === event.server_id) closeVoiceLocally()
-        setStreams((current) => Object.fromEntries(
-          Object.entries(current).filter(([, value]) => value.server_id !== event.server_id),
+        replaceStreamCatalog(Object.fromEntries(
+          Object.entries(streamsRef.current).filter(([, value]) => value.server_id !== event.server_id),
         ))
         const remaining = serversRef.current.filter((server) => server.id !== event.server_id)
         serversRef.current = remaining
@@ -1323,11 +1335,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         closeVoiceLocally()
       },
       onStreamSnapshot: (snapshot) => {
-        streamsRef.current = indexStreams(snapshot.streams)
-        setStreams(streamsRef.current)
+        replaceStreamCatalog(indexStreams(snapshot.streams))
+        if (streamPublisherWaitRef.current !== null) void streamWatchActionRef.current(false, false, true)
       },
       onStreamStarted: (value) => {
         upsertStream(value)
+        const target = streamTargetRef.current
+        if (streamPublisherWaitRef.current !== null && target?.userId === value.publisher_user_id && target.channelId === value.channel_id) {
+          void streamWatchActionRef.current(false, false, true)
+        }
         if (streamRoleRef.current === 'publisher' && value.publisher_connection_id === voiceSessionRef.current?.connectionId) streamTargetRef.current = { publisherId: value.publisher_connection_id, userId: value.publisher_user_id, channelId: value.channel_id }
         if (value.publisher_user_id === user?.id && value.mode === 'p2p' && streamRoleRef.current === 'publisher') {
           setStreamStatus('connected')
@@ -1336,10 +1352,15 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       onStreamUpdated: upsertStream,
       onStreamStopped: (event) => {
         removeStream(event.channel_id, event.publisher_connection_id)
-        if (voiceSessionRef.current?.channelId === event.channel_id && streamRoleRef.current && (!event.publisher_connection_id || event.publisher_connection_id === streamTargetRef.current?.publisherId)) {
-          if (event.reason && event.reason !== 'stream stopped by user') setStreamError(event.reason)
-          closeStreamLocally()
+        if (voiceSessionRef.current?.channelId !== event.channel_id || !streamRoleRef.current ||
+          (event.publisher_connection_id && event.publisher_connection_id !== streamTargetRef.current?.publisherId)) return
+        if (streamRoleRef.current === 'viewer' && !pendingStreamRewatchRef.current && event.reason === 'voice signaling connection was lost') {
+          closeStreamLocally(true)
+          void streamWatchActionRef.current(false, false, true)
+          return
         }
+        if (event.reason && event.reason !== 'stream stopped by user') setStreamError(event.reason)
+        closeStreamLocally()
       },
       onStreamLeft: (_event, requestId) => {
         if (recoveryRef.current?.staleConnectionId()) return
@@ -1445,7 +1466,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       const recovering = phase === 'signalling_lost' || phase === 'rejoining_voice' || phase === 'restoring_stream'
       if (replacing && voiceSessionRef.current && !recovering) recoveryActions.offline()
     }
-  }, [api.servers, refreshMembers, setMembers, historyStore, notificationCenter, recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate, notify])
+  }, [api.servers, refreshMembers, setMembers, historyStore, notificationCenter, recordingMerge, setMemberAvatar, token, realtimeBaseUrl, expire, user?.id, applyChannelRead, recordLastMessage, replaceChannelReads, replaceStreamCatalog, closeStreamLocally, closeVoiceLocally, removeStream, removeVoiceParticipant, upsertStream, upsertVoiceParticipant, playUISound, isRoommate, notify])
 
   useEffect(() => {
     if (selectedServerId && selectedChannelId && chatVisible) realtimeRef.current?.subscribe(selectedServerId, selectedChannelId)
@@ -1759,6 +1780,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       // Keep watching through the screen picker. Only a confirmed capture
       // replaces our viewer; the other publishers remain live in the channel.
       if (replacingViewer) leaveStream()
+      clearStreamPublisherWait()
+      setStreamRewatching(false)
       streamCaptureRef.current = capture
       // A reused capture may still carry a mute from the previous stream.
       capture.getAudioTracks().forEach((track) => { track.enabled = true })
@@ -1934,15 +1957,28 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     const target = streamTargetRef.current
     if (restoring && target?.channelId !== channel.id) return
     const selectedId = publisherId ?? ((rewatch || restoring) && target?.channelId === channel.id ? target.publisherId : undefined)
-    const activeStream = streamInChannel(streamsRef.current, channel.id, selectedId)
-      ?? (restoring && target?.channelId === channel.id ? streamsInChannel(streamsRef.current, channel.id).find((stream) => stream.publisher_user_id === target.userId) : null)
-    if (!activeStream || streamRoleRef.current) { if (!activeStream) setStreamError('Выбранная трансляция уже завершена'); return }
+    if (streamRoleRef.current) return
     const preparingAttempt = streamAttemptRef.current
     let runtime: typeof import('../services/stream')
     let hdr: typeof import('../services/hdrCapabilities')
     try { [runtime, hdr] = await Promise.all([import('../services/stream'), import('../services/hdrCapabilities')]) }
-    catch (error) { failStream(error); return }
+    catch (error) { if (streamAttemptRef.current === preparingAttempt) failStream(error); return }
     if (streamAttemptRef.current !== preparingAttempt || voiceSessionRef.current?.channelId !== channel.id || streamRoleRef.current) return
+    const activeStream = streamInChannel(streamsRef.current, channel.id, selectedId)
+      ?? (restoring && target ? streamsInChannel(streamsRef.current, channel.id).find((stream) => stream.publisher_user_id === target.userId) : null)
+    if (!activeStream) {
+      if (restoring) {
+        if (streamPublisherWaitRef.current === null) {
+          setStreamRewatching(true)
+          streamPublisherWaitRef.current = window.setTimeout(() => {
+            closeStreamLocally()
+            setStreamError('Выбранная трансляция уже завершена')
+          }, 60_000)
+        }
+      } else setStreamError('Выбранная трансляция уже завершена')
+      return
+    }
+    clearStreamPublisherWait()
     const { BrowserServerStreamSession, BrowserP2PStreamViewer, supportedStreamCodecs } = runtime
     const { detectHDRCapabilities, streamWatchCapabilities } = hdr
     if (!supportedStreamCodecs('receive').includes(activeStream.codec)) {
@@ -2036,7 +2072,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     try {
       await watchStream(forceSDR, rewatch, restoring, publisherId)
     } finally {
-      if (streamAttemptRef.current === attempt) setStreamRewatching(false)
+      if ((rewatch || restoring) && streamAttemptRef.current === attempt &&
+        streamPublisherWaitRef.current === null && !streamRoleRef.current) closeStreamLocally()
     }
   }
 	streamStartActionRef.current = (restoring) => {
@@ -2847,7 +2884,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     ? voiceParticipantList.filter((participant) => participant.server_id === selectedChannel.server_id && participant.channel_id === selectedChannel.id)
     : [], [selectedChannel, voiceParticipantList])
   const activeVoiceChannel = voiceSession ? { id: voiceSession.channelId, name: voiceSession.channelName } : null
-  const activeVoiceStream = voiceSession ? streamInChannel(streams, voiceSession.channelId, streamRole ? streamTargetRef.current?.publisherId : undefined) : null
+  const playerRole = streamRole ?? (streamRewatching || (mediaRecovering && recoveryRef.current?.intent?.streamRole === 'viewer') ? 'viewer' : null)
+  const activeVoiceStream = voiceSession ? streamInChannel(streams, voiceSession.channelId, playerRole ? streamTargetRef.current?.publisherId : undefined) : null
   useEffect(() => {
     if (!pendingWatch.current || voiceStatus !== 'connected' || voiceSession?.channelId !== pendingWatch.current.channelId) return
     const publisherId = pendingWatch.current?.publisherId
@@ -2879,7 +2917,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => { const leave = () => leaveForDirectCall.current(); window.addEventListener('voxhold:direct-call-starting', leave); return () => window.removeEventListener('voxhold:direct-call-starting', leave) }, [])
   const channelChat = <ChatPanel renderComments={token && selectedChannel ? (post, onClose) => <NewsComments key={`${selectedChannel.id}:${post.id}`} api={api} token={token} store={historyStore} channel={selectedChannel} post={post} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage || ((selectedChannel?.permissions ?? 0) & 16) !== 0} members={members} pending={history.pending} focusId={focusedMessageId} onClose={onClose} onOpenProfile={(id, _username, role) => { void openUserProfile(id, role) }}/> : undefined} key={selectedChannel?.id ?? 0} channel={selectedChannel} messages={messages} loading={messagesLoading} loadingOlder={loadingOlder} hasMore={hasMore} loadingNewer={loadingNewer} hasNewer={hasNewer} currentUserId={user?.id ?? 0} currentRole={selectedServer?.role} canManage={!!canManage || ((selectedChannel?.permissions ?? 0) & 16) !== 0} members={members} pinnedMessageIds={pinnedMessageIds} focusVersion={messageFocusVersion} focusedMessageId={focusedMessageId} channelReads={selectedChannelId ? (channelReads[selectedChannelId] ?? {}) : {}} onLoadOlder={loadOlder} onLoadNewer={loadNewer} onReturnToLatest={returnToLatest} onReadThrough={markReadThrough} pendingMessages={history.pending} onRetryPending={(item) => { if (selectedServerId && selectedChannelId) void historyStore.send(selectedServerId, selectedChannelId, item.content, item.id) }} onDismissPending={(id) => { if (selectedChannelId) historyStore.dismiss(selectedChannelId, id) }} initialViewport={historyStore.viewport(selectedChannelId)} onViewport={(value) => { historyStore.viewport(selectedChannelId, value); notificationCenter.contextChanged() }} onSend={sendMessage} onSetReaction={setMessageReaction} onLoadReactors={loadMessageReactors} onForward={(message) => { if (selectedServerId) setForwardSource({ serverId: selectedServerId, message }) }} onOpenMessage={(id) => { if (selectedChannelId) void openMessage(selectedChannelId, id) }} isMessageDeleted={(id) => !!selectedChannelId && historyStore.isDeleted(selectedChannelId, id)} onEdit={editMessage} onDelete={deleteMessage} onTogglePin={toggleMessagePin} onOpenProfile={(userId, _username, role) => void openUserProfile(userId, role)}/>
   const streamChannelIsOpen = !personalOpen && !!voiceSession && selectedServerId === voiceSession.serverId && selectedChannelId === voiceSession.channelId && selectedChannel?.kind === 'voice'
-  const playerRole = streamRole ?? (streamRewatching || (mediaRecovering && recoveryRef.current?.intent?.streamRole === 'viewer') ? 'viewer' : null)
   const viewedVoiceMenu = viewedProfile && <MemberVoiceMenu items={memberVoiceActions(viewedProfile.user_id, viewedProfile.username, membersById.get(viewedProfile.user_id)?.role ?? viewedProfileRole)}/>
   const canChangeViewedRole = !!selectedServer && selectedServer.role === 'owner' && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner'
   const canBanViewedMember = !!selectedServer && !!viewedProfile && viewedProfile.user_id !== user?.id && viewedProfileRole !== 'owner' && (selectedServer.role === 'owner' || (selectedServer.role === 'admin' && viewedProfileRole === 'member'))

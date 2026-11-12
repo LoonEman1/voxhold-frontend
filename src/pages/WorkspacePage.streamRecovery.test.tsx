@@ -119,16 +119,35 @@ it('restores the same publisher and keeps the expanded player mounted across sig
     emit('onReady', { multipleStreams: true })
     emit('onStreamSnapshot', { streams: [
       { ...stream, publisher_connection_id: 'other', publisher_user_id: 3 },
-      { ...stream, publisher_connection_id: 'publisher-reconnected' },
     ] })
   })
   await waitFor(() => expect(fixture.joinVoice).toHaveBeenCalledTimes(2))
   const rejoined = { ...participant, connection_id: 'viewer-2' }
   act(() => emit('onVoiceJoined', { participant: rejoined, participants: [rejoined] }))
+  await act(async () => undefined)
+  expect(fixture.watch).toHaveBeenCalledOnce()
+  expect(screen.getByTestId('stream-player')).toBe(player)
+  act(() => emit('onStreamStarted', { ...stream, publisher_connection_id: 'publisher-reconnected' }))
   await waitFor(() => expect(fixture.watch).toHaveBeenCalledTimes(2))
   expect(fixture.watch.mock.calls[1]?.[3]).toBe('publisher-reconnected')
   expect(screen.getByTestId('stream-player')).toBe(player)
   expect(player.textContent).toBe('expanded')
+})
+
+it('keeps playback open when only the publisher reconnects', async () => {
+  await startViewer(true)
+  const player = screen.getByTestId('stream-player')
+  act(() => emit('onStreamStopped', { ...stream, reason: 'voice signaling connection was lost' }))
+  expect(screen.getByTestId('stream-player')).toBe(player)
+  await act(async () => undefined)
+  expect(fixture.watch).toHaveBeenCalledOnce()
+  act(() => emit('onStreamStarted', { ...stream, publisher_connection_id: 'publisher-reconnected' }))
+  await waitFor(() => expect(fixture.watch).toHaveBeenCalledTimes(2))
+  expect(fixture.watch.mock.calls[1]?.[3]).toBe('publisher-reconnected')
+  expect(screen.getByTestId('stream-player')).toBe(player)
+
+  act(() => emit('onStreamStopped', { ...stream, publisher_connection_id: 'publisher-reconnected', reason: 'stream stopped by user' }))
+  expect(screen.queryByTestId('stream-player')).toBeNull()
 })
 
 it('keeps a reconnecting participant in the sidebar until their new connection is ready', async () => {
