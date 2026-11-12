@@ -141,6 +141,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const previousFocus = useRef<number | null>(null)
   const followingRef = useRef(true)
   const pinnedOffset = useRef<number | null>(null)
+  const followReply = useRef(false)
   const previousTail = useRef<{ channelId: number | null; lastId: number | undefined; pending: PendingMessage[] }>({ channelId: null, lastId: undefined, pending: [] })
   const readFrameRef = useRef<number | null>(null)
   const onReadThroughRef = useRef(onReadThrough)
@@ -186,6 +187,13 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     pinnedOffset.current = container.scrollTop
     followingRef.current = true
   }, [])
+
+  useLayoutEffect(() => {
+    if (!replyTarget || !followReply.current) return
+    followReply.current = false
+    virtualizer.cancelScroll()
+    pinToBottom()
+  }, [replyTarget, pinToBottom, virtualizer])
 
   const scheduleReadCheck = () => {
     if (readFrameRef.current !== null) return
@@ -451,6 +459,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const beginReply = (message: Message) => {
     if (!canReply) return
     if (channel?.kind === 'news') { setDiscussion(message); return }
+    followReply.current = followingRef.current || (!hasNewer && message.id === lastMessageId)
     setReplyTarget({ message_id: message.id, author: message.author, content: message.content, revision: message.revision ?? 0, deleted: false })
     setComposerFocus((current) => current + 1)
   }

@@ -164,6 +164,8 @@ test('sending from an old quoted message returns to the latest history', async (
   await expect.poll(bottomGap).toBeLessThanOrEqual(2)
   const historyHeight = await history.evaluate((root) => root.clientHeight)
   await sent.hover()
+  // Browsers may adjust the history while bringing the reply control into view.
+  await history.evaluate((root) => { root.scrollTop -= 84 })
   await sent.getByRole('button', { name: 'Ответить на сообщение' }).click()
   await expect(page.getByRole('button', { name: 'Отменить ответ' })).toBeVisible()
   await expect.poll(() => history.evaluate((root) => root.clientHeight)).toBeLessThan(historyHeight)
