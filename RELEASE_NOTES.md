@@ -1,17 +1,27 @@
 # Voxhold Frontend 2.7.1
 
-Патч интерфейса для серверов Voxhold 2.7.0.
+Патч голосовой связи, трансляций и интерфейса. Для восстановления
+голосовой связи и трансляций сначала обновите бэкенд до 2.7.1.
 
+- В голосовом канале участники сохраняют место в списке и получают
+  индикатор переподключения.
+- Плеер сохраняет полноэкранный режим при обрыве и ждёт возвращения
+  выбранного автора трансляции. В полноэкранном режиме курсор скрывается
+  вместе с элементами управления.
 - История канала сохраняет позицию при прокрутке вверх, в том числе пока
   заканчивается фоновая загрузка сообщений.
 - После серии быстрых отправок последнее сообщение целиком остаётся в поле
   зрения, в том числе в чатах с предпросмотрами ссылок.
+- После отправки ответа на старое сообщение чат показывает последнюю реплику.
 - Экран входа и регистрации получил общий фон Voxhold на всю страницу и
   контрастную форму. Оформление поддерживает светлую и тёмную темы и узкие экраны.
 
-English: channel history stays put during scrolling and keeps the newest message
-visible after rapid sends. Sign-in and registration share a full-page Voxhold
-backdrop in both themes.
+English: show voice reconnection status and resume the selected stream in
+fullscreen. Channel history stays put during scrolling and shows the latest
+message after rapid sends or replies. Sign-in and registration share a
+full-page Voxhold backdrop in both themes.
+
+[Фронтенд-ПР #127](https://github.com/LoonEman1/voxhold-frontend/pull/127)
 
 # Voxhold Frontend 2.7.0
 
