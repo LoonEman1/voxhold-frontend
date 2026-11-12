@@ -48,6 +48,14 @@ it('reconnects immediately on online and gives a resumed tab a fresh ping deadli
   Socket.latest.event('pong', ping.request_id); state.mockClear()
   await vi.advanceTimersByTimeAsync(10_000); expect(state).not.toHaveBeenCalledWith('offline')
 })
+it('replaces a stale socket immediately when the network comes back', () => {
+  const old = Socket.latest
+  window.dispatchEvent(new Event('offline'))
+  expect(state).toHaveBeenCalledWith('offline')
+  expect(old.readyState).toBe(3)
+  window.dispatchEvent(new Event('online'))
+  expect(Socket.latest).not.toBe(old)
+})
 it('removes all timers and lifecycle listeners on close', async () => {
   const old = Socket.latest; client.close(); state.mockClear()
   window.dispatchEvent(new Event('online')); document.dispatchEvent(new Event('visibilitychange'))

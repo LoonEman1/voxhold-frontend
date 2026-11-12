@@ -180,6 +180,7 @@ export class RealtimeClient {
   connect() {
     this.intentionallyClosed = false
     window.addEventListener?.('online', this.reconnectImmediately)
+    window.addEventListener?.('offline', this.handleOffline)
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.visibility)
       if (document.visibilityState === 'hidden') this.hiddenAt = Date.now()
@@ -209,7 +210,7 @@ export class RealtimeClient {
     return this.send('typing.start', { server_id: serverId, channel_id: channelId })
   }
 
-  joinVoice(serverId: number, channelId: number, selfMute: boolean, selfDeaf: boolean, e2eeDeviceId?: string) {
+  joinVoice(serverId: number, channelId: number, selfMute: boolean, selfDeaf: boolean, e2eeDeviceId?: string, resumeConnectionId?: string) {
     return this.send('voice.join', {
       server_id: serverId,
       channel_id: channelId,
@@ -217,6 +218,7 @@ export class RealtimeClient {
       self_deaf: selfDeaf,
       supports_move: true,
       ...(e2eeDeviceId ? { e2ee_device_id: e2eeDeviceId } : {}),
+      ...(resumeConnectionId ? { resume_connection_id: resumeConnectionId } : {}),
     })
   }
 
@@ -348,6 +350,7 @@ export class RealtimeClient {
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
     window.removeEventListener?.('online', this.reconnectImmediately)
+    window.removeEventListener?.('offline', this.handleOffline)
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.visibility)
     this.hiddenAt = null
     this.resetSocket()?.close(1000, 'client closed')
@@ -383,6 +386,10 @@ export class RealtimeClient {
     this.options.onStateChange('offline')
     if (!this.intentionallyClosed) this.scheduleReconnect()
     socket?.close(4000, reason)
+  }
+
+  private readonly handleOffline = () => {
+    if (this.socket && !this.intentionallyClosed) this.abandonSocket('network_offline')
   }
 
   private readonly reconnectImmediately = () => {
@@ -642,7 +649,7 @@ export class RealtimeClient {
   }
 
   private scheduleReconnect() {
-    const delay = reconnectDelayMs(this.attempts) + Math.random() * 500
+    const delay = reconnectDelayMs(this.attempts) + Math.random() * 250
     this.attempts += 1
     clientDiagnostics.record('websocket', 'reconnect_scheduled', 'warn', {
       attempt: this.attempts,
@@ -676,7 +683,7 @@ export function isAuthClose(code: number, reason: string | undefined) {
  * longer outage backs off to 30 s.
  */
 export function reconnectDelayMs(attempt: number) {
-  if (attempt < 15) return Math.min(1_000 * 1.5 ** attempt, 5_000)
+  if (attempt < 15) return Math.min(500 * 2 ** attempt, 5_000)
   return Math.min(5_000 * 2 ** (attempt - 15), 30_000)
 }
 

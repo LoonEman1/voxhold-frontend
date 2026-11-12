@@ -23,7 +23,7 @@ export class WebRTCRecoveryController {
   private running = false
 
   constructor(
-    private readonly delays = [2000, 5000, 10000, 20000],
+    private readonly delays = [500, 1500, 3000, 5000, 10000, 15000],
     private readonly exhaustionGrace = 10000,
   ) {}
 

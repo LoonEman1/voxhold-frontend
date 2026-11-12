@@ -22,7 +22,7 @@ interface PersistentStreamPlayerProps {
   audioMuted?: boolean
   onToggleAudio?: () => void
   status: 'idle' | 'requesting' | 'signaling' | 'connected'
-  media: MediaStream
+  media: MediaStream | null
   channelName: string
   publisherName?: string
   preferences: StreamPreferences
@@ -161,7 +161,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
   }, [mode, uiHidden])
 
   // Cinema mode shows nothing but the picture: the controls come back on any
-  // input and fade out again after a short pause. The cursor stays visible.
+  // input and fade out again after a short pause.
   useEffect(() => {
     controlsHoveredRef.current = false
     const player = playerRef.current
@@ -232,7 +232,7 @@ export function PersistentStreamPlayer({ onPlaybackRecovery, mode, stream, role,
           <button className="button button--primary" type="button" onClick={() => { gain.resume(); enableAudio() }}><Icon name="volume"/>Включить звук</button>
         </div>
       )}
-      {!audioBlockedOverlay && playbackState === 'stalled' && (
+      {!audioBlockedOverlay && (playbackState === 'stalled' || (!media && status === 'signaling' && uiHidden)) && (
         <div className="stream-audio-blocked-overlay"><span>Восстанавливаем соединение…</span></div>
       )}
       {!uiHidden && !audioBlockedOverlay && playbackState !== 'playing' && playbackState !== 'stalled' && !isPublisher && <span className="stream-preview-player__status">{liveLabel}</span>}
