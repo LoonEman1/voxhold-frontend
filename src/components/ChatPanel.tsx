@@ -77,11 +77,17 @@ function sameDay(left: number, right: number) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
+const bottomTolerance = 2
+
+function distanceFromBottom(container: HTMLDivElement) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight
+}
+
 function readViewport(container: HTMLDivElement): ChatViewport | undefined {
   const rect = container.getBoundingClientRect()
   const row = [...container.querySelectorAll<HTMLElement>('[data-message-id]')].find((element) => element.getBoundingClientRect().bottom > rect.top + 2)
   if (!row) return
-  return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: container.scrollHeight - container.scrollTop - container.clientHeight < 180 }
+  return { messageId: Number(row.dataset.messageId), offset: row.getBoundingClientRect().top - rect.top, following: distanceFromBottom(container) <= bottomTolerance }
 }
 
 export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin = true, readOnlyLabel, emptyLabel, renderComments, onSetReaction, onLoadReactors, onForward, onOpenMessage, isMessageDeleted, pendingMessages = [], onRetryPending, onDismissPending, initialViewport, onViewport, channel, messages, loading, loadingOlder, hasMore, loadingNewer, hasNewer, currentUserId, currentRole, canManage, members, pinnedMessageIds, focusedMessageId, focusVersion = 0, channelReads, onLoadOlder, onLoadNewer, onReturnToLatest, onReadThrough, onSend, onEdit, onDelete, onTogglePin, onOpenProfile }: ChatPanelProps) {
@@ -132,11 +138,11 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const autoLoadingNewerRef = useRef(false)
   const previousChannel = useRef<number | null>(null)
   const pendingChannelScroll = useRef<number | null>(null)
-  const previousMessageCount = useRef(0)
   const previousFocus = useRef<number | null>(null)
   const followingRef = useRef(true)
-  const previousPendingChannel = useRef<number | null>(null)
-  const previousPendingMessages = useRef<readonly PendingMessage[]>([])
+  const pinnedOffset = useRef<number | null>(null)
+  const followReply = useRef(false)
+  const previousTail = useRef<{ channelId: number | null; lastId: number | undefined; pending: PendingMessage[] }>({ channelId: null, lastId: undefined, pending: [] })
   const readFrameRef = useRef<number | null>(null)
   const onReadThroughRef = useRef(onReadThrough)
   onReadThroughRef.current = onReadThrough
@@ -165,12 +171,29 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     useAnimationFrameWithResizeObserver: true,
     enabled: virtualized,
     anchorTo: 'end',
-    followOnAppend: true,
-    scrollEndThreshold: 180,
+    // Keep keyed anchoring for prepends. A negative threshold disables the
+    // virtualizer's end correction so the chat can use the DOM bottom including the outbox.
+    scrollEndThreshold: -1,
     initialRect: { width: 800, height: 600 },
   })
   const virtualItems = virtualizer.getVirtualItems()
   const visibleRows = virtualized ? virtualItems.map((item) => ({ index: item.index, key: item.key })) : displayMessages.map((message, index) => ({ index, key: message.id }))
+  const lastMessageId = displayMessages.at(-1)?.id
+
+  const pinToBottom = useCallback(() => {
+    const container = scrollRef.current
+    if (!container?.clientHeight) return
+    container.scrollTop = container.scrollHeight
+    pinnedOffset.current = container.scrollTop
+    followingRef.current = true
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!replyTarget || !followReply.current) return
+    followReply.current = false
+    virtualizer.cancelScroll()
+    pinToBottom()
+  }, [replyTarget, pinToBottom, virtualizer])
 
   const scheduleReadCheck = () => {
     if (readFrameRef.current !== null) return
@@ -201,27 +224,29 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     if (channelId === null) {
       previousChannel.current = null
       pendingChannelScroll.current = null
-      previousMessageCount.current = 0
       return
     }
     const channelChanged = previousChannel.current !== channelId
     if (channelChanged) {
       viewportToRestore.current = initialViewport
+      followingRef.current = initialViewport?.following !== false
+      pinnedOffset.current = null
       previousChannel.current = channelId
       pendingChannelScroll.current = channelId
-      previousMessageCount.current = 0
       previousFocus.current = null
     }
-    if (loading || displayMessages.length === 0) return
+    // Position a visible history even if a background sync is still running.
+    if (displayMessages.length === 0) return
     if (!focusedMessageId) previousFocus.current = null
     if (focusedMessageId && previousFocus.current !== focusedMessageId) {
+      followingRef.current = false
+      pinnedOffset.current = null
       if (virtualized) {
         const index = displayMessages.findIndex((message) => message.id === focusedMessageId)
         if (index >= 0) {
           virtualizer.scrollToIndex(index, { align: 'center' })
           previousFocus.current = focusedMessageId
           pendingChannelScroll.current = null
-          previousMessageCount.current = displayMessages.length
           return
         }
       }
@@ -230,14 +255,14 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
         target.scrollIntoView({ block: 'center', behavior: 'auto' })
         previousFocus.current = focusedMessageId
         pendingChannelScroll.current = null
-        previousMessageCount.current = displayMessages.length
         return
       }
     }
     if (pendingChannelScroll.current === channelId) {
       const saved = viewportToRestore.current
-      viewportToRestore.current = undefined
       const index = saved ? displayMessages.findIndex((message) => message.id === saved.messageId) : -1
+      if (loading && saved && !saved.following && index < 0) return
+      viewportToRestore.current = undefined
       if (saved && !saved.following && index >= 0) {
         virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' })
         let attempts = 0, stable = 0
@@ -256,58 +281,45 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
           else restoreFrame.current = null
         }
         restoreFrame.current = requestAnimationFrame(restore)
-      } else if (virtualized) virtualizer.scrollToEnd()
-      else container.scrollTop = container.scrollHeight
+      } else pinToBottom()
       pendingChannelScroll.current = null
-      previousMessageCount.current = displayMessages.length
-      return
     }
-    const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 180
-    if (!virtualized && displayMessages.length > previousMessageCount.current && (followingRef.current || wasNearBottom)) {
-      container.scrollTop = container.scrollHeight
-    }
-    previousMessageCount.current = displayMessages.length
-  }, [channelId, focusedMessageId, focusVersion, initialViewport, loading, displayMessages, virtualized, virtualizer])
+  }, [channelId, focusedMessageId, focusVersion, initialViewport, loading, displayMessages, virtualized, virtualizer, pinToBottom])
 
   useLayoutEffect(() => {
     const visible = pendingMessages.filter((item) => channel?.kind !== 'news' || !item.reply)
-    if (channelId === null || previousPendingChannel.current !== channelId) {
-      previousPendingChannel.current = channelId
-      previousPendingMessages.current = visible
-      followingRef.current = initialViewport?.following !== false
-      return
-    }
-    const previous = previousPendingMessages.current
-    const added = visible.some((item) => !previous.some((old) => old.id === item.id))
-    const removed = previous.some((old) => !visible.some((item) => item.id === old.id))
+    const previous = previousTail.current
+    previousTail.current = { channelId, lastId: lastMessageId, pending: visible }
+    if (channelId === null || previous.channelId !== channelId) return
+    const added = visible.some((item) => !previous.pending.some((old) => old.id === item.id))
+    const removed = previous.pending.some((old) => !visible.some((item) => item.id === old.id))
     const changed = visible.some((item) => {
-      const old = previous.find((value) => value.id === item.id)
+      const old = previous.pending.find((value) => value.id === item.id)
       return old && (old.content !== item.content || old.status !== item.status || old.error !== item.error)
     })
-    previousPendingMessages.current = visible
-    const shouldFollow = added || followingRef.current && (removed || changed)
-    const container = scrollRef.current
-    if (!container || !shouldFollow) return
+    const appended = lastMessageId !== undefined && lastMessageId > (previous.lastId ?? 0)
+    const shouldFollow = added || followingRef.current && restoreFrame.current === null && (appended || removed || changed)
+    if (!shouldFollow) return
     virtualizer.cancelScroll()
-    container.scrollTop = container.scrollHeight
-    followingRef.current = true
-  }, [channel?.kind, channelId, initialViewport, pendingMessages, virtualizer])
+    pinToBottom()
+  }, [channel?.kind, channelId, lastMessageId, pendingMessages, pinToBottom, virtualizer])
 
   useLayoutEffect(() => {
     const container = scrollRef.current
     const content = scrollContentRef.current
     if (!container || !content || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
-      if (!followingRef.current || focusedMessageId || restoreFrame.current !== null || !container.clientHeight) return
+      if (!followingRef.current || restoreFrame.current !== null) return
+      // Native scrolling can move the viewport before its scroll event arrives.
+      if (pinnedOffset.current !== null && container.scrollTop < pinnedOffset.current - bottomTolerance && distanceFromBottom(container) > bottomTolerance) return
       // Composer resizing and measured virtual rows can both change the end
       // after a send or acknowledgement has already scrolled there.
-      virtualizer.cancelScroll()
-      container.scrollTop = container.scrollHeight
+      pinToBottom()
     })
     observer.observe(container)
     observer.observe(content)
     return () => observer.disconnect()
-  }, [channelId, focusedMessageId, virtualizer])
+  }, [channelId, pinToBottom])
 
   useEffect(() => {
     const root = scrollRef.current
@@ -345,9 +357,14 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const updateReturnVisibility = (fromScroll = false) => {
     const container = scrollRef.current
     if (!container) return
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
-    if (fromScroll) followingRef.current = distanceFromBottom < 180
-    setShowReturnToLatest(distanceFromBottom > Math.max(container.clientHeight, 420))
+    const distance = distanceFromBottom(container)
+    // An acknowledgement or row measurement can grow the scroll extent before
+    // the browser delivers the event for our previous bottom scroll.
+    if (fromScroll && !container.hidden && (distance <= bottomTolerance || container.scrollTop !== pinnedOffset.current)) {
+      followingRef.current = distance <= bottomTolerance
+      pinnedOffset.current = followingRef.current ? container.scrollTop : null
+    }
+    setShowReturnToLatest(distance > Math.max(container.clientHeight, 420))
   }
 
   useEffect(() => { updateReturnVisibility() }, [hasNewer, loading, messages])
@@ -374,8 +391,8 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     try {
       await onReturnToLatest()
       window.requestAnimationFrame(() => {
-        const container = scrollRef.current
-        if (container) container.scrollTop = container.scrollHeight
+        virtualizer.cancelScroll()
+        pinToBottom()
         setShowReturnToLatest(false)
       })
     } finally {
@@ -394,7 +411,6 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
     if (channelId === null) {
       previousChannel.current = null
       pendingChannelScroll.current = null
-      previousMessageCount.current = 0
     }
   }, [channelId])
 
@@ -443,6 +459,7 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
   const beginReply = (message: Message) => {
     if (!canReply) return
     if (channel?.kind === 'news') { setDiscussion(message); return }
+    followReply.current = followingRef.current || (!hasNewer && message.id === lastMessageId)
     setReplyTarget({ message_id: message.id, author: message.author, content: message.content, revision: message.revision ?? 0, deleted: false })
     setComposerFocus((current) => current + 1)
   }
@@ -540,7 +557,13 @@ export function ChatPanel({ threadRootId, canCompose: composeOverride, allowPin 
 
   return (
     <section className="chat-panel" onPaste={attachmentUpload.onPaste} onDrop={attachmentUpload.onDrop} onDragOver={attachmentUpload.onDragOver}>
-      <div className="messages" hidden={scheduled} ref={scrollRef} onScroll={() => { updateReturnVisibility(true); scheduleReadCheck() }}>
+      <div className="messages" hidden={scheduled} ref={scrollRef} onScroll={() => { updateReturnVisibility(true); scheduleReadCheck() }}
+        onWheelCapture={(event) => {
+          if (event.deltaY >= 0 || event.ctrlKey || event.currentTarget.scrollTop <= 0) return
+          followingRef.current = false
+          pinnedOffset.current = null
+          virtualizer.cancelScroll()
+        }}>
         <div className="message-scroll-content" ref={scrollContentRef}>
         <div className={`message-page-sentinel message-page-sentinel--top ${hasMore ? 'is-active' : ''}`} ref={topSentinelRef}>{loadingOlder && <><span className="spinner"/> Загружаем предыдущие…</>}</div>
         {loading && displayMessages.length === 0 ? <div className="message-skeletons">{Array.from({ length: 5 }).map((_, index) => <div className="message-skeleton" key={index}><i/><span><b/><small/></span></div>)}</div> : messages.length === 0 ? (

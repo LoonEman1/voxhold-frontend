@@ -51,9 +51,26 @@ export function AuthPage({ invite, inviteToken }: { invite?: InviteLinkPreview; 
 
   return (
     <main className="auth-page">
+      <svg className="auth-orbits" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="auth-orbit-color" x1="0" y1="1" x2="1" y2="0">
+            <stop stopColor="var(--lime)" stopOpacity=".5" />
+            <stop offset=".5" stopColor="var(--violet)" stopOpacity=".26" />
+            <stop offset="1" stopColor="var(--violet)" stopOpacity=".68" />
+          </linearGradient>
+        </defs>
+        <g transform="rotate(-28 920 468)" fill="none" stroke="url(#auth-orbit-color)">
+          <ellipse cx="920" cy="468" rx="435" ry="217" />
+          <ellipse cx="920" cy="468" rx="490" ry="270" />
+          <ellipse cx="920" cy="468" rx="555" ry="331" />
+          <ellipse cx="920" cy="468" rx="625" ry="398" />
+          <circle cx="430" cy="468" r="4" fill="var(--lime)" />
+          <circle cx="920" cy="137" r="4" fill="var(--violet)" />
+          <circle cx="920" cy="738" r="3" fill="var(--violet)" />
+        </g>
+      </svg>
       <button className="auth-theme-toggle icon-button" type="button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} /></button>
       <section className="auth-story">
-        <div className="auth-story__noise" />
         <header><Brand /></header>
         <div className="auth-story__copy">
           <span className="auth-pill"><i /> Голос. Текст. Свои люди.</span>
@@ -85,10 +102,10 @@ export function AuthPage({ invite, inviteToken }: { invite?: InviteLinkPreview; 
               : 'Войдите в существующий аккаунт Voxhold.'}</p>
           </div>
 
-          <div className="auth-tabs" role="tablist" aria-label="Авторизация">
-            <button role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'is-active' : ''} onClick={() => changeMode('login')}>Вход</button>
-            {registrationAllowed && <button role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'is-active' : ''} onClick={() => changeMode('register')}>Регистрация</button>}
-          </div>
+          {registrationAllowed && <div className="auth-tabs" role="tablist" aria-label="Авторизация">
+            <button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'is-active' : ''} onClick={() => changeMode('login')}>Вход</button>
+            <button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'is-active' : ''} onClick={() => changeMode('register')}>Регистрация</button>
+          </div>}
 
           <form onSubmit={submit} className="auth-form">
             <label>

@@ -42,6 +42,27 @@ test('workspace resync applies offline edits and deletes without a full reload',
   await expect(page.locator('[data-message-id="491"]')).toHaveCount(0)
 })
 
+test('scrolling just above the latest messages keeps the reading position on resize', async ({ page }) => {
+  await page.goto('/e2e/fixtures/reliability.html')
+  await expect(page.locator('[data-message-id="500"]')).toBeInViewport()
+  const history = page.locator('.messages')
+  const bottomGap = () => history.evaluate((root) => root.scrollHeight - root.scrollTop - root.clientHeight)
+  await expect.poll(() => history.evaluate((root) => root.scrollTop)).toBeGreaterThan(90)
+  await expect.poll(bottomGap).toBeLessThanOrEqual(2)
+  await history.hover()
+  await page.mouse.wheel(0, -90)
+  await expect.poll(bottomGap).toBeGreaterThan(60)
+  const before = await anchor(page)
+  const viewport = page.viewportSize()!
+
+  await page.setViewportSize({ ...viewport, height: viewport.height - 50 })
+
+  await expect.poll(bottomGap).toBeGreaterThan(110)
+  const after = await anchor(page)
+  expect(after.id).toBe(before.id)
+  expect(Math.abs(after.offset - before.offset)).toBeLessThan(2)
+})
+
 test('workspace retries a lost send response with one saved message', async ({ page }) => {
   await page.goto('/e2e/fixtures/reliability.html')
   await expect(page.locator('[data-message-id="500"]')).toBeVisible()
@@ -91,6 +112,24 @@ test('workspace persists an outbox, follows rapid sends and retries after reconn
   await expect.poll(async () => page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith('voxhold.outbox.v1:')))).toBe(false)
 })
 
+test('rapid acknowledgements keep the newest message in view in a mixed-height history', async ({ page }) => {
+  await page.goto('/e2e/fixtures/reliability.html?link-history')
+  await expect(page.locator('[data-message-id="500"]')).toBeInViewport()
+  await page.evaluate(() => window.reliabilityFixture.setOffline(false))
+  const history = page.locator('.messages')
+  const bottomGap = () => history.evaluate((root) => root.scrollHeight - root.scrollTop - root.clientHeight)
+  const composer = page.getByLabel('Сообщение в канал-1')
+
+  for (let index = 1; index <= 8; index++) {
+    await composer.fill(`Быстрая отправка ${index}`)
+    await composer.press('Enter')
+  }
+
+  await expect(page.locator('.message-pending')).toHaveCount(0)
+  await expect(page.locator('[data-message-id="508"]')).toBeInViewport({ ratio: 1 })
+  await expect.poll(bottomGap).toBeLessThanOrEqual(2)
+})
+
 test('rapid reply clicks keep mounted history and reuse a cached target', async ({ page }) => {
   await page.goto('/e2e/fixtures/reliability.html')
   await expect(page.locator('[data-message-id="500"]')).toBeVisible()
@@ -125,6 +164,8 @@ test('sending from an old quoted message returns to the latest history', async (
   await expect.poll(bottomGap).toBeLessThanOrEqual(2)
   const historyHeight = await history.evaluate((root) => root.clientHeight)
   await sent.hover()
+  // Browsers may adjust the history while bringing the reply control into view.
+  await history.evaluate((root) => { root.scrollTop -= 84 })
   await sent.getByRole('button', { name: 'Ответить на сообщение' }).click()
   await expect(page.getByRole('button', { name: 'Отменить ответ' })).toBeVisible()
   await expect.poll(() => history.evaluate((root) => root.clientHeight)).toBeLessThan(historyHeight)
