@@ -424,7 +424,7 @@ describe('RealtimeClient reconnection policy', () => {
   })
 
   it('retries every few seconds during the first minute of an outage', () => {
-    expect(reconnectDelayMs(0)).toBe(1_000)
+    expect(reconnectDelayMs(0)).toBe(500)
     expect(reconnectDelayMs(4)).toBe(5_000)
     const firstMinute = Array.from({ length: 15 }, (_, attempt) => reconnectDelayMs(attempt))
     expect(Math.max(...firstMinute)).toBe(5_000)

@@ -266,6 +266,7 @@ export interface ChannelReadSnapshot {
 
 export interface VoiceParticipant {
   self_video?: boolean
+  reconnecting?: boolean
   connection_id: string
   user_id: EntityId
   server_id: EntityId
@@ -305,7 +306,7 @@ export interface VoiceLeft {
   user_id: EntityId
   server_id: EntityId
   channel_id: EntityId
-  reason?: 'kicked' | 'moved'
+  reason?: 'kicked' | 'moved' | 'reconnected'
   destination_channel_id?: EntityId
 }
 
