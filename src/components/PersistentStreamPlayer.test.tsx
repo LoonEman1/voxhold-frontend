@@ -226,6 +226,24 @@ describe('PersistentStreamPlayer cinema mode', () => {
     expect(dialog.classList.contains('is-idle')).toBe(false)
   })
 
+  it('keeps the same fullscreen video while the viewer reconnects', () => {
+    const props = {
+      mode: 'expanded' as const, role: 'viewer' as const, stream, channelName: 'Общий',
+      preferences: DEFAULT_STREAM_PREFERENCES, startInCinema: true,
+      onPreferencesChange: vi.fn(), onExpand: vi.fn(), onCollapse: vi.fn(), onLeave: vi.fn(),
+    }
+    const { rerender } = render(<PersistentStreamPlayer {...props} status="connected" media={{} as MediaStream}/>)
+    const player = screen.getByRole('dialog')
+    const video = player.querySelector('video')
+    rerender(<PersistentStreamPlayer {...props} status="signaling" media={null}/>)
+    expect(screen.getByRole('dialog')).toBe(player)
+    expect(screen.getByText('Восстанавливаем соединение…')).toBeTruthy()
+    rerender(<PersistentStreamPlayer {...props} status="connected" media={{} as MediaStream}/>)
+    expect(player.querySelector('video')).toBe(video)
+    expect(player.classList.contains('is-ui-hidden')).toBe(true)
+    expect(HTMLElement.prototype.requestFullscreen).toHaveBeenCalledOnce()
+  })
+
   it('resets the hover guard when cinema controls are unmounted', async () => {
     vi.useFakeTimers()
     const dialog = renderExpanded(true)
