@@ -26,6 +26,7 @@ interface AuthContextValue {
   login(username: string, password: string): Promise<void>
   register(username: string, password: string, confirmation: string, inviteToken: string): Promise<void>
   logout(): Promise<void>
+  switchAccount(): Promise<void>
   expire(expectedToken?: string): void
 }
 
@@ -135,23 +136,37 @@ export function AuthProvider({
     return () => { window.clearTimeout(timer); window.clearTimeout(expiryTimer) }
   }, [api, auth, expireNow, persist, storage, apply])
 
+  const startSession = useCallback((next: PersistedAuth) => {
+    storage.selectAccount?.(STORAGE_KEY, next.user.id)
+    persist(next)
+  }, [storage, persist])
+
+  const switchAccount = useCallback(async () => {
+    const userId = authRef.current?.user.id
+    // A refresh can revoke the old token for other tabs on this account.
+    // Let the refresh publish its replacement before changing this tab's scope.
+    const refreshing = refreshFlight.current
+    if (refreshing) await refreshing.promise
+    if (!mounted.current || authRef.current?.user.id !== userId) return
+    storage.selectAccount?.(STORAGE_KEY, null)
+    apply(null, false)
+  }, [storage, apply])
+
   const login = useCallback(
     async (username: string, password: string) => {
-      persist(null)
-      const request = generation.current
+      const request = ++generation.current
       const next = await api.auth.login(username, password)
-      if (mounted.current && generation.current === request) persist(next)
+      if (mounted.current && generation.current === request) startSession(next)
     },
-    [api, persist],
+    [api, startSession],
   )
   const register = useCallback(
     async (username: string, password: string, confirmation: string, inviteToken: string) => {
-      persist(null)
-      const request = generation.current
+      const request = ++generation.current
       const next = await api.auth.register(username, password, confirmation, inviteToken)
-      if (mounted.current && generation.current === request) persist(next)
+      if (mounted.current && generation.current === request) startSession(next)
     },
-    [api, persist],
+    [api, startSession],
   )
   const logout = useCallback(async () => {
     const token = authRef.current?.session.token
@@ -181,9 +196,10 @@ export function AuthProvider({
       login,
       register,
       logout,
+      switchAccount,
       expire,
     }),
-    [auth, ready, login, register, logout, expire],
+    [auth, ready, login, register, logout, switchAccount, expire],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

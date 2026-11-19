@@ -109,16 +109,16 @@ it('filters debug before sanitization in production and aggregates websocket tra
   expect(body.events[0]).toMatchObject({ name: 'websocket_traffic', details: { counts: [{ event_type: 'message.created', received: 100, sent: 0 }] } })
   diagnostics.dispose(); vi.unstubAllEnvs(); vi.unstubAllGlobals()
 })
-it('limits keepalive payloads by encoded bytes and retains remaining events', async () => {
+it.each([false, true])('limits payload bytes and retains events (keepalive=%s)', async (keepalive) => {
   sessionStorage.clear()
   const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 202 }))
   vi.stubGlobal('fetch', request)
   const diagnostics = new ClientDiagnostics('info')
   diagnostics.setToken('session')
   for (let i = 0; i < 30; i++) diagnostics.record('test', 'large', 'info', Object.fromEntries(Array.from({ length: 12 }, (_, k) => [`field${k}`, 'x'.repeat(240)])))
-  await diagnostics.flush(true)
+  await diagnostics.flush(keepalive)
   const init = request.mock.calls[0]![1]!
-  expect(init.keepalive).toBe(true)
+  expect(init.keepalive).toBe(keepalive)
   expect(new TextEncoder().encode(String(init.body)).byteLength).toBeLessThanOrEqual(60 * 1024)
   expect(JSON.parse(String(init.body)).events.length).toBeLessThan(30)
   await vi.waitFor(() => expect(request.mock.calls.reduce((n, [, value]) => n + JSON.parse(String(value!.body)).events.length, 0)).toBe(30))
@@ -128,7 +128,7 @@ it('limits keepalive payloads by encoded bytes and retains remaining events', as
 it('re-sanitizes and bounds a single oversized persisted event before keepalive retry', async () => {
   sessionStorage.clear()
   sessionStorage.setItem('voxhold.diagnostics.session.v1', 's'.repeat(100_000))
-  sessionStorage.setItem('voxhold.diagnostics.pending.v1', JSON.stringify([{ timestamp_ms: 1, category: 'c'.repeat(100_000), name: 'n'.repeat(100_000), level: 'info', details: { token: 'old-secret', field: 'x'.repeat(100_000) } }]))
+  sessionStorage.setItem('voxhold.diagnostics.pending.v1', JSON.stringify([{ timestamp_ms: Date.now(), category: 'c'.repeat(100_000), name: 'n'.repeat(100_000), level: 'info', details: { token: 'old-secret', field: 'x'.repeat(100_000) } }]))
   const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 503 }))
   vi.stubGlobal('fetch', request)
   const diagnostics = new ClientDiagnostics('info')

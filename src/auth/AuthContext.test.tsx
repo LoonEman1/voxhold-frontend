@@ -7,13 +7,85 @@ import { AuthProvider, useAuth } from './AuthContext'
 import type { AuthPayload, Session } from '../domain/types'
 import type { VoxholdApi } from '../services/api'
 import { notifyUnauthorized } from '../services/authEvents'
+import { createBrowserSessionStorage } from '../platform/transport'
 
 const user = { id: 1, username: 'Alice', created_at: 1 }
 const session = (token: string, seconds = 3600): Session => ({ token, expires_at: Math.floor(Date.now()/1000)+seconds })
 function deferred<T>() { let resolve!: (value:T) => void; let reject!: (reason: unknown) => void; const promise = new Promise<T>((a,b) => { resolve=a; reject=b }); return { promise,resolve,reject } }
 let auth!: ReturnType<typeof useAuth>
 function Probe() { auth = useAuth(); return <p>{auth.ready ? auth.token ?? 'out' : 'loading'}</p> }
-afterEach(() => { cleanup(); vi.useRealTimers() })
+afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear(); sessionStorage.clear() })
+
+function browserTab() {
+  const data = new Map<string, string>()
+  return createBrowserSessionStorage(() => ({
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => { data.set(key, value) },
+  }))
+}
+
+it('switches accounts in the current tab and scopes refresh and logout to that account', async () => {
+  const key = 'voxhold.session.v1'
+  const primary = { user, session: session('primary') }
+  const alternate = { user: { ...user, id: 2, username: 'Bob' }, session: session('alternate') }
+  const api = { auth: { login: vi.fn(async () => alternate), logout: vi.fn(async () => undefined) } } as unknown as VoxholdApi
+  localStorage.setItem(key, JSON.stringify(primary))
+  const mainStorage = browserTab(), secondStorage = browserTab()
+  const main = render(<AuthProvider api={api} storage={mainStorage}><Probe/></AuthProvider>)
+  const tab = render(<AuthProvider api={api} storage={secondStorage}><Probe/></AuthProvider>)
+  expect(screen.getAllByText('primary')).toHaveLength(2)
+  await act(() => auth.switchAccount())
+  expect(screen.getByText('out')).toBeTruthy()
+  expect(screen.getByText('primary')).toBeTruthy()
+  await act(() => auth.login('Bob', 'password'))
+  expect(screen.getByText('primary')).toBeTruthy()
+  expect(screen.getByText('alternate')).toBeTruthy()
+  const renewed = { ...alternate, session: session('renewed') }
+  secondStorage.write(key, renewed)
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: `${key}.account.2`, storageArea: localStorage })))
+  expect(screen.getByText('renewed')).toBeTruthy()
+  expect(mainStorage.read(key)).toEqual(primary)
+  await act(() => auth.logout())
+  expect(api.auth.logout).toHaveBeenCalledWith('renewed')
+  expect(screen.getByText('primary')).toBeTruthy()
+  expect(secondStorage.read(key)).toBeNull()
+  expect(mainStorage.read(key)).toEqual(primary)
+  tab.unmount()
+  main.unmount()
+})
+
+it('lets two initially signed-out ordinary tabs complete different logins in parallel', async () => {
+  const alternate = { user: { ...user, id: 2, username: 'Bob' }, session: session('alternate') }
+  const pending = deferred<AuthPayload>()
+  const api = { auth: { login: vi.fn((name: string) => name === 'Bob'
+    ? pending.promise : Promise.resolve({ user, session: session('primary') })) } } as unknown as VoxholdApi
+  render(<AuthProvider api={api} storage={browserTab()}><Probe/></AuthProvider>)
+  const firstLogin = auth.login
+  render(<AuthProvider api={api} storage={browserTab()}><Probe/></AuthProvider>)
+  const secondLogin = auth.login
+  act(() => { void secondLogin('Bob', 'password') })
+  await act(() => firstLogin('Alice', 'password'))
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'voxhold.session.v1.account.1', storageArea: localStorage })))
+  await act(async () => pending.resolve(alternate))
+  expect(screen.getByText('primary')).toBeTruthy()
+  expect(screen.getByText('alternate')).toBeTruthy()
+})
+it('finishes an in-flight refresh before switching away from a session shared with another tab', async () => {
+  const key = 'voxhold.session.v1'
+  const pending = deferred<Session>()
+  const refresh = vi.fn(() => pending.promise)
+  const api = { auth: { refresh } } as unknown as VoxholdApi
+  localStorage.setItem(key, JSON.stringify({ user, session: session('primary', 60) }))
+  const otherTab = browserTab()
+  otherTab.read(key)
+  render(<AuthProvider api={api} storage={browserTab()}><Probe/></AuthProvider>)
+  expect(refresh).toHaveBeenCalledOnce()
+  const switching = auth.switchAccount()
+  await act(async () => { pending.resolve(session('renewed')); await switching })
+  expect(screen.getByText('out')).toBeTruthy()
+  expect(otherTab.read<AuthPayload>(key)?.session.token).toBe('renewed')
+})
+
 function mount(seconds=60, strict=false) {
   const pending = deferred<Session>()
   const refresh = vi.fn(() => pending.promise)

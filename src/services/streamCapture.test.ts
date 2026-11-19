@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { canRestrictOwnAudio, capturedAudioIncludesOwnPlayback, captureScreen } from './screenCapture'
+import { canRestrictOwnAudio, captureAudioMayIncludeVoice, captureScreen } from './screenCapture'
 import { DEFAULT_STREAM_PREFERENCES } from './streamSettings'
 
 class FakeTrack {
@@ -13,6 +13,7 @@ class FakeTrack {
 class FakeMediaStream {
   constructor(private readonly tracks: FakeTrack[]) {}
   getTracks() { return [...this.tracks] }
+  removeTrack(track: FakeTrack) { this.tracks.splice(this.tracks.indexOf(track), 1) }
   getVideoTracks() { return this.tracks.filter((track) => track.kind === 'video') }
   getAudioTracks() { return this.tracks.filter((track) => track.kind === 'audio') }
 }
@@ -32,29 +33,47 @@ afterEach(() => {
 })
 
 describe('screen capture audio', () => {
-  it('asks the browser to keep its own voice chat out of system audio', async () => {
-    const getDisplayMedia = vi.fn(async () => capture('monitor', { restrictOwnAudio: true }))
+  it('requests browser exclusion before selecting the screen and preserves protected system audio', async () => {
+    const media = capture('monitor', { deviceId: 'loopbackWithoutChrome', restrictOwnAudio: true })
+    const getDisplayMedia = vi.fn(async () => media)
     installMediaDevices({ getDisplayMedia } as unknown as Partial<MediaDevices>)
-
     const pending = captureScreen(DEFAULT_STREAM_PREFERENCES)
-    // A lazy module/ICE fetch before this call would lose transient user activation.
     expect(getDisplayMedia).toHaveBeenCalledOnce()
-    const media = await pending
-
+    expect(await pending).toBe(media)
     expect(getDisplayMedia).toHaveBeenCalledWith(expect.objectContaining({
       audio: expect.objectContaining({ restrictOwnAudio: true, echoCancellation: false }),
-      systemAudio: 'include',
+      systemAudio: 'include', windowAudio: 'window',
     }))
     expect(media.getAudioTracks()[0]?.contentHint).toBe('music')
-    expect(capturedAudioIncludesOwnPlayback(media)).toBe(false)
+    expect(captureAudioMayIncludeVoice(media)).toBe(false)
   })
 
-  it('warns only when whole-system audio still carries the page playback', () => {
-    expect(capturedAudioIncludesOwnPlayback(capture('monitor', {}))).toBe(true)
-    expect(capturedAudioIncludesOwnPlayback(capture('window', { restrictOwnAudio: false }))).toBe(true)
-    expect(capturedAudioIncludesOwnPlayback(capture('monitor', { restrictOwnAudio: true }))).toBe(false)
-    expect(capturedAudioIncludesOwnPlayback(capture('browser', {}))).toBe(false)
-    expect(capturedAudioIncludesOwnPlayback(capture('monitor', null))).toBe(false)
+  it('recognizes ordinary system loopback even when settings report own-audio exclusion', async () => {
+    const media = capture('monitor', { deviceId: 'loopback', restrictOwnAudio: true })
+    const track = media.getAudioTracks()[0]!
+    const applyConstraints = vi.fn()
+    Object.assign(track, { applyConstraints })
+    installMediaDevices({ getDisplayMedia: vi.fn(async () => media) } as unknown as Partial<MediaDevices>)
+    await captureScreen(DEFAULT_STREAM_PREFERENCES)
+    expect(media.getAudioTracks()).toEqual([track])
+    expect(captureAudioMayIncludeVoice(media)).toBe(true)
+    expect(applyConstraints).not.toHaveBeenCalled()
+  })
+
+  it('warns on an unknown mixed source without browser exclusion', () => {
+    expect(captureAudioMayIncludeVoice(capture('monitor', {}))).toBe(true)
+    expect(captureAudioMayIncludeVoice(capture('window', { restrictOwnAudio: false }))).toBe(true)
+    expect(captureAudioMayIncludeVoice(capture('browser', {}))).toBe(false)
+    expect(captureAudioMayIncludeVoice(capture('monitor', null))).toBe(false)
+  })
+
+  it('drops audio when turned off even if a browser returns a track', async () => {
+    const media = capture('monitor', {})
+    const audio = media.getAudioTracks()[0]!
+    installMediaDevices({ getDisplayMedia: vi.fn(async () => media) } as unknown as Partial<MediaDevices>)
+    await captureScreen({ ...DEFAULT_STREAM_PREFERENCES, includeAudio: false })
+    expect(media.getAudioTracks()).toEqual([])
+    expect(audio.stop).toHaveBeenCalledOnce()
   })
 
   it('detects support for restrictOwnAudio', () => {
@@ -62,33 +81,6 @@ describe('screen capture audio', () => {
     expect(canRestrictOwnAudio()).toBe(true)
     installMediaDevices({ getSupportedConstraints: () => ({}) } as unknown as Partial<MediaDevices>)
     expect(canRestrictOwnAudio()).toBe(false)
-  })
-
-  it('requests window-only audio and retries a restriction that the picker did not apply', async () => {
-    const media = capture('monitor', { restrictOwnAudio: false })
-    const audio = media.getAudioTracks()[0]!
-    const applyConstraints = vi.fn(async () => { Object.assign(audio.getSettings(), { restrictOwnAudio: true }) })
-    Object.assign(audio, { applyConstraints })
-    const getDisplayMedia = vi.fn(async () => media)
-    installMediaDevices({ getDisplayMedia, getSupportedConstraints: () => ({ restrictOwnAudio: true }) } as unknown as Partial<MediaDevices>)
-    expect(await captureScreen(DEFAULT_STREAM_PREFERENCES)).toBe(media)
-    expect(getDisplayMedia).toHaveBeenCalledWith(expect.objectContaining({ windowAudio: 'window' }))
-    expect(applyConstraints).toHaveBeenCalledWith({ restrictOwnAudio: true })
-    expect(capturedAudioIncludesOwnPlayback(media)).toBe(false)
-    expect(audio.stop).not.toHaveBeenCalled()
-  })
-
-  it.each(['unsupported', 'ignored', 'rejected'])('preserves game audio and reports the echo risk when exclusion is %s', async (support) => {
-    const media = capture('monitor', {})
-    const audio = media.getAudioTracks()[0]!
-    const applyConstraints = support === 'rejected' ? vi.fn().mockRejectedValue(new Error('Unavailable')) : vi.fn().mockResolvedValue(undefined)
-    Object.assign(audio, { applyConstraints })
-    installMediaDevices({ getDisplayMedia: vi.fn(async () => media), getSupportedConstraints: () => ({ restrictOwnAudio: support !== 'unsupported' }) } as unknown as Partial<MediaDevices>)
-    expect(await captureScreen(DEFAULT_STREAM_PREFERENCES)).toBe(media)
-    expect(media.getAudioTracks()).toEqual([audio])
-    expect(audio.stop).not.toHaveBeenCalled()
-    expect(capturedAudioIncludesOwnPlayback(media)).toBe(true)
-    expect(applyConstraints).toHaveBeenCalledTimes(support === 'unsupported' ? 0 : 1)
   })
 })
 

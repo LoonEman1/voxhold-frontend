@@ -62,7 +62,8 @@ import type { VoxholdApi } from '../services/api'
 import { RealtimeClient, type ConnectionState } from '../services/realtime'
 import { ChannelActivityBatch } from '../services/channelActivity'
 import type { BrowserP2PStreamPublisher, BrowserP2PStreamViewer, BrowserServerStreamSession, StreamQualityStats } from '../services/stream'
-import { captureScreen, capturedAudioIncludesOwnPlayback } from '../services/screenCapture'
+import { captureScreen, captureAudioMayIncludeVoice } from '../services/screenCapture'
+import { checkScreenEcho } from '../services/screenEchoCheck'
 import { streamErrorMessage } from '../services/streamErrors'
 import type { StreamAudioGain } from '../services/streamAudioGain'
 import type { StreamPublishPipeline } from '../services/hdrPipeline'
@@ -111,7 +112,7 @@ function upsertPinnedMessage(current: PinnedMessage[], value: PinnedMessage) {
 
 export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   useEffect(() => () => clearThumbnails(), [])
-  const { user, token, logout, expire } = useAuth()
+  const { user, token, logout, expire, switchAccount } = useAuth()
   const securityActions = useMemo<SecurityActions>(() => {
     const need = () => { if (!token) throw new Error('Сессия истекла'); return token }
     return {
@@ -1443,6 +1444,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
           return
         }
         if (streamKind && streamKind !== 'leave') {
+          clientDiagnostics.record('webrtc', 'stream_signaling_rejected', 'warn', { operation: streamKind, code: event.code })
           setStreamError(streamRealtimeError(event.message))
           closeStreamLocally()
           return
@@ -1450,6 +1452,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         const kind = voiceRequestIdsRef.current.get(event.request_id)
         voiceRequestIdsRef.current.delete(event.request_id)
         if (!kind || kind === 'leave') return
+        clientDiagnostics.record('webrtc', 'voice_signaling_rejected', 'warn', { operation: kind, code: event.code })
         setVoiceError(voiceRealtimeError(event.message))
         closeVoiceLocally()
       },
@@ -1695,6 +1698,24 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     } finally { streamSettingsApplyingRef.current = false }
   }
 
+  const diagnoseStreamEcho = async (signal: AbortSignal) => {
+    const audio = streamCaptureRef.current?.getAudioTracks()[0]
+    if (!audio?.enabled || audio.readyState !== 'live') throw new Error('Включите звук трансляции для проверки.')
+    const microphone = voiceInputRef.current?.rawInputTrack()
+    const output = voiceMediaRef.current?.currentOutputDeviceId() ?? voicePreferencesRef.current.outputDeviceId
+    const result = await checkScreenEcho(audio, microphone ?? null, output, signal)
+    clientDiagnostics.record('media', 'stream_echo_check', result.screen || result.microphone ? 'warn' : 'info', {
+      screen_audio: result.screen,
+      microphone: result.microphone,
+      microphone_muted: voiceSessionRef.current?.selfMute ?? null,
+      selected_output: !!output,
+    })
+    if (result.screen && result.microphone) return 'Тестовый сигнал попал и в звук экрана, и в микрофон.'
+    if (result.screen) return 'Тестовый сигнал попал в звук экрана. Браузер захватывает звук голосового вывода.'
+    if (result.microphone) return 'Тестовый сигнал попал в микрофон. Проверьте колонки или выбранный вход.'
+    return result.microphone === null ? 'В звуке экрана сигнал не обнаружен. Микрофон недоступен для проверки.' : 'Тестовый сигнал не обнаружен в звуке экрана или микрофоне.'
+  }
+
   const openStreamSettings = (channelId = voiceSessionRef.current?.channelId) => {
     const activeVoice = voiceSessionRef.current
     if (!activeVoice || !channelId || activeVoice.channelId !== channelId || voiceStatus !== 'connected') {
@@ -1708,7 +1729,8 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setDialog('streamSettings')
   }
 
-  const failStream = (error: unknown) => {
+  const failStream = useCallback((error: unknown) => {
+    pendingStreamRewatchRef.current = null
     const role = streamRoleRef.current
     if (role) {
       trackStreamRequest(
@@ -1720,7 +1742,32 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     }
     setStreamError(streamErrorMessage(error))
     closeStreamLocally()
-  }
+  }, [closeStreamLocally, trackStreamRequest])
+
+  useEffect(() => {
+    if (voiceStatus !== 'signaling' || mediaRecovering) return
+    const pending = voiceMediaRef.current
+    const timer = window.setTimeout(() => {
+      if (!voiceSessionRef.current || voiceMediaRef.current !== pending) return
+      clientDiagnostics.record('webrtc', 'voice_connect_timeout', 'warn')
+      trackVoiceRequest(realtimeRef.current?.leaveVoice() ?? null, 'leave')
+      setVoiceError('Не удалось подключиться к голосовому каналу. Попробуйте ещё раз.')
+      closeVoiceLocally()
+    }, 30_000)
+    return () => window.clearTimeout(timer)
+  }, [voiceStatus, mediaRecovering, closeVoiceLocally, trackVoiceRequest])
+
+  useEffect(() => {
+    if (streamStatus !== 'signaling' || mediaRecovering) return
+    const attempt = streamAttemptRef.current
+    const timer = window.setTimeout(() => {
+      const role = streamRoleRef.current
+      if (!role || streamAttemptRef.current !== attempt) return
+      clientDiagnostics.record('webrtc', 'stream_connect_timeout', 'warn', { role })
+      failStream(new Error('Не удалось подключить трансляцию. Попробуйте ещё раз.'))
+    }, 30_000)
+    return () => window.clearTimeout(timer)
+  }, [streamStatus, streamRole, mediaRecovering, failStream])
 
   // `restoring` comes from signalling recovery: voice.joined already confirmed
   // the new session, but the voice peer has not reported `connected` yet.
@@ -1926,9 +1973,9 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       )
       if (!trackStreamRequest(requestId, 'start')) throw new Error('Realtime-соединение недоступно')
       if (preferences.includeAudio && capture.getAudioTracks().length === 0) {
-        setStreamError('Выбранный источник не передал системный звук; видео продолжает транслироваться')
-      } else if (capturedAudioIncludesOwnPlayback(capture)) {
-        setStreamError('Не удалось подтвердить исключение голосов Voxhold из звука трансляции: зрители могут слышать себя. Для игры выберите захват окна и звук только этого окна, если браузер предлагает такой вариант.')
+        setStreamError('Браузер не передал звук выбранного источника. Видео продолжает транслироваться.')
+      } else if (captureAudioMayIncludeVoice(capture)) {
+        setStreamError('Общий звук может вернуть зрителям их голоса. Проверка эха доступна в настройках трансляции.')
       }
     } catch (error) {
       if (streamAttemptRef.current !== (publisherAttempt ?? startAttempt)) return
@@ -1994,8 +2041,17 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     setStreamRole('viewer')
     setStreamRewatching(false)
     setStreamStatus('signaling')
-    const iceConfiguration = await ensureWebRTCConfig()
+    let iceConfiguration: RTCConfiguration
+    let watchCapabilities: ReturnType<typeof streamWatchCapabilities> | undefined
+    try {
+      iceConfiguration = await ensureWebRTCConfig()
+      if (activeStream.mode === 'server') watchCapabilities = streamWatchCapabilities(await detectHDRCapabilities(), forceSDR)
+    } catch (error) {
+      if (streamAttemptRef.current === viewerAttempt) failStream(error)
+      return
+    }
     if (streamRoleRef.current !== 'viewer' || streamAttemptRef.current !== viewerAttempt) return
+
     const connectionState = (state: RTCPeerConnectionState) => {
       if (streamRoleRef.current !== 'viewer' || streamAttemptRef.current !== viewerAttempt) return
       if (state === 'connected') setStreamStatus('connected')
@@ -2007,10 +2063,6 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
       ...stats,
       dynamicRange: streamDynamicRangeRef.current,
     }) }
-    const watchCapabilities = activeStream.mode === 'server'
-      ? streamWatchCapabilities(await detectHDRCapabilities(), forceSDR)
-      : undefined
-    if (streamRoleRef.current !== 'viewer' || streamAttemptRef.current !== viewerAttempt) return
     if (activeStream.mode === 'server') {
       serverStreamRef.current = new BrowserServerStreamSession({
         preferences: streamPreferencesRef.current,
@@ -2503,10 +2555,10 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
   const downloadClientDiagnostics = async () => {
     if (!token) return
     await clientDiagnostics.flush()
-    const payload = await api.diagnostics.list(token)
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const { exportClientDiagnostics } = await import('../services/diagnosticExport')
+    const { blob, count } = await exportClientDiagnostics((before) => api.diagnostics.list(token, 5_000, undefined, before))
     downloadBlob(blob, `voxhold-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-    notify(`Диагностика выгружена: ${payload.events.length} событий`, 'success')
+    notify(`Диагностика выгружена: ${count} событий`, 'success')
   }
 
   const renameChannel = async (name: string) => {
@@ -2879,7 +2931,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!token || !selectedServerId) return Promise.reject(new Error('Сервер не выбран'))
     return api.channels.members(token, selectedServerId, channelId, signal)
   }, [api, token, selectedServerId])
-  const voiceParticipantList = useMemo(() => Object.values(voiceParticipants), [voiceParticipants])
+  const connectedVoiceId = voiceStatus === 'connected' ? voiceSession?.connectionId : undefined
+  // The server sends recovery updates to peers. Local WebRTC confirms recovery for our own connection.
+  const voiceParticipantList = useMemo(() => Object.values(voiceParticipants).map((participant) =>
+    participant.connection_id === connectedVoiceId && participant.reconnecting
+      ? { ...participant, reconnecting: false }
+      : participant), [voiceParticipants, connectedVoiceId])
   const selectedVoiceParticipants = useMemo(() => selectedChannel?.kind === 'voice'
     ? voiceParticipantList.filter((participant) => participant.server_id === selectedChannel.server_id && participant.channel_id === selectedChannel.id)
     : [], [selectedChannel, voiceParticipantList])
@@ -2925,7 +2982,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
 
   return (
     <CommunityProvider onOpenProfile={(id, _name, role) => void openUserProfile(id, role)} onViewChange={(active) => { personalOpenRef.current = active; setPersonalOpen(active); setMobileNav(false); setMessagePanel(null) }} api={api} token={token ?? ''} userId={user?.id ?? 0} serverId={selectedServerId} owner={selectedServer?.role === 'owner'} members={members} onMessage={(message) => historyStore.receive(message)} onNavigate={(item) => { setSelectedServerId(item.server_id); setSelectedChannelId(item.channel_id); setMessageTarget({ channelId: item.channel_id, messageId: item.message_id }); setFocusedMessageId(item.message_id); setMessagePanel(null); setMobileNav(false) }}><MediaActivityProvider value={mediaActivity}><AvatarProvider api={api} token={token ?? ''} userId={user?.id ?? 0} versions={avatarVersions}><main className={`workspace ${workspaceLayout.membersOpen ? 'workspace--members-open' : ''}`} style={workspaceLayout.style} onContextMenu={(event) => { if (!preferNativeContextMenu(event)) event.preventDefault() }} onPointerDownCapture={(event) => { memberAnchor.current = { x: event.clientX, y: event.clientY } }}>
-      <CommunityNavigation onOpenSettings={() => openSettings(settingsTab)} account={<WorkspaceAccountMenu userId={user?.id} username={user?.username ?? 'V'} online={connection === 'online'} onSettings={() => openSettings(settingsTab)} onLogout={() => setDialog('logout')} voice={voiceSession ? { name: voiceSession.channelName, muted: voiceSession.selfMute || !!voiceSession.serverMute, deafened: voiceSession.selfDeaf, onOpen: openActiveVoiceChannel, onMute: toggleSelfMute, onDeafen: toggleSelfDeaf, onLeave: leaveVoiceChannel } : undefined}/>}/>
+      <CommunityNavigation onOpenSettings={() => openSettings(settingsTab)} account={<WorkspaceAccountMenu userId={user?.id} username={user?.username ?? 'V'} online={connection === 'online'} onSettings={() => openSettings(settingsTab)} onLogout={() => setDialog('logout')} onSwitchAccount={() => void switchAccount()} voice={voiceSession ? { name: voiceSession.channelName, muted: voiceSession.selfMute || !!voiceSession.serverMute, deafened: voiceSession.selfDeaf, onOpen: openActiveVoiceChannel, onMute: toggleSelfMute, onDeafen: toggleSelfDeaf, onLeave: leaveVoiceChannel } : undefined}/>}/>
       <aside id="workspace-channel-sidebar" className={`channel-sidebar ${mobileNav ? 'is-mobile-open' : ''}`}>
         {selectedServer ? <>
           <CommunitySidebar><header className="server-header"><div><span className="eyebrow">ПРОСТРАНСТВО</span><h2>{selectedServer.name}</h2></div>{canConfigureServer && <button className="icon-button" onClick={openServerSettings} aria-label="Настройки сервера"><Icon name="settings"/></button>}</header>
@@ -3024,7 +3081,7 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
         if (localCamera) await media.setCameraQuality(quality); else await media.startCamera(quality)
         setCameraQuality(quality)
       }}/>}
-      {dialog === 'streamSettings' && <Suspense fallback={<ModalLoading title="Трансляция экрана" onClose={() => setDialog(null)}/>}> <StreamSettingsDialog replacingViewer={streamRole === 'viewer'} open={dialog === 'streamSettings'} busy={streamStatus === 'requesting'} live={streamRole === 'publisher'} liveHasAudio={activeVoiceStream?.has_audio} onApply={applyStreamSettings} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/> </Suspense>}
+      {dialog === 'streamSettings' && <Suspense fallback={<ModalLoading title="Трансляция экрана" onClose={() => setDialog(null)}/>}> <StreamSettingsDialog replacingViewer={streamRole === 'viewer'} open={dialog === 'streamSettings'} busy={streamStatus === 'requesting'} live={streamRole === 'publisher'} liveHasAudio={activeVoiceStream?.has_audio} onCheckEcho={diagnoseStreamEcho} onApply={applyStreamSettings} preferences={streamPreferences} onChange={updateStreamPreferences} onClose={() => setDialog(null)} onStart={() => { setDialog(null); void startStream() }}/> </Suspense>}
       <LogoutConfirmDialog open={dialog === 'logout'} onClose={() => setDialog(null)} onConfirm={logout}/>
       {voiceMove && <Modal open title={'Переместить ' + voiceMove.name} onClose={() => setVoiceMove(null)}>
         <div className="voice-move-channels">{voiceDestinations(voiceMove.participant).map((channel) =>

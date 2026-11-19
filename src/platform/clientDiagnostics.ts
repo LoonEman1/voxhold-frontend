@@ -15,7 +15,8 @@ const SESSION_STORAGE_KEY = 'voxhold.diagnostics.session.v1'
 const MAX_PENDING_EVENTS = 256
 const MAX_BATCH_EVENTS = 32
 const FLUSH_INTERVAL_MS = 10_000
-const KEEPALIVE_BYTES = 60 * 1024
+const MAX_BATCH_BYTES = 60 * 1024
+const MAX_PENDING_AGE_MS = 24 * 60 * 60 * 1000
 const LEVELS: DiagnosticLevel[] = ['debug', 'info', 'warn', 'error']
 function configuredLevel(): DiagnosticLevel {
   try {
@@ -66,7 +67,7 @@ function loadPendingEvents() {
       && !!candidate.details
       && typeof candidate.details === 'object'
   }).slice(-MAX_PENDING_EVENTS).map((event) => ({
-    ...event, category: event.category.slice(0, 64), name: event.name.slice(0, 64), details: compactDetails(event.details),
+    ...event, category: event.category.slice(0, 32), name: event.name.slice(0, 80), details: compactDetails(event.details),
   }))
 }
 
@@ -79,7 +80,7 @@ function newSessionID() {
       existing = ''
     }
   }
-  if (existing) return existing.slice(0, 128)
+  if (/^[A-Za-z0-9._:-]{1,64}$/.test(existing)) return existing
   const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -252,8 +253,8 @@ export class ClientDiagnostics {
     const sanitizedDetails = compactDetails(details)
     this.pending.push({
       timestamp_ms: Date.now(),
-      category: category.slice(0, 64),
-      name: name.slice(0, 64),
+      category: category.slice(0, 32),
+      name: name.slice(0, 80),
       level,
       details: sanitizedDetails,
     })
@@ -267,6 +268,9 @@ export class ClientDiagnostics {
   async flush(keepalive = false) {
     this.recordTraffic()
     if (!this.token || this.flushing || this.pending.length === 0 || typeof fetch === 'undefined') return
+    const cutoff = Date.now() - MAX_PENDING_AGE_MS
+    this.pending = this.pending.filter((event) => event.timestamp_ms >= cutoff)
+    if (!this.pending.length) { this.persistPending(); return }
     this.flushing = true
     const events = this.pending.slice(0, MAX_BATCH_EVENTS)
     const payload = () => JSON.stringify({
@@ -276,9 +280,15 @@ export class ClientDiagnostics {
       events,
     })
     let body = payload()
-    while (keepalive && events.length > 1 && new TextEncoder().encode(body).byteLength > KEEPALIVE_BYTES) {
+    const encoder = new TextEncoder()
+    while (events.length > 1 && encoder.encode(body).byteLength > MAX_BATCH_BYTES) {
       events.pop()
       body = payload()
+    }
+    const sent = new Set(events)
+    const removeSent = () => {
+      this.pending = this.pending.filter((event) => !sent.has(event))
+      this.persistPending()
     }
     try {
       const response = await fetch(`${this.baseURL}/api/v1/diagnostics/client-events`, {
@@ -293,13 +303,11 @@ export class ClientDiagnostics {
       })
       if (!response.ok) {
         if (response.status === 400 || response.status === 413) {
-          this.pending.splice(0, events.length)
-          this.persistPending()
+          removeSent()
         }
         return
       }
-      this.pending.splice(0, events.length)
-      this.persistPending()
+      removeSent()
       if (this.pending.length > 0) queueMicrotask(() => { void this.flush() })
     } catch {
       // Pending events stay in sessionStorage and are retried when online.

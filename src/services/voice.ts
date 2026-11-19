@@ -602,6 +602,10 @@ export class BrowserVoiceSession {
     })
   }
 
+  currentOutputDeviceId() {
+    return this.remoteOutputs.values().next().value?.audio.sinkId ?? this.preferences?.outputDeviceId ?? ''
+  }
+
   private async applyOutputDevice(deviceId: string, target?: HTMLAudioElement) {
     if (!BrowserVoiceSession.outputSelectionSupported()) return
     const outputs = target
