@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Profiler, type ReactNode } from 'react'
 import type { ActiveStream } from '../domain/types'
@@ -9,6 +9,8 @@ import { WorkspacePage } from './WorkspacePage'
 const fixture = vi.hoisted(() => ({
   callbacks: {} as Record<string, (...args: never[]) => unknown>,
   viewers: [] as { onRequestRewatch: () => void; onICECandidate: (candidate: object) => void; close: () => void }[],
+  autoConnectVoice: true,
+  voiceConnectionState: null as ((state: string) => void) | null,
   watch: vi.fn(), leave: vi.fn(), publish: vi.fn(), capture: vi.fn(), joinVoice: vi.fn(), notify: vi.fn(), expire: vi.fn(),
   auth: { user: { id: 1, username: 'viewer', created_at: 1 }, token: 'fixture' },
 }))
@@ -27,8 +29,10 @@ vi.mock('../services/voiceInput', () => ({ BrowserVoiceInput: class { isHealthy 
 vi.mock('../services/voiceEnvironment', async (original) => ({ ...await original<object>(), voiceSupported: () => true }))
 vi.mock('../services/voice', async (original) => ({ ...await original<object>(), BrowserVoiceSession: class {
   static supported() { return true }
-  constructor(private options: { onConnectionStateChange: (state: string) => void }) {}
-  async start() { setTimeout(() => this.options.onConnectionStateChange('connected'), 0) }
+  constructor(private options: { onConnectionStateChange: (state: string) => void }) {
+    fixture.voiceConnectionState = options.onConnectionStateChange
+  }
+  async start() { if (fixture.autoConnectVoice) setTimeout(() => this.options.onConnectionStateChange('connected'), 0) }
   setState() {} setParticipantState() {} setRemoteGain() {} setPreferences() {} close() {} resumeAudio() {}
   recordingAudioTracks() { return [] } subscribeRecordingAudio() { return () => {} }
 } }))
@@ -70,6 +74,8 @@ const api = createApi({ request: async <T,>(request: { path: string }) => {
 
 beforeEach(() => {
   localStorage.clear(); fixture.viewers.length = 0
+  fixture.autoConnectVoice = true
+  fixture.voiceConnectionState = null
   fixture.joinVoice.mockClear()
   fixture.capture.mockReset(); fixture.publish.mockReset().mockReturnValue('publish-1')
   fixture.watch.mockReset().mockReturnValueOnce('watch-1').mockReturnValue('watch-2')
@@ -77,18 +83,29 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-async function startViewer(multipleStreams = false) {
+async function startViewer(multipleStreams = false, beforeWatch?: () => void) {
   render(<WorkspacePage api={api}/>)
   await screen.findByRole('button', { name: 'Join fixture' })
   act(() => emit('onReady', { multipleStreams }))
   act(() => emit('onStreamSnapshot', { streams: [stream] }))
   fireEvent.click(screen.getByRole('button', { name: 'Join fixture' }))
   await waitFor(() => expect(screen.getByTestId('voice-state').textContent).toBe('connected'))
+  beforeWatch?.()
   fireEvent.click(screen.getByRole('button', { name: 'Watch fixture' }))
-  await waitFor(() => expect(fixture.watch).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(fixture.watch).toHaveBeenCalledOnce())
 }
+
+it('closes an unanswered stream connection instead of keeping the connecting state', async () => {
+  await startViewer(false, () => vi.useFakeTimers())
+  expect(screen.getByTestId('stream-state').textContent).toBe('signaling')
+  await act(() => vi.advanceTimersByTimeAsync(30_000))
+  expect(fixture.leave).toHaveBeenCalledOnce()
+  expect(fixture.viewers[0]!.close).toHaveBeenCalledOnce()
+  expect(screen.getByTestId('stream-state').textContent).toBe('idle')
+  expect(screen.getByTestId('stream-error').textContent).toContain('Не удалось подключить трансляцию')
+})
 
 it('keeps the share action while viewing and preserves playback when the picker is cancelled', async () => {
   await startViewer(true)
@@ -163,6 +180,34 @@ it('keeps a reconnecting participant in the sidebar until their new connection i
   act(() => emit('onVoiceStateUpdated', { ...participant, connection_id: 'remote-2' }))
   expect(screen.getByRole('button', { name: /Пользователь #2/ })).toBe(row)
   expect(screen.queryByRole('img', { name: 'Восстанавливает соединение' })).toBeNull()
+})
+
+it('clears only our reconnecting badge when the new local voice peer connects', async () => {
+  fixture.autoConnectVoice = false
+  render(<WorkspacePage api={api}/>)
+  fireEvent.click(await screen.findByRole('button', { name: 'Join fixture' }))
+  await waitFor(() => expect(fixture.joinVoice).toHaveBeenCalledOnce())
+  const participant = { connection_id: 'viewer-1', user_id: 1, server_id: 1, channel_id: 1, self_mute: false, self_deaf: false }
+  act(() => emit('onVoiceJoined', { participant, participants: [participant] }))
+  act(() => fixture.voiceConnectionState?.('connected'))
+
+  act(() => emit('onStateChange', 'offline'))
+  act(() => emit('onReady', { multipleStreams: true }))
+  await waitFor(() => expect(fixture.joinVoice).toHaveBeenCalledTimes(2))
+  const local = { ...participant, connection_id: 'viewer-2', reconnecting: true }
+  const remote = { ...participant, user_id: 2, connection_id: 'remote-1', reconnecting: true }
+  act(() => emit('onVoiceJoined', { participant: local, participants: [local, remote] }))
+  const badge = { name: 'Восстанавливает соединение' }
+  const localRow = within(screen.getByRole('button', { name: /Пользователь #1/ }))
+  const remoteRow = within(screen.getByRole('button', { name: /Пользователь #2/ }))
+  expect(localRow.getByRole('img', badge)).toBeTruthy()
+
+  act(() => fixture.voiceConnectionState?.('connected'))
+  expect(localRow.queryByRole('img', badge)).toBeNull()
+  expect(remoteRow.getByRole('img', badge)).toBeTruthy()
+  act(() => emit('onVoiceSnapshot', { participants: [local, remote] }))
+  expect(localRow.queryByRole('img', badge)).toBeNull()
+  expect(remoteRow.getByRole('img', badge)).toBeTruthy()
 })
 
 it('replaces only our viewer after capture confirmation and ignores its late leave acknowledgement', async () => {

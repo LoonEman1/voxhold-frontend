@@ -9,6 +9,7 @@ interface Props {
   online: boolean
   onSettings: () => void
   onLogout: () => void
+  onSwitchAccount: () => void
   voice?: {
     name: string; muted: boolean; deafened: boolean
     onOpen: () => void; onMute: () => void; onDeafen: () => void; onLeave: () => void
@@ -16,13 +17,14 @@ interface Props {
 }
 
 /** Account and active-call controls stay reachable when the channel pane is absent. */
-export function WorkspaceAccountMenu({ userId, username, online, voice, onSettings, onLogout }: Props) {
+export function WorkspaceAccountMenu({ userId, username, online, voice, onSettings, onLogout, onSwitchAccount }: Props) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   return <>
     <button type="button" className="personal-rail__item personal-rail__account" aria-label={`Аккаунт: ${username}`} title={`Аккаунт: ${username}`} aria-haspopup="menu" aria-expanded={!!menu} onClick={(event) => {
       const rect = event.currentTarget.getBoundingClientRect()
       const items: ContextMenuItem[] = [
         { key: 'settings', kind: 'action', label: 'Настройки', icon: 'settings', onSelect: onSettings },
+        { key: 'switch-account', kind: 'action', label: 'Сменить аккаунт', onSelect: onSwitchAccount },
       ]
       if (voice) items.push(
         { key: 'voice-divider', kind: 'separator' },

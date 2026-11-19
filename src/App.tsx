@@ -66,7 +66,7 @@ function InviteRoute({ api, inviteToken, authToken, onAccepted }: {
 }
 
 export function AppRouter({ api }: { api: ReturnType<typeof createApi> }) {
-  const { ready, token } = useAuth()
+  const { ready, token, user } = useAuth()
   const [inviteToken, setInviteToken] = useState(inviteTokenFromLocation)
   useEffect(() => {
     const changed = () => setInviteToken(inviteTokenFromLocation())
@@ -79,7 +79,7 @@ export function AppRouter({ api }: { api: ReturnType<typeof createApi> }) {
   }, [])
   if (!ready) return <div className="app-loader"><Brand/><div className="loader-line"><i/></div></div>
   if (inviteToken) return <InviteRoute api={api} inviteToken={inviteToken} authToken={token} onAccepted={accepted}/>
-  return token ? <WorkspacePage api={api} realtimeBaseUrl={API_BASE_URL}/> : <AuthPage/>
+  return token ? <WorkspacePage key={user?.id} api={api} realtimeBaseUrl={API_BASE_URL}/> : <AuthPage/>
 }
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {

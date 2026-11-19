@@ -13,7 +13,7 @@ import {
   type StreamPreferences,
 } from '../services/streamSettings'
 import { detectHDRCapabilities, type HDRCapabilities } from '../services/hdrCapabilities'
-import { canRestrictOwnAudio, selectedStreamCodec, supportedStreamCodecs } from '../services/stream'
+import { selectedStreamCodec, supportedStreamCodecs } from '../services/stream'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 
@@ -27,8 +27,36 @@ interface StreamSettingsDialogProps {
   live?: boolean
   liveHasAudio?: boolean
   onApply?: (value: StreamPreferences) => Promise<void>
+  onCheckEcho?: (signal: AbortSignal) => Promise<string>
   error?: string
   replacingViewer?: boolean
+}
+
+function StreamEchoCheck({ disabled, check }: { disabled: boolean; check: (signal: AbortSignal) => Promise<string> }) {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState('')
+  const active = useRef<AbortController | null>(null)
+  useEffect(() => () => active.current?.abort(), [])
+  const run = async () => {
+    if (active.current) return
+    const controller = new AbortController()
+    active.current = controller
+    setRunning(true)
+    setResult('')
+    try {
+      const message = await check(controller.signal)
+      if (!controller.signal.aborted) setResult(message)
+    } catch (error) {
+      if (!controller.signal.aborted) setResult(error instanceof Error ? error.message : 'Не удалось проверить эхо')
+    } finally {
+      active.current = null
+      if (!controller.signal.aborted) setRunning(false)
+    }
+  }
+  return <div>
+    <button type="button" className="button button--ghost" disabled={disabled || running} onClick={() => void run()}>Проверить эхо</button>
+    <p role="status" className="stream-warning">{running ? 'Воспроизводим тестовый сигнал…' : result || 'Прозвучит короткий сигнал. При эхо его могут услышать зрители.'}</p>
+  </div>
 }
 
 function VideoBitrateField({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (value: number) => void }) {
@@ -69,7 +97,7 @@ function LiveStreamSettingsDialog(props: StreamSettingsDialogProps) {
   return <StreamSettingsFields {...props} preferences={draft} onChange={setDraft} busy={props.busy || applying} error={error} onStart={() => void apply()}/>
 }
 
-function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onStart, live = false, liveHasAudio, error, replacingViewer = false }: StreamSettingsDialogProps) {
+function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onStart, live = false, liveHasAudio, error, replacingViewer = false, onCheckEcho }: StreamSettingsDialogProps) {
   const [hdrCapabilities, setHDRCapabilities] = useState<HDRCapabilities | null>(null)
   useEffect(() => {
     if (!open || live) return
@@ -108,9 +136,9 @@ function StreamSettingsFields({ open, busy, preferences, onChange, onClose, onSt
       <label><span>Кадры</span><select disabled={busy} value={preferences.frameRate} onChange={(event) => patch('frameRate', Number(event.target.value) as StreamPreferences['frameRate'])}>{STREAM_FRAME_RATES.map((fps) => <option value={fps} key={fps}>{fps} FPS</option>)}</select></label>
       <VideoBitrateField value={preferences.videoBitrateKbps} disabled={busy} onChange={(value) => patch('videoBitrateKbps', value)}/>
       <label><span>Звук трансляции</span><select value={preferences.audioBitrateKbps} disabled={busy || !preferences.includeAudio || live && liveHasAudio === false} onChange={(event) => patch('audioBitrateKbps', Number(event.target.value) as StreamPreferences['audioBitrateKbps'])}>{STREAM_AUDIO_BITRATES.map((rate) => <option value={rate} key={rate}>{rate} Кбит/с</option>)}</select></label>
-      <label className="stream-audio-toggle"><input type="checkbox" disabled={live || busy} checked={preferences.includeAudio} onChange={(event) => patch('includeAudio', event.target.checked)}/><span>Передавать системный звук</span></label>
+      <label className="stream-audio-toggle"><input type="checkbox" disabled={live || busy} checked={preferences.includeAudio} onChange={(event) => patch('includeAudio', event.target.checked)}/><span>Передавать звук источника</span></label>
     </div>
-    {preferences.includeAudio && !canRestrictOwnAudio() && <p className="stream-warning">Этот браузер не подтверждает исключение голосов Voxhold из системного звука. Для игры выберите окно и звук только этого окна, если такой вариант доступен; для видео — отдельную вкладку. При передаче общего звука зрители могут услышать себя.</p>}
+    {live && liveHasAudio !== false && onCheckEcho && <StreamEchoCheck disabled={busy} check={onCheckEcho}/>}
     {heavy && <p className="stream-warning">4K и 90+ FPS сильно нагружают процессор и исходящий канал: если картинка начнёт дёргаться, снизьте разрешение или частоту кадров.</p>}
     {hdrCapabilities && !hdrCapabilities.canPublishHDR && <p className="stream-warning">HDR отключён: {hdrCapabilities.reason}</p>}
     {preferences.mode === 'p2p' && <p className="stream-warning">P2P раскрывает IP участникам и расходует ваш исходящий трафик отдельно на каждого зрителя. Максимум — 8 зрителей.</p>}

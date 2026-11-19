@@ -35,6 +35,7 @@ import type {
   ServerRole,
   Session,
   ClientDiagnosticsPayload,
+  ClientDiagnosticsCursor,
   WebRTCConfigPayload,
 } from '../domain/types'
 import type { Transport, TransportRequest } from '../platform/transport'
@@ -358,11 +359,14 @@ export function createApi(transport: Transport) {
         }) as Promise<Server>,
     },
     diagnostics: {
-      list: (token: string, limit = 5_000, signal?: AbortSignal) =>
-        authorized(token, {
-          path: `/api/v1/diagnostics/client-events?limit=${url(limit)}`,
-          signal,
-        }) as Promise<ClientDiagnosticsPayload>,
+      list: (token: string, limit = 5_000, signal?: AbortSignal, before?: ClientDiagnosticsCursor) => {
+        const query = new URLSearchParams({ limit: String(limit) })
+        if (before) {
+          query.set('before_id', String(before.id))
+          query.set('before_created_at', String(before.created_at))
+        }
+        return unwrap<ClientDiagnosticsPayload>(transport, { token, path: `/api/v1/diagnostics/client-events?${query}`, signal })
+      },
     },
     webrtc: {
       config: (token: string, signal?: AbortSignal) =>

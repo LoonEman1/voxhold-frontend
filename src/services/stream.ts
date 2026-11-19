@@ -1,7 +1,7 @@
 import type { StreamCodec, StreamDynamicRange, StreamICECandidate, StreamRendition } from '../domain/types'
 import type { StreamPreferences } from './streamSettings'
 import { selectedStreamResolution } from './streamSettings'
-export { captureScreen, canRestrictOwnAudio, capturedAudioIncludesOwnPlayback } from './screenCapture'
+export { captureScreen, canRestrictOwnAudio, captureAudioMayIncludeVoice } from './screenCapture'
 import { WebRTCRecoveryController, remoteDescriptionAcceptsCandidate } from './webrtcRecovery'
 import { wireICECandidate } from './webrtcCandidate'
 import { clientDiagnostics } from '../platform/clientDiagnostics'

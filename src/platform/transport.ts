@@ -31,32 +31,80 @@ export interface SessionStorageAdapter {
   read<T>(key: string): T | null
   write<T>(key: string, value: T): void
   remove(key: string): void
+  selectAccount?(key: string, userId: number | null): void
 }
 
-export const browserSessionStorage: SessionStorageAdapter = {
-  subscribe(key, listener) {
-    const changed = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === key || event.key === null)) listener() }
-    window.addEventListener('storage', changed)
-    return () => window.removeEventListener('storage', changed)
-  },
-  async withLock(key, action) {
-    return await (navigator.locks ? navigator.locks.request(key, action) : action())
-  },
-  read<T>(key: string): T | null {
-    try {
-      const value = localStorage.getItem(key)
-      return value ? (JSON.parse(value) as T) : null
-    } catch {
-      return null
+export function createBrowserSessionStorage(tabStorage = () => window.sessionStorage as Pick<Storage, 'getItem' | 'setItem'>): SessionStorageAdapter {
+  const selection = new Map<string, string>()
+  const tabKey = (key: string) => `${key}.tab`
+  const defaultKey = (key: string) => `${key}.default`
+  const accountKey = (key: string, userId: number) => `${key}.account.${userId}`
+  const validScope = (key: string, scope: string | null) => scope === '' || scope === key ||
+    (!!scope?.startsWith(`${key}.account.`) && /^\d+$/.test(scope.slice(`${key}.account.`.length)))
+
+  function pin(key: string, scope: string) {
+    selection.set(key, scope)
+    try { tabStorage().setItem(tabKey(key), scope) } catch { /* Keep the selection in memory. */ }
+  }
+
+  function activeKey(key: string) {
+    const current = selection.get(key)
+    if (current !== undefined) return current
+    let restored: string | null = null
+    try { restored = tabStorage().getItem(tabKey(key)) } catch { /* Browser storage may be blocked. */ }
+    if (restored !== null && validScope(key, restored)) {
+      selection.set(key, restored)
+      return restored
     }
-  },
-  write<T>(key: string, value: T) {
-    localStorage.setItem(key, JSON.stringify(value))
-  },
-  remove(key: string) {
-    localStorage.removeItem(key)
-  },
+    const remembered = localStorage.getItem(defaultKey(key))
+    // Existing installations have a single unscoped session. Keep sharing
+    // that session until a tab explicitly authenticates as an account.
+    const scope = remembered !== null && validScope(key, remembered) ? remembered : key
+    pin(key, scope)
+    return scope
+  }
+
+  return {
+    subscribe(key, listener) {
+      const changed = (event: StorageEvent) => {
+        const scope = activeKey(key)
+        if (scope && event.storageArea === localStorage && (event.key === scope || event.key === null)) listener()
+      }
+      window.addEventListener('storage', changed)
+      return () => window.removeEventListener('storage', changed)
+    },
+    async withLock(key, action) {
+      return await (navigator.locks ? navigator.locks.request(activeKey(key) || key, action) : action())
+    },
+    read<T>(key: string): T | null {
+      try {
+        const scope = activeKey(key)
+        const value = scope && localStorage.getItem(scope)
+        return value ? JSON.parse(value) as T : null
+      } catch {
+        return null
+      }
+    },
+    write(key, value) {
+      const scope = activeKey(key) || key
+      localStorage.setItem(scope, JSON.stringify(value))
+    },
+    remove(key) {
+      const scope = activeKey(key)
+      pin(key, '')
+      if (!scope) return
+      localStorage.removeItem(scope)
+      if (localStorage.getItem(defaultKey(key)) === scope) localStorage.setItem(defaultKey(key), '')
+    },
+    selectAccount(key, userId) {
+      const scope = userId === null ? '' : accountKey(key, userId)
+      pin(key, scope)
+      if (scope) localStorage.setItem(defaultKey(key), scope)
+    },
+  }
 }
+
+export const browserSessionStorage = createBrowserSessionStorage()
 
 export function createFetchTransport(baseUrl = ''): Transport {
   const normalizedBase = baseUrl.replace(/\/$/, '')
