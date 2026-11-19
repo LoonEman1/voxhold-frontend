@@ -7,13 +7,16 @@
   страницы. Пункт «Сменить аккаунт» открывает форму входа в текущей вкладке.
 - Если подключение к голосовому каналу или трансляции зависает на
   согласовании, клиент завершает попытку и показывает ошибку.
+- Красный значок потери связи у собственного имени исчезает после
+  восстановления голосового подключения.
 - В настройках активной трансляции «Проверить эхо» определяет, попал ли
   тестовый сигнал в захват экрана или микрофон.
 - Выгрузка клиентской диагностики загружает страницы от новых событий
   к старым и сохраняет до 100 МБ в одном JSON.
 
 English: keep account selection independent across tabs, time out stalled
-media signaling, diagnose screen and microphone echo, and page through exports.
+media signaling, clear the local reconnect badge after voice recovers, diagnose
+screen and microphone echo, and page through exports.
 
 # Voxhold Frontend 2.7.1
 

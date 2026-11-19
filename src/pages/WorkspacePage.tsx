@@ -2931,7 +2931,12 @@ export function WorkspacePage({ api, realtimeBaseUrl }: WorkspaceProps) {
     if (!token || !selectedServerId) return Promise.reject(new Error('Сервер не выбран'))
     return api.channels.members(token, selectedServerId, channelId, signal)
   }, [api, token, selectedServerId])
-  const voiceParticipantList = useMemo(() => Object.values(voiceParticipants), [voiceParticipants])
+  const connectedVoiceId = voiceStatus === 'connected' ? voiceSession?.connectionId : undefined
+  // The server sends recovery updates to peers. Local WebRTC confirms recovery for our own connection.
+  const voiceParticipantList = useMemo(() => Object.values(voiceParticipants).map((participant) =>
+    participant.connection_id === connectedVoiceId && participant.reconnecting
+      ? { ...participant, reconnecting: false }
+      : participant), [voiceParticipants, connectedVoiceId])
   const selectedVoiceParticipants = useMemo(() => selectedChannel?.kind === 'voice'
     ? voiceParticipantList.filter((participant) => participant.server_id === selectedChannel.server_id && participant.channel_id === selectedChannel.id)
     : [], [selectedChannel, voiceParticipantList])
