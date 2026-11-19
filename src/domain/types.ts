@@ -509,9 +509,15 @@ export interface StoredClientDiagnosticEvent {
   details: Record<string, unknown>
 }
 
+export interface ClientDiagnosticsCursor {
+  created_at: number
+  id: number
+}
+
 export interface ClientDiagnosticsPayload {
   retention_seconds: number
   events: StoredClientDiagnosticEvent[]
+  next_cursor?: ClientDiagnosticsCursor
 }
 
 export interface ServerBan {

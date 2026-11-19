@@ -79,6 +79,10 @@ export class BrowserVoiceInput {
     return this.chain?.stream ?? null
   }
 
+  rawInputTrack() {
+    return this.chain?.raw.getAudioTracks()[0] ?? null
+  }
+
   /** Subscribes to track replacements. Returns an unsubscribe function. */
   subscribe(listener: (track: MediaStreamTrack) => void) {
     this.replacementListeners.add(listener)
@@ -265,6 +269,13 @@ export class BrowserVoiceInput {
         throw new Error('Микрофон не передал аудиодорожку')
       }
 
+      const settings = rawTrack.getSettings?.()
+      clientDiagnostics.record('media', 'voice_raw_input_settings', 'info', {
+        echo_cancellation: settings?.echoCancellation ?? null,
+        noise_suppression: settings?.noiseSuppression ?? null,
+        channel_count: settings?.channelCount ?? null,
+        loopback_like_input: /stereo mix|what u hear|loopback|стерео.?микш/i.test(rawTrack.label ?? ''),
+      })
       if (typeof AudioContext === 'undefined') {
         return {
           raw, stream: raw, track: rawTrack, context: null, gate: null,

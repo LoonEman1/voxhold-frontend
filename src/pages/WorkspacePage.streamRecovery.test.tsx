@@ -77,18 +77,29 @@ beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-async function startViewer(multipleStreams = false) {
+async function startViewer(multipleStreams = false, beforeWatch?: () => void) {
   render(<WorkspacePage api={api}/>)
   await screen.findByRole('button', { name: 'Join fixture' })
   act(() => emit('onReady', { multipleStreams }))
   act(() => emit('onStreamSnapshot', { streams: [stream] }))
   fireEvent.click(screen.getByRole('button', { name: 'Join fixture' }))
   await waitFor(() => expect(screen.getByTestId('voice-state').textContent).toBe('connected'))
+  beforeWatch?.()
   fireEvent.click(screen.getByRole('button', { name: 'Watch fixture' }))
-  await waitFor(() => expect(fixture.watch).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(fixture.watch).toHaveBeenCalledOnce())
 }
+
+it('closes an unanswered stream connection instead of keeping the connecting state', async () => {
+  await startViewer(false, () => vi.useFakeTimers())
+  expect(screen.getByTestId('stream-state').textContent).toBe('signaling')
+  await act(() => vi.advanceTimersByTimeAsync(30_000))
+  expect(fixture.leave).toHaveBeenCalledOnce()
+  expect(fixture.viewers[0]!.close).toHaveBeenCalledOnce()
+  expect(screen.getByTestId('stream-state').textContent).toBe('idle')
+  expect(screen.getByTestId('stream-error').textContent).toContain('Не удалось подключить трансляцию')
+})
 
 it('keeps the share action while viewing and preserves playback when the picker is cancelled', async () => {
   await startViewer(true)
